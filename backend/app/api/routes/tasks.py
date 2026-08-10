@@ -1,5 +1,7 @@
 import logging
 import uuid
+import json
+from pathlib import Path
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 from typing import List, Optional
@@ -11,6 +13,9 @@ logger = logging.getLogger(__name__)
 
 # 任务存储（内存缓存）
 tasks_cache: dict = {}
+
+# 任务持久化文件路径
+TASKS_FILE = Path("D:/Documents/AI/MusicFlow/config/tasks.json")
 
 
 class TaskStatus(str, Enum):
@@ -40,6 +45,50 @@ class TaskResponse(BaseModel):
     error: Optional[str] = None
 
 
+def load_tasks():
+    """从文件加载任务"""
+    global tasks_cache
+    try:
+        if TASKS_FILE.exists():
+            with open(TASKS_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                for task_id, task_dict in data.items():
+                    # 转换时间字符串为 datetime 对象
+                    if task_dict.get('start_time'):
+                        task_dict['start_time'] = datetime.fromisoformat(task_dict['start_time'])
+                    if task_dict.get('end_time'):
+                        task_dict['end_time'] = datetime.fromisoformat(task_dict['end_time'])
+                    tasks_cache[task_id] = TaskResponse(**task_dict)
+            logger.info(f"Loaded {len(tasks_cache)} tasks from file")
+    except Exception as e:
+        logger.error(f"Error loading tasks: {e}")
+
+
+def save_tasks():
+    """保存任务到文件"""
+    try:
+        # 确保目录存在
+        TASKS_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+        # 转换为可序列化的格式
+        data = {}
+        for task_id, task in tasks_cache.items():
+            task_dict = task.dict()
+            # 转换 datetime 为字符串
+            if task_dict.get('start_time'):
+                task_dict['start_time'] = task_dict['start_time'].isoformat()
+            if task_dict.get('end_time'):
+                task_dict['end_time'] = task_dict['end_time'].isoformat()
+            data[task_id] = task_dict
+
+        with open(TASKS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+
+        logger.info(f"Saved {len(tasks_cache)} tasks to file")
+    except Exception as e:
+        logger.error(f"Error saving tasks: {e}")
+
+
 # 进度回调函数 - 更新 tasks_cache 中的任务状态
 def update_task_progress(task_id: str, progress: float, status: str = None):
     """更新任务进度"""
@@ -51,6 +100,8 @@ def update_task_progress(task_id: str, progress: float, status: str = None):
         if status in ['success', 'failed', 'cancelled']:
             task.end_time = datetime.now()
         logger.info(f"Task {task_id} progress: {progress}%, status: {status}")
+        # 保存任务到文件
+        save_tasks()
 
 
 @router.get("/", response_model=List[TaskResponse])
@@ -95,6 +146,9 @@ async def create_task(task_create: TaskCreate):
     tasks_cache[task_id] = task
     logger.info(f"Created task {task_id}: {task_create.source_file}")
 
+    # 保存任务到文件
+    save_tasks()
+
     # 自动触发转换引擎执行任务
     try:
         from app.services.conversion_engine import conversion_engine
@@ -128,6 +182,8 @@ async def create_task(task_create: TaskCreate):
 
             # 更新状态为转换中
             task.status = TaskStatus.CONVERTING
+            # 保存任务到文件
+            save_tasks()
         else:
             logger.warning(f"Profile {task_create.profile_id} not found")
     except Exception as e:
@@ -151,6 +207,9 @@ async def cancel_task(task_id: str):
     task.end_time = datetime.now()
 
     logger.info(f"Cancelled task {task_id}")
+
+    # 保存任务到文件
+    save_tasks()
 
     return {"status": "success", "message": f"Task {task_id} cancelled"}
 
@@ -180,6 +239,9 @@ async def retry_task(task_id: str):
     tasks_cache[new_task_id] = new_task
 
     logger.info(f"Retrying task {task_id} as {new_task_id}")
+
+    # 保存任务到文件
+    save_tasks()
 
     return new_task
 

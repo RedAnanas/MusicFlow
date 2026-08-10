@@ -62,6 +62,10 @@ async def startup_event():
     from app.services.conversion_engine import conversion_engine
     await conversion_engine.initialize()
 
+    # 加载历史任务
+    from app.api.routes.tasks import load_tasks
+    load_tasks()
+
     # 在后台启动任务队列处理
     import asyncio
     asyncio.create_task(conversion_engine.process_queue())
