@@ -23,6 +23,16 @@ class WatchFolderCreate(BaseModel):
     scan_interval_minutes: int = 5
 
 
+class WatchFolderUpdate(BaseModel):
+    """监控目录更新模型 - 所有字段可选"""
+    name: str = None
+    input_dir: str = None
+    profile_ids: List[str] = None
+    auto_process: bool = None
+    recursive_scan: bool = None
+    scan_interval_minutes: int = None
+
+
 class WatchFolderResponse(WatchFolderCreate):
     id: str
     enabled: bool = True
@@ -76,32 +86,29 @@ async def create_watch_folder(folder_create: WatchFolderCreate):
 
 
 @router.put("/{folder_id}", response_model=WatchFolderResponse)
-async def update_watch_folder(folder_id: str, folder_update: WatchFolderCreate):
-    """更新监控目录"""
+async def update_watch_folder(folder_id: str, folder_update: dict):
+    """更新监控目录 - 支持部分更新"""
     if folder_id not in watch_folders_cache:
         raise HTTPException(status_code=404, detail="Watch folder not found")
 
-    # 验证目录是否存在
-    input_path = Path(folder_update.input_dir)
-    if not input_path.exists():
-        raise HTTPException(status_code=400, detail=f"Directory does not exist: {folder_update.input_dir}")
-
-    if not input_path.is_dir():
-        raise HTTPException(status_code=400, detail=f"Path is not a directory: {folder_update.input_dir}")
-
     existing_folder = watch_folders_cache[folder_id]
 
-    updated_folder = WatchFolderResponse(
-        id=folder_id,
-        name=folder_update.name,
-        input_dir=folder_update.input_dir,
-        profile_ids=folder_update.profile_ids,
-        auto_process=folder_update.auto_process,
-        recursive_scan=folder_update.recursive_scan,
-        scan_interval_minutes=folder_update.scan_interval_minutes,
-        enabled=existing_folder.enabled,
-        last_scan=existing_folder.last_scan,
-    )
+    # 合并更新数据
+    update_data = {k: v for k, v in folder_update.items() if v is not None}
+
+    # 如果更新了输入目录，验证目录是否存在
+    if 'input_dir' in update_data:
+        input_path = Path(update_data['input_dir'])
+        if not input_path.exists():
+            raise HTTPException(status_code=400, detail=f"Directory does not exist: {update_data['input_dir']}")
+        if not input_path.is_dir():
+            raise HTTPException(status_code=400, detail=f"Path is not a directory: {update_data['input_dir']}")
+
+    # 构建更新后的监控目录
+    folder_dict = existing_folder.dict()
+    folder_dict.update(update_data)
+
+    updated_folder = WatchFolderResponse(**folder_dict)
 
     watch_folders_cache[folder_id] = updated_folder
     logger.info(f"Updated watch folder: {folder_id}")
