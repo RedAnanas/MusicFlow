@@ -85,7 +85,7 @@ class MetadataService:
                         else:
                             metadata[tag_key] = str(value)
 
-                # 读取封面
+                # 读取封面 - M4A/MP4 格式
                 if "covr" in audio.tags:
                     try:
                         pic = audio.tags["covr"][0]
@@ -96,6 +96,18 @@ class MetadataService:
                         }
                     except Exception as e:
                         logger.warning(f"Could not read cover from covr field: {e}")
+
+            # 读取封面 - FLAC/MP3/OGG 格式
+            if hasattr(audio, 'pictures') and audio.pictures:
+                try:
+                    pic = audio.pictures[0]
+                    metadata["cover"] = {
+                        "data": pic.data,
+                        "mime": pic.mime,
+                        "type": pic.type
+                    }
+                except Exception as e:
+                    logger.warning(f"Could not read cover from pictures: {e}")
 
             return metadata
 
