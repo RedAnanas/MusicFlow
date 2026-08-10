@@ -1,0 +1,38 @@
+version: '3.8'
+
+services:
+  musicflow:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: musicflow:latest
+    container_name: musicflow
+    restart: unless-stopped
+
+    ports:
+      - "8080:8080"
+
+    environment:
+      - TZ=Asia/Shanghai
+      - PUID=1000
+      - PGID=1000
+      - MUSIC_SOURCE_DIR=/music/source
+      - MUSIC_OUTPUT_DIR=/music/output
+      - MUSIC_ARCHIVE_DIR=/music/archive
+      - CONFIG_DIR=/config
+      - LOGS_DIR=/logs
+      - TEMP_DIR=/temp
+      - MAX_CONCURRENT_TASKS=2
+      - FFMPEG_THREADS=2
+      - FILE_STABLE_SECONDS=30
+
+    volumes:
+      # 配置和日志
+      - ./config:/config
+      - ./logs:/logs
+      - ./temp:/temp
+
+      # 音乐目录
+      - /volume1/music/source:/music/source
+      - /volume1/music/output:/music/output
+      - /volume1/music/archive:/music/archive

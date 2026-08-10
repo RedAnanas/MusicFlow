@@ -1,0 +1,53 @@
+{
+  "apple-music-aac-256": {
+    "id": "apple-music-aac-256",
+    "name": "Apple Music AAC 256",
+    "enabled": true,
+    "output_format": "m4a",
+    "codec": "aac",
+    "bitrate": 320,
+    "sample_rate": 44100,
+    "channels": null,
+    "bit_depth": null,
+    "metadata_policy": "keep",
+    "cover_policy": "embed",
+    "filename_template": "{title}.{extension}",
+    "directory_template": "{album_artist}/{year} - {album}",
+    "output_dir": null,
+    "version": 15
+  },
+  "apple-lossless": {
+    "id": "apple-lossless",
+    "name": "Apple Lossless",
+    "enabled": true,
+    "output_format": "m4a",
+    "codec": "alac",
+    "bitrate": 256,
+    "sample_rate": 0,
+    "channels": null,
+    "bit_depth": null,
+    "metadata_policy": "keep",
+    "cover_policy": "embed",
+    "filename_template": "{title}.{extension}",
+    "directory_template": "{album_artist}/{year} - {album}",
+    "output_dir": null,
+    "version": 2
+  },
+  "5069c717-4619-4712-9e65-fcc6ac1c521f": {
+    "id": "5069c717-4619-4712-9e65-fcc6ac1c521f",
+    "name": "Test Profile",
+    "enabled": true,
+    "output_format": "m4a",
+    "codec": "aac",
+    "bitrate": 192,
+    "sample_rate": 44100,
+    "channels": null,
+    "bit_depth": null,
+    "metadata_policy": "keep",
+    "cover_policy": "embed",
+    "filename_template": "{title}.{extension}",
+    "directory_template": "{album_artist}/{year} - {album}",
+    "output_dir": null,
+    "version": 1
+  }
+}

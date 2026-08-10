@@ -1,0 +1,153 @@
+import logging
+from pathlib import Path
+from typing import Dict, Optional, List
+from mutagen import File as MutagenFile
+from mutagen.mp3 import MP3
+from mutagen.flac import FLAC
+from mutagen.mp4 import MP4
+from mutagen.oggvorbis import OggVorbis
+from mutagen.oggopus import OggOpus
+
+logger = logging.getLogger(__name__)
+
+
+class MetadataService:
+    """元数据服务 - 使用 Mutagen 处理音频元数据"""
+
+    # 元数据字段映射
+    METADATA_FIELDS = [
+        "title",
+        "artist",
+        "album",
+        "albumartist",
+        "composer",
+        "genre",
+        "date",
+        "year",
+        "track",
+        "disc",
+        "comment",
+        "copyright",
+        "grouping",
+        "lyrics",
+    ]
+
+    def __init__(self):
+        self.supported_formats = {
+            ".mp3": MP3,
+            ".flac": FLAC,
+            ".m4a": MP4,
+            ".mp4": MP4,
+            ".ogg": OggVorbis,
+            ".opus": OggOpus,
+        }
+
+    def read_metadata(self, file_path: str) -> Optional[Dict]:
+        """
+        读取音频文件元数据
+
+        Returns:
+            Dict: 元数据字典
+        """
+        try:
+            path = Path(file_path)
+            if not path.exists():
+                logger.error(f"File not found: {file_path}")
+                return None
+
+            audio = MutagenFile(file_path, easy=True)
+            if audio is None:
+                logger.warning(f"Cannot read metadata for {file_path}")
+                return None
+
+            metadata = {
+                "title": self._get_tag(audio, "title"),
+                "artist": self._get_tag(audio, "artist"),
+                "album": self._get_tag(audio, "album"),
+                "albumartist": self._get_tag(audio, "albumartist"),
+                "composer": self._get_tag(audio, "composer"),
+                "genre": self._get_tag(audio, "genre"),
+                "date": self._get_tag(audio, "date"),
+                "track": self._get_tag(audio, "tracknumber"),
+                "disc": self._get_tag(audio, "discnumber"),
+                "comment": self._get_tag(audio, "comment"),
+                "copyright": self._get_tag(audio, "copyright"),
+                "grouping": self._get_tag(audio, "grouping"),
+                "lyrics": self._get_tag(audio, "lyrics"),
+            }
+
+            # 提取封面
+            cover = self._extract_cover(audio)
+            if cover:
+                metadata["cover"] = cover
+
+            return metadata
+
+        except Exception as e:
+            logger.error(f"Error reading metadata from {file_path}: {e}")
+            return None
+
+    def write_metadata(self, file_path: str, metadata: Dict) -> bool:
+        """
+        写入元数据到音频文件
+
+        Args:
+            file_path: 文件路径
+            metadata: 要写入的元数据字典
+
+        Returns:
+            bool: 是否成功
+        """
+        try:
+            path = Path(file_path)
+            if not path.exists():
+                logger.error(f"File not found: {file_path}")
+                return False
+
+            audio = MutagenFile(file_path, easy=True)
+            if audio is None:
+                logger.error(f"Cannot open file for writing: {file_path}")
+                return False
+
+            # 写入文本元数据
+            for field in self.METADATA_FIELDS:
+                if field in metadata and metadata[field] is not None:
+                    audio[field] = metadata[field]
+
+            audio.save()
+            logger.info(f"Metadata written to {file_path}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Error writing metadata to {file_path}: {e}")
+            return False
+
+    def _get_tag(self, audio, tag_name: str) -> Optional[str]:
+        """安全获取标签值"""
+        try:
+            if tag_name in audio.tags:
+                value = audio.tags[tag_name]
+                if isinstance(value, list) and len(value) > 0:
+                    return str(value[0])
+                return str(value)
+        except Exception:
+            pass
+        return None
+
+    def _extract_cover(self, audio) -> Optional[Dict]:
+        """提取封面图片"""
+        try:
+            if hasattr(audio, 'pictures') and audio.pictures:
+                for pic in audio.pictures:
+                    return {
+                        "data": pic.data,
+                        "mime": pic.mime,
+                        "type": pic.type,
+                        "desc": pic.desc,
+                    }
+        except Exception as e:
+            logger.warning(f"Error extracting cover: {e}")
+        return None
+
+
+metadata_service = MetadataService()

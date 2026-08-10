@@ -1,0 +1,203 @@
+# MusicFlow Cursor Rules
+
+## Project Info
+- **Name:** MusicFlow
+- **Type:** NAS Music Conversion Tool
+- **Stack:** Python (FastAPI) + Vue 3 + Docker
+- **Main Feature:** Audio format conversion, metadata processing, file monitoring
+
+---
+
+## Code Style
+
+### Python
+- Use type hints
+- Add Chinese comments
+- Follow PEP 8
+- Complete exception handling
+- Full logging
+
+### TypeScript/Vue
+- Use Composition API
+- Use TypeScript types
+- PascalCase for components
+- camelCase for variables
+
+---
+
+## Git Rules
+
+### Branch Naming
+```
+feature/<name>    # New feature
+fix/<name>        # Bug fix
+refactor/<name>   # Refactor
+docs/<name>       # Documentation
+```
+
+### Commit Format
+```
+<type>: <description>
+
+Types: feat | fix | docs | style | refactor | test | perf | build | ci | chore
+```
+
+### Examples
+```
+feat: add batch conversion
+fix: resolve metadata error
+refactor: simplify engine
+```
+
+---
+
+## Work Flow
+
+1. Check git status
+2. Create feature branch
+3. Make changes
+4. Show git diff
+5. Wait for user confirmation
+6. Commit changes
+
+---
+
+## Restrictions
+
+###禁止操作
+- git reset --hard
+- git push --force
+- Delete remote branches
+- Modify history
+- Auto commit (need user confirmation)
+- Modify unrelated code
+- Auto upgrade dependencies
+
+---
+
+## Security
+
+### 禁止提交
+- .env files
+- Passwords, tokens, keys
+- Log files
+- Database backups
+
+---
+
+## Testing
+
+### 必须验证
+- Code runs without errors
+- API endpoints respond correctly
+- Frontend pages display correctly
+- No syntax errors
+
+---
+
+## Documentation
+
+### 必须更新
+- Code comments (key parts)
+- API documentation (if changed)
+- CHANGELOG.md (important changes)
+
+---
+
+## Work Completion
+
+### 输出格式
+```markdown
+## Summary
+Changes: xxx
+
+## Files Changed
+- file1
+- file2
+
+## Tests
+- test results
+
+## Git Status
+- clean / modified
+
+## Next Steps
+- suggestions
+```
+
+---
+
+## Project Structure
+
+```
+MusicFlow/
+├── backend/        # Python backend
+├── frontend/       # Vue 3 frontend
+├── docs/          # Documentation
+├── CLAUDE.md      # AI coding rules
+└── AGENTS.md      # Agent rules
+```
+
+---
+
+## Dev Environment
+
+### Backend
+```bash
+cd backend
+pip install -r requirements.txt
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8082
+```
+
+### Frontend
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+### Access
+- Frontend: http://localhost:3000
+- Backend: http://localhost:8082
+- API Docs: http://localhost:8082/docs
+
+---
+
+## Key Features
+
+- Audio format conversion (FLAC, MP3, M4A, AAC, ALAC)
+- Metadata and cover art preservation
+- Multi-version output
+- File monitoring with stability detection
+- Async task queue with concurrency control
+- Web UI for management
+
+---
+
+## Constraints
+
+- Do not modify main/master directly
+- Do not commit without user confirmation
+- Do not modify unrelated code
+- Do not upgrade dependencies without asking
+- Always explain why when making changes
+
+---
+
+## Quality Standards
+
+### Code Quality
+- Type hints required
+- Comments in Chinese
+- Exception handling
+- Logging complete
+- No hardcoded values
+
+### Testing
+- API testing
+- Frontend testing
+- Conversion testing
+
+---
+
+**遵循这些规则，确保代码质量和项目可维护性。**

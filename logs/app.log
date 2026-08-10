@@ -1,0 +1,117 @@
+2026-08-10 00:07:23,343 - app - INFO - [main] Starting MusicFlow API
+2026-08-10 00:07:23,445 - app.services.conversion_engine - INFO - Conversion engine initialized (max concurrent: 2)
+2026-08-10 00:07:23,445 - app - INFO - [main] Application started
+2026-08-10 00:10:15,513 - app.services.config_manager - INFO - Saved config: profiles.json
+2026-08-10 00:10:15,513 - app.services.profile_manager - INFO - Updated profile: Apple Music AAC 256 to version 2
+2026-08-10 00:10:26,766 - app.services.config_manager - INFO - Saved config: profiles.json
+2026-08-10 00:10:26,766 - app.services.profile_manager - INFO - Updated profile: Apple Music AAC 256 to version 3
+2026-08-10 00:17:01,233 - app.api.routes.tasks - INFO - Created task 41d10869-50b6-4670-86c2-06387be03342: D:\Music\蔡依林 - Pleasure\01 - Layers.flac
+2026-08-10 00:20:02,986 - app.services.config_manager - INFO - Saved config: profiles.json
+2026-08-10 00:20:02,986 - app.services.profile_manager - INFO - Updated profile: Apple Music AAC 256 to version 4
+2026-08-10 00:21:26,788 - app.services.config_manager - INFO - Saved config: profiles.json
+2026-08-10 00:21:26,788 - app.services.profile_manager - INFO - Updated profile: Apple Music AAC 256 to version 5
+2026-08-10 00:27:33,632 - app - INFO - [main] Starting MusicFlow API
+2026-08-10 00:27:33,743 - app.services.conversion_engine - INFO - Conversion engine initialized (max concurrent: 2)
+2026-08-10 00:27:33,743 - app - INFO - [main] Application started
+2026-08-10 00:28:33,401 - app - INFO - [main] Starting MusicFlow API
+2026-08-10 00:28:33,516 - app.services.conversion_engine - INFO - Conversion engine initialized (max concurrent: 2)
+2026-08-10 00:28:33,516 - app - INFO - [main] Application started
+2026-08-10 00:28:37,889 - app.services.config_manager - INFO - Saved config: profiles.json
+2026-08-10 00:28:37,889 - app.services.profile_manager - INFO - Updated profile: Apple Music AAC 256 to version 6
+2026-08-10 00:29:47,379 - app.services.config_manager - INFO - Saved config: profiles.json
+2026-08-10 00:29:47,379 - app.services.profile_manager - INFO - Updated profile: Apple Music AAC 256 to version 7
+2026-08-10 00:29:56,269 - app.services.config_manager - INFO - Saved config: profiles.json
+2026-08-10 00:29:56,269 - app.services.profile_manager - INFO - Updated profile: Apple Music AAC 256 to version 8
+2026-08-10 00:30:10,610 - app.api.routes.tasks - INFO - Created task 9ae442a2-69fa-46d7-a705-941e9dcf7838: D:\Music\蔡依林 - Pleasure\01 - Layers.flac
+2026-08-10 00:30:10,610 - app.services.conversion_engine - INFO - Task 9ae442a2-69fa-46d7-a705-941e9dcf7838 submitted to queue (queue size: 1)
+2026-08-10 00:30:10,610 - app.api.routes.tasks - INFO - Task 9ae442a2-69fa-46d7-a705-941e9dcf7838 submitted to conversion engine
+2026-08-10 00:30:10,618 - app.api.routes.files - INFO - Converting file 01 - Layers.flac with profiles ['apple-music-aac-256']
+2026-08-10 00:30:10,654 - app.services.conversion_engine - INFO - Starting conversion: D:\Music\蔡依林 - Pleasure\01 - Layers.flac -> D:/Music/output/01 - Layers.m4a
+2026-08-10 00:30:10,654 - app.core.ffmpeg - INFO - Running FFmpeg: D:/download/ffmpeg-master-latest-win64-gpl/bin/ffmpeg.exe -i D:\Music\蔡依林 - Pleasure\01 - Layers.flac -y -c:a aac -b:a 256k -ar 44100 -threads 2 -map 0:a? D:/Music/output/01 - Layers.m4a
+2026-08-10 00:30:18,143 - app.core.metadata - ERROR - Error writing metadata to D:/Music/output/01 - Layers.m4a: "'track' is not a valid key"
+2026-08-10 00:30:18,143 - app.services.conversion_engine - INFO - Conversion completed: D:/Music/output/01 - Layers.m4a
+2026-08-10 00:30:18,143 - app.services.conversion_engine - INFO - Task 9ae442a2-69fa-46d7-a705-941e9dcf7838 completed successfully
+2026-08-10 00:33:11,505 - app.services.config_manager - INFO - Saved config: profiles.json
+2026-08-10 00:33:11,505 - app.services.profile_manager - INFO - Updated profile: Apple Lossless to version 2
+2026-08-10 00:33:29,817 - app.api.routes.tasks - INFO - Created task 902afa51-fccd-4542-9f03-4badf4f7771c: D:\Music\蔡依林 - Pleasure\04 - Pleasure.flac
+2026-08-10 00:33:29,817 - app.services.conversion_engine - INFO - Task 902afa51-fccd-4542-9f03-4badf4f7771c submitted to queue (queue size: 1)
+2026-08-10 00:33:29,817 - app.api.routes.tasks - INFO - Task 902afa51-fccd-4542-9f03-4badf4f7771c submitted to conversion engine
+2026-08-10 00:33:29,824 - app.api.routes.files - INFO - Converting file 04 - Pleasure.flac with profiles ['apple-lossless']
+2026-08-10 00:33:29,854 - app.services.conversion_engine - INFO - Starting conversion: D:\Music\蔡依林 - Pleasure\04 - Pleasure.flac -> D:/Music/output/04 - Pleasure.m4a
+2026-08-10 00:33:29,854 - app.core.ffmpeg - INFO - Running FFmpeg: D:/download/ffmpeg-master-latest-win64-gpl/bin/ffmpeg.exe -i D:\Music\蔡依林 - Pleasure\04 - Pleasure.flac -y -c:a alac -b:a 256k -threads 2 -map 0:a? D:/Music/output/04 - Pleasure.m4a
+2026-08-10 00:33:30,623 - app.core.metadata - ERROR - Error writing metadata to D:/Music/output/04 - Pleasure.m4a: "'track' is not a valid key"
+2026-08-10 00:33:30,623 - app.services.conversion_engine - INFO - Conversion completed: D:/Music/output/04 - Pleasure.m4a
+2026-08-10 00:33:30,623 - app.services.conversion_engine - INFO - Task 902afa51-fccd-4542-9f03-4badf4f7771c completed successfully
+2026-08-10 00:36:34,457 - app - INFO - [main] Starting MusicFlow API
+2026-08-10 00:36:34,566 - app.services.conversion_engine - INFO - Conversion engine initialized (max concurrent: 2)
+2026-08-10 00:36:34,566 - app - INFO - [main] Application started
+2026-08-10 00:36:50,142 - app.api.routes.tasks - INFO - Created task ed9bbb15-9d74-45d7-8f78-b8de144b707f: D:/Music/蔡依林 - Pleasure/10 - Hush Little Baby.flac
+2026-08-10 00:36:50,142 - app.services.conversion_engine - INFO - Task ed9bbb15-9d74-45d7-8f78-b8de144b707f submitted to queue (queue size: 1)
+2026-08-10 00:36:50,144 - app.api.routes.tasks - INFO - Task ed9bbb15-9d74-45d7-8f78-b8de144b707f submitted to conversion engine
+2026-08-10 00:36:50,145 - app.api.routes.tasks - INFO - Task ed9bbb15-9d74-45d7-8f78-b8de144b707f progress: 0%, status: converting
+2026-08-10 00:36:50,182 - app.services.conversion_engine - INFO - Starting conversion: D:/Music/蔡依林 - Pleasure/10 - Hush Little Baby.flac -> D:/Music/output/10 - Hush Little Baby.m4a
+2026-08-10 00:36:50,182 - app.api.routes.tasks - INFO - Task ed9bbb15-9d74-45d7-8f78-b8de144b707f progress: 10.0%, status: converting
+2026-08-10 00:36:50,183 - app.core.ffmpeg - INFO - Running FFmpeg: D:/download/ffmpeg-master-latest-win64-gpl/bin/ffmpeg.exe -i D:/Music/蔡依林 - Pleasure/10 - Hush Little Baby.flac -y -c:a aac -b:a 256k -ar 44100 -threads 2 -map 0:a? D:/Music/output/10 - Hush Little Baby.m4a
+2026-08-10 00:36:52,695 - app.api.routes.tasks - INFO - Task ed9bbb15-9d74-45d7-8f78-b8de144b707f progress: 80.0%, status: converting
+2026-08-10 00:36:52,730 - app.api.routes.tasks - INFO - Task ed9bbb15-9d74-45d7-8f78-b8de144b707f progress: 90.0%, status: converting
+2026-08-10 00:36:52,751 - app.core.metadata - ERROR - Error writing metadata to D:/Music/output/10 - Hush Little Baby.m4a: "'track' is not a valid key"
+2026-08-10 00:36:52,751 - app.api.routes.tasks - INFO - Task ed9bbb15-9d74-45d7-8f78-b8de144b707f progress: 100.0%, status: success
+2026-08-10 00:36:52,753 - app.services.conversion_engine - INFO - Conversion completed: D:/Music/output/10 - Hush Little Baby.m4a
+2026-08-10 00:36:52,753 - app.services.conversion_engine - INFO - Task ed9bbb15-9d74-45d7-8f78-b8de144b707f completed successfully
+2026-08-10 00:38:55,067 - app.api.routes.tasks - INFO - Created task c09c2944-33ee-4cfa-90db-3f45a2dae02a: D:\Music\蔡依林 - Pleasure\02 - The Divine Comedy꞉ Purgatorio.flac
+2026-08-10 00:38:55,067 - app.services.conversion_engine - INFO - Task c09c2944-33ee-4cfa-90db-3f45a2dae02a submitted to queue (queue size: 1)
+2026-08-10 00:38:55,067 - app.api.routes.tasks - INFO - Task c09c2944-33ee-4cfa-90db-3f45a2dae02a submitted to conversion engine
+2026-08-10 00:38:55,073 - app.api.routes.tasks - INFO - Task c09c2944-33ee-4cfa-90db-3f45a2dae02a progress: 0%, status: converting
+2026-08-10 00:38:55,081 - app.api.routes.files - INFO - Converting file 02 - The Divine Comedy꞉ Purgatorio.flac with profiles ['apple-music-aac-256']
+2026-08-10 00:38:55,110 - app.services.conversion_engine - INFO - Starting conversion: D:\Music\蔡依林 - Pleasure\02 - The Divine Comedy꞉ Purgatorio.flac -> D:/Music/output/02 - The Divine Comedy꞉ Purgatorio.m4a
+2026-08-10 00:38:55,110 - app.api.routes.tasks - INFO - Task c09c2944-33ee-4cfa-90db-3f45a2dae02a progress: 10.0%, status: converting
+2026-08-10 00:38:55,110 - app.core.ffmpeg - INFO - Running FFmpeg: D:/download/ffmpeg-master-latest-win64-gpl/bin/ffmpeg.exe -i D:\Music\蔡依林 - Pleasure\02 - The Divine Comedy꞉ Purgatorio.flac -y -c:a aac -b:a 256k -ar 44100 -threads 2 -map 0:a? D:/Music/output/02 - The Divine Comedy꞉ Purgatorio.m4a
+2026-08-10 00:38:57,162 - app.api.routes.tasks - INFO - Task c09c2944-33ee-4cfa-90db-3f45a2dae02a progress: 80.0%, status: converting
+2026-08-10 00:38:57,196 - app.api.routes.tasks - INFO - Task c09c2944-33ee-4cfa-90db-3f45a2dae02a progress: 90.0%, status: converting
+2026-08-10 00:38:57,199 - app.core.metadata - ERROR - Error writing metadata to D:/Music/output/02 - The Divine Comedy꞉ Purgatorio.m4a: "'track' is not a valid key"
+2026-08-10 00:38:57,200 - app.api.routes.tasks - INFO - Task c09c2944-33ee-4cfa-90db-3f45a2dae02a progress: 100.0%, status: success
+2026-08-10 00:38:57,200 - app.services.conversion_engine - INFO - Conversion completed: D:/Music/output/02 - The Divine Comedy꞉ Purgatorio.m4a
+2026-08-10 00:38:57,201 - app.services.conversion_engine - INFO - Task c09c2944-33ee-4cfa-90db-3f45a2dae02a completed successfully
+2026-08-10 10:46:14,445 - app - INFO - [main] Starting MusicFlow API
+2026-08-10 10:46:14,536 - app.services.conversion_engine - INFO - Conversion engine initialized (max concurrent: 2)
+2026-08-10 10:46:14,536 - app - INFO - [main] Application started
+2026-08-10 10:47:34,631 - app.services.config_manager - INFO - Saved config: profiles.json
+2026-08-10 10:47:34,631 - app.services.profile_manager - INFO - Updated profile: Apple Music AAC 256 to version 9
+2026-08-10 10:47:54,990 - app.services.config_manager - INFO - Saved config: profiles.json
+2026-08-10 10:47:54,990 - app.services.profile_manager - INFO - Updated profile: Apple Music AAC 256 to version 10
+2026-08-10 10:48:12,520 - app.api.routes.tasks - INFO - Created task 5ccfafb3-00c2-4bc1-9a6a-28cbdecc3fe8: D:\Music\蔡依林 - Pleasure\01 - Layers.flac
+2026-08-10 10:48:12,520 - app.services.conversion_engine - INFO - Task 5ccfafb3-00c2-4bc1-9a6a-28cbdecc3fe8 submitted to queue (queue size: 1)
+2026-08-10 10:48:12,520 - app.api.routes.tasks - INFO - Task 5ccfafb3-00c2-4bc1-9a6a-28cbdecc3fe8 submitted to conversion engine
+2026-08-10 10:48:12,520 - app.api.routes.tasks - INFO - Task 5ccfafb3-00c2-4bc1-9a6a-28cbdecc3fe8 progress: 0%, status: converting
+2026-08-10 10:48:12,531 - app.api.routes.files - INFO - Converting file 01 - Layers.flac with profiles ['apple-music-aac-256']
+2026-08-10 10:48:12,571 - app.services.conversion_engine - INFO - Starting conversion: D:\Music\蔡依林 - Pleasure\01 - Layers.flac -> D:/Music/output/01 - Layers.m4a
+2026-08-10 10:48:12,571 - app.api.routes.tasks - INFO - Task 5ccfafb3-00c2-4bc1-9a6a-28cbdecc3fe8 progress: 10.0%, status: converting
+2026-08-10 10:48:12,571 - app.core.ffmpeg - INFO - Running FFmpeg: D:/download/ffmpeg-master-latest-win64-gpl/bin/ffmpeg.exe -i D:\Music\蔡依林 - Pleasure\01 - Layers.flac -y -c:a aac -b:a 256k -ar 44100 -threads 2 -map 0:a? D:/Music/output/01 - Layers.m4a
+2026-08-10 10:48:19,418 - app.api.routes.tasks - INFO - Task 5ccfafb3-00c2-4bc1-9a6a-28cbdecc3fe8 progress: 80.0%, status: converting
+2026-08-10 10:48:19,448 - app.api.routes.tasks - INFO - Task 5ccfafb3-00c2-4bc1-9a6a-28cbdecc3fe8 progress: 90.0%, status: converting
+2026-08-10 10:48:19,454 - app.core.metadata - ERROR - Error writing metadata to D:/Music/output/01 - Layers.m4a: "'track' is not a valid key"
+2026-08-10 10:48:19,466 - app.api.routes.tasks - INFO - Task 5ccfafb3-00c2-4bc1-9a6a-28cbdecc3fe8 progress: 100.0%, status: success
+2026-08-10 10:48:19,466 - app.services.conversion_engine - INFO - Conversion completed: D:/Music/output/01 - Layers.m4a
+2026-08-10 10:48:19,466 - app.services.conversion_engine - INFO - Task 5ccfafb3-00c2-4bc1-9a6a-28cbdecc3fe8 completed successfully
+2026-08-10 11:01:28,263 - app.services.config_manager - INFO - Saved config: profiles.json
+2026-08-10 11:01:28,264 - app.services.profile_manager - INFO - Updated profile: Apple Music AAC 256 to version 11
+2026-08-10 11:05:04,693 - app.services.config_manager - INFO - Saved config: profiles.json
+2026-08-10 11:05:04,693 - app.services.profile_manager - INFO - Deleted profile: MP3 320
+2026-08-10 11:16:46,669 - app - INFO - [main] Starting MusicFlow API
+2026-08-10 11:16:46,811 - app.services.conversion_engine - INFO - Conversion engine initialized (max concurrent: 2)
+2026-08-10 11:16:46,811 - app - INFO - [main] Application started
+2026-08-10 11:17:01,430 - app.services.config_manager - INFO - Saved config: profiles.json
+2026-08-10 11:17:01,430 - app.services.profile_manager - INFO - Created profile: Test Profile
+2026-08-10 11:19:55,507 - app.services.config_manager - INFO - Saved config: profiles.json
+2026-08-10 11:19:55,508 - app.services.profile_manager - INFO - Updated profile: Apple Music AAC 256 to version 12
+2026-08-10 11:20:45,143 - app.services.config_manager - INFO - Saved config: profiles.json
+2026-08-10 11:20:45,144 - app.services.profile_manager - INFO - Updated profile: Apple Music AAC 256 to version 13
+2026-08-10 11:33:50,631 - app.services.config_manager - INFO - Saved config: profiles.json
+2026-08-10 11:33:50,632 - app.services.profile_manager - INFO - Created profile: 123
+2026-08-10 11:33:56,857 - app.services.config_manager - INFO - Saved config: profiles.json
+2026-08-10 11:33:56,858 - app.services.profile_manager - INFO - Updated profile: 123 to version 2
+2026-08-10 11:34:01,987 - app.services.config_manager - INFO - Saved config: profiles.json
+2026-08-10 11:34:01,987 - app.services.profile_manager - INFO - Deleted profile: 123
+2026-08-10 11:41:09,570 - app.services.config_manager - INFO - Saved config: profiles.json
+2026-08-10 11:41:09,571 - app.services.profile_manager - INFO - Updated profile: Apple Music AAC 256 to version 14
+2026-08-10 11:41:18,516 - app.services.config_manager - INFO - Saved config: profiles.json

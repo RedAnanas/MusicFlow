@@ -1,0 +1,18 @@
+# Web框架
+fastapi==0.115.0
+uvicorn[standard]==0.32.0
+pydantic==2.10.0
+pydantic-settings==2.7.0
+
+# 音频处理
+mutagen==1.47.0
+
+# 文件监控
+watchdog==6.0.0
+
+# 异步和并发
+aiofiles==24.1.0
+
+# 工具库
+python-dotenv==1.0.1
+python-multipart==0.0.18
