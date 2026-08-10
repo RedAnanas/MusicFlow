@@ -3,6 +3,30 @@ import { ref } from 'vue'
 import axios from 'axios'
 import type { FileItem, Task, Profile, WatchFolder, Settings, LogEntry } from '../types'
 
+interface WatchFolderApiResponse {
+  id: string
+  name: string
+  input_dir: string
+  profile_ids: string[]
+  auto_process: boolean
+  recursive_scan: boolean
+  scan_interval_minutes: number
+  enabled: boolean
+}
+
+function mapWatchFolder(data: WatchFolderApiResponse): WatchFolder {
+  return {
+    id: data.id,
+    name: data.name,
+    inputDir: data.input_dir,
+    profileIds: data.profile_ids,
+    autoProcess: data.auto_process,
+    recursiveScan: data.recursive_scan,
+    scanIntervalMinutes: data.scan_interval_minutes,
+    enabled: data.enabled,
+  }
+}
+
 export const useAppStore = defineStore('app', () => {
   // 状态
   const files = ref<FileItem[]>([])
@@ -187,8 +211,8 @@ export const useAppStore = defineStore('app', () => {
   async function fetchWatchFolders() {
     loading.value = true
     try {
-      const response = await axios.get('/api/watch-folders/')
-      watchFolders.value = response.data
+      const response = await axios.get<WatchFolderApiResponse[]>('/api/watch-folders/')
+      watchFolders.value = response.data.map(mapWatchFolder)
     } catch (error) {
       console.error('Failed to fetch watch folders:', error)
     } finally {
@@ -202,32 +226,28 @@ export const useAppStore = defineStore('app', () => {
       const apiData: Record<string, any> = {
         name: folder.name,
         input_dir: folder.inputDir,
-        profile_ids: folder.profileIds,
-        auto_process: folder.autoProcess,
-        recursive_scan: folder.recursiveScan,
-        scan_interval_minutes: folder.scanIntervalMinutes,
+        profile_ids: folder.profileIds || [],
+        auto_process: folder.autoProcess ?? true,
+        recursive_scan: folder.recursiveScan ?? true,
+        scan_interval_minutes: folder.scanIntervalMinutes ?? 5,
       }
 
       console.log('Creating watch folder:', apiData)
-      const response = await axios.post('/api/watch-folders/', apiData)
+      console.log('API URL:', '/api/watch-folders/')
 
-      // 转换响应字段名到驼峰格式
-      const newFolder = {
-        id: response.data.id,
-        name: response.data.name,
-        inputDir: response.data.input_dir,
-        profileIds: response.data.profile_ids,
-        autoProcess: response.data.auto_process,
-        recursiveScan: response.data.recursive_scan,
-        scanIntervalMinutes: response.data.scan_interval_minutes,
-        enabled: response.data.enabled,
-        lastScan: response.data.last_scan,
-      }
+      const response = await axios.post<WatchFolderApiResponse>('/api/watch-folders/', apiData)
+      console.log('Response:', response.data)
+
+      const newFolder = mapWatchFolder(response.data)
 
       watchFolders.value.push(newFolder)
       return newFolder
     } catch (error) {
       console.error('Failed to create watch folder:', error)
+      if (axios.isAxiosError(error) && error.response) {
+        console.error('Response data:', error.response.data)
+        console.error('Response status:', error.response.status)
+      }
       throw error
     }
   }
@@ -254,20 +274,12 @@ export const useAppStore = defineStore('app', () => {
       if (folder.scanIntervalMinutes) apiData.scan_interval_minutes = folder.scanIntervalMinutes
 
       console.log('Updating watch folder:', id, apiData)
-      const response = await axios.put(`/api/watch-folders/${id}`, apiData)
+      console.log('API URL:', `/api/watch-folders/${id}`)
 
-      // 转换响应字段名到驼峰格式
-      const updatedFolder = {
-        id: response.data.id,
-        name: response.data.name,
-        inputDir: response.data.input_dir,
-        profileIds: response.data.profile_ids,
-        autoProcess: response.data.auto_process,
-        recursiveScan: response.data.recursive_scan,
-        scanIntervalMinutes: response.data.scan_interval_minutes,
-        enabled: response.data.enabled,
-        lastScan: response.data.last_scan,
-      }
+      const response = await axios.put<WatchFolderApiResponse>(`/api/watch-folders/${id}`, apiData)
+      console.log('Response:', response.data)
+
+      const updatedFolder = mapWatchFolder(response.data)
 
       const index = watchFolders.value.findIndex(f => f.id === id)
       if (index !== -1) {
@@ -276,6 +288,10 @@ export const useAppStore = defineStore('app', () => {
       return updatedFolder
     } catch (error) {
       console.error('Failed to update watch folder:', error)
+      if (axios.isAxiosError(error) && error.response) {
+        console.error('Response data:', error.response.data)
+        console.error('Response status:', error.response.status)
+      }
       throw error
     }
   }
@@ -342,6 +358,10 @@ export const useAppStore = defineStore('app', () => {
     updateProfile,
     deleteProfile,
     fetchWatchFolders,
+    createWatchFolder,
+    updateWatchFolder,
+    deleteWatchFolder,
+    scanWatchFolder,
     fetchSettings,
     updateSettings,
     fetchLogs,
