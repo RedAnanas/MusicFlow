@@ -122,6 +122,26 @@ class MetadataService:
                         fail_count += 1
                         continue
 
+            # 写入封面图片（带错误处理）
+            if "cover" in metadata and metadata["cover"]:
+                cover = metadata["cover"]
+                if "data" in cover and "mime" in cover:
+                    try:
+                        from mutagen.flac import Picture
+                        from io import BytesIO
+
+                        pic = Picture()
+                        pic.type = 3  # Front cover
+                        pic.mime = cover["mime"]
+                        pic.data = cover["data"]
+
+                        audio.add_picture(pic)
+                        success_count += 1
+                        logger.info(f"Cover image added to {file_path}")
+                    except Exception as e:
+                        logger.warning(f"Could not write cover to {file_path}: {e}")
+                        fail_count += 1
+
             audio.save()
             logger.info(f"Metadata written to {file_path}: {success_count} fields written, {fail_count} fields skipped")
             return True
