@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { useAppStore } from '../stores/app'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import type { WatchFolder } from '../types'
 
 const store = useAppStore()
@@ -22,9 +23,18 @@ onMounted(() => {
 
 const handleCreate = async () => {
   try {
-    // API 调用
+    await store.createWatchFolder(newFolder.value)
     ElMessage.success('监控目录创建成功')
     showCreateDialog.value = false
+    // 重置表单
+    newFolder.value = {
+      name: '',
+      inputDir: '',
+      profileIds: [],
+      autoProcess: true,
+      recursiveScan: true,
+      scanIntervalMinutes: 5,
+    }
   } catch (error) {
     ElMessage.error('创建失败')
   }
@@ -32,9 +42,65 @@ const handleCreate = async () => {
 
 const handleScan = async (folderId: string) => {
   try {
-    ElMessage.success('开始扫描')
+    const result = await store.scanWatchFolder(folderId)
+    ElMessage.success(`扫描完成，发现 ${result.files?.length || 0} 个文件`)
   } catch (error) {
     ElMessage.error('扫描失败')
+  }
+}
+
+const handleDelete = async (id: string) => {
+  try {
+    await ElMessageBox.confirm('确定要删除这个监控目录吗？', '确认', {
+      type: 'warning',
+    })
+    await store.deleteWatchFolder(id)
+    ElMessage.success('删除成功')
+  } catch (error) {
+    if (error !== 'cancel') {
+      ElMessage.error('删除失败')
+    }
+  }
+}
+
+const handleTriggerConvert = async (folderId: string) => {
+  try {
+    // 先扫描目录
+    const scanResult = await store.scanWatchFolder(folderId)
+
+    if (!scanResult.files || scanResult.files.length === 0) {
+      ElMessage.warning('目录中没有找到音频文件')
+      return
+    }
+
+    // 为每个文件创建转换任务
+    let taskCount = 0
+    for (const filePath of scanResult.files) {
+      // 获取文件名
+      const fileName = filePath.split(/[/\\]/).pop() || ''
+      const fileExt = fileName.split('.').pop() || ''
+      const outputFile = filePath.replace('.' + fileExt, '.m4a')
+
+      // 创建转换任务
+      try {
+        await fetch('http://localhost:8082/api/tasks/', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            source_file: filePath,
+            output_file: outputFile,
+            profile_id: store.profiles[0]?.id || 'apple-music-aac-256'
+          })
+        })
+        taskCount++
+      } catch (err) {
+        console.error('Failed to create task:', err)
+      }
+    }
+
+    ElMessage.success(`已创建 ${taskCount} 个转换任务`)
+  } catch (error) {
+    ElMessage.error('触发转换失败')
   }
 }
 </script>
@@ -84,12 +150,15 @@ const handleScan = async (folderId: string) => {
           </template>
         </el-table-column>
 
-        <el-table-column label="操作" width="150" fixed="right">
+        <el-table-column label="操作" width="200" fixed="right">
           <template #default="{ row }">
-            <el-button type="primary" link size="small" @click="handleScan(row.id)">
-              立即扫描
+            <el-button type="success" link size="small" @click="handleTriggerConvert(row.id)">
+              立即转换
             </el-button>
-            <el-button type="danger" link size="small">
+            <el-button type="primary" link size="small" @click="handleScan(row.id)">
+              扫描
+            </el-button>
+            <el-button type="danger" link size="small" @click="handleDelete(row.id)">
               删除
             </el-button>
           </template>

@@ -196,6 +196,62 @@ export const useAppStore = defineStore('app', () => {
     }
   }
 
+  async function createWatchFolder(folder: Partial<WatchFolder>) {
+    try {
+      // 转换字段名为下划线格式
+      const apiData: Record<string, any> = {
+        name: folder.name,
+        input_dir: folder.inputDir,
+        profile_ids: folder.profileIds,
+        auto_process: folder.autoProcess,
+        recursive_scan: folder.recursiveScan,
+        scan_interval_minutes: folder.scanIntervalMinutes,
+      }
+
+      console.log('Creating watch folder:', apiData)
+      const response = await axios.post('/api/watch-folders/', apiData)
+
+      // 转换响应字段名到驼峰格式
+      const newFolder = {
+        id: response.data.id,
+        name: response.data.name,
+        inputDir: response.data.input_dir,
+        profileIds: response.data.profile_ids,
+        autoProcess: response.data.auto_process,
+        recursiveScan: response.data.recursive_scan,
+        scanIntervalMinutes: response.data.scan_interval_minutes,
+        enabled: response.data.enabled,
+        lastScan: response.data.last_scan,
+      }
+
+      watchFolders.value.push(newFolder)
+      return newFolder
+    } catch (error) {
+      console.error('Failed to create watch folder:', error)
+      throw error
+    }
+  }
+
+  async function deleteWatchFolder(id: string) {
+    try {
+      await axios.delete(`/api/watch-folders/${id}`)
+      watchFolders.value = watchFolders.value.filter(f => f.id !== id)
+    } catch (error) {
+      console.error('Failed to delete watch folder:', error)
+      throw error
+    }
+  }
+
+  async function scanWatchFolder(id: string) {
+    try {
+      const response = await axios.post(`/api/watch-folders/${id}/scan`)
+      return response.data
+    } catch (error) {
+      console.error('Failed to scan watch folder:', error)
+      throw error
+    }
+  }
+
   // 设置操作
   async function fetchSettings() {
     loading.value = true
