@@ -64,7 +64,8 @@ class MetadataService:
             # 对于 M4A/MP4 文件，需要使用不同的方式读取标签
             metadata = {}
             if hasattr(audio, 'tags') and audio.tags:
-                # 读取文本标签
+                # 读取文本标签（带错误处理）
+                # M4A/MP4 格式使用 iTunes 风格的标签
                 for tag_key, mutagen_key in [
                     ("title", "©nam"),
                     ("artist", "©ART"),
@@ -75,44 +76,73 @@ class MetadataService:
                     ("disc", "disk"),
                     ("copyright", "cprt"),
                 ]:
-                    if mutagen_key in audio.tags:
-                        value = audio.tags[mutagen_key]
-                        if isinstance(value, list) and len(value) > 0:
-                            metadata[tag_key] = str(value[0])
-                        elif isinstance(value, tuple):
-                            # trkn 和 disk 返回元组 (track, total)
-                            metadata[tag_key] = str(value[0])
-                        else:
-                            metadata[tag_key] = str(value)
+                    try:
+                        if mutagen_key in audio.tags:
+                            value = audio.tags[mutagen_key]
+                            if isinstance(value, list) and len(value) > 0:
+                                metadata[tag_key] = str(value[0])
+                            elif isinstance(value, tuple):
+                                # trkn 和 disk 返回元组 (track, total)
+                                metadata[tag_key] = str(value[0])
+                            else:
+                                metadata[tag_key] = str(value)
+                    except (ValueError, TypeError) as e:
+                        # 某些格式的 tags 不支持 in 操作
+                        pass
+
+                # FLAC/MP3/OGG 格式使用不同的标签名称
+                flac_tags = {
+                    "title": "title",
+                    "artist": "artist",
+                    "album": "album",
+                    "albumartist": "albumartist",
+                    "date": "date",
+                    "track": "tracknumber",
+                    "disc": "discnumber",
+                    "genre": "genre",
+                    "comment": "comment",
+                }
+                for tag_key, mutagen_key in flac_tags.items():
+                    try:
+                        if mutagen_key in audio.tags:
+                            value = audio.tags[mutagen_key]
+                            if isinstance(value, list) and len(value) > 0:
+                                metadata[tag_key] = str(value[0])
+                            else:
+                                metadata[tag_key] = str(value)
+                    except (ValueError, TypeError) as e:
+                        pass
 
                 # 读取封面 - M4A/MP4 格式
-                if "covr" in audio.tags:
-                    try:
+                try:
+                    if "covr" in audio.tags:
                         pic = audio.tags["covr"][0]
                         metadata["cover"] = {
                             "data": bytes(pic),
                             "mime": "image/jpeg",
                             "type": 3
                         }
-                    except Exception as e:
-                        logger.warning(f"Could not read cover from covr field: {e}")
+                except (ValueError, TypeError, KeyError) as e:
+                    pass
 
             # 读取封面 - FLAC/MP3/OGG 格式
-            if hasattr(audio, 'pictures') and audio.pictures:
-                try:
+            try:
+                if hasattr(audio, 'pictures') and audio.pictures:
                     pic = audio.pictures[0]
                     metadata["cover"] = {
                         "data": pic.data,
                         "mime": pic.mime,
                         "type": pic.type
                     }
-                except Exception as e:
-                    logger.warning(f"Could not read cover from pictures: {e}")
+            except Exception as e:
+                pass
 
             return metadata
 
         except Exception as e:
             logger.error(f"Error reading metadata from {file_path}: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return None
 
     def write_metadata(self, file_path: str, metadata: Dict) -> bool:
