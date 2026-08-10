@@ -127,15 +127,25 @@ class MetadataService:
                 cover = metadata["cover"]
                 if "data" in cover and "mime" in cover:
                     try:
-                        from mutagen.flac import Picture
-                        from io import BytesIO
+                        # 根据文件类型选择不同的封面写入方式
+                        file_ext = path.suffix.lower()
+                        if file_ext in [".mp3", ".flac", ".ogg"]:
+                            # MP3/FLAC/OGG 使用 add_picture
+                            from mutagen.flac import Picture
+                            pic = Picture()
+                            pic.type = 3  # Front cover
+                            pic.mime = cover["mime"]
+                            pic.data = cover["data"]
+                            audio.add_picture(pic)
+                        elif file_ext in [".m4a", ".mp4"]:
+                            # M4A/MP4 使用 ITUNSMPIC
+                            from mutagen.mp4 import MP4Cover
+                            pic = MP4Cover(cover["data"], imageformat=MP4Cover.FORMAT_JPEG)
+                            audio["covr"] = [pic]
+                        else:
+                            # 其他格式尝试使用通用方式
+                            audio["APIC:Front"] = cover["data"]
 
-                        pic = Picture()
-                        pic.type = 3  # Front cover
-                        pic.mime = cover["mime"]
-                        pic.data = cover["data"]
-
-                        audio.add_picture(pic)
                         success_count += 1
                         logger.info(f"Cover image added to {file_path}")
                     except Exception as e:
