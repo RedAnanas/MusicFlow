@@ -57,13 +57,77 @@ npm run dev
 
 ## Git 规范
 
-### 分支命名
+### 分支管理
+
+**主分支（禁止直接提交）：**
+- `main` - 生产分支，只包含验证通过的代码
+
+**日常开发分支：**
+- `develop` - 日常开发分支，所有新功能和修复都在此分支开发
+
+**功能分支（从 develop 创建）：**
 ```
 feature/<功能名称>     # 新功能
 fix/<问题名称>        # Bug 修复
 refactor/<模块名称>   # 重构
 docs/<内容>           # 文档修改
 ```
+
+### 开发工作流
+
+1. **开始开发：**
+   ```bash
+   # 从 develop 创建功能分支
+   git checkout develop
+   git pull origin develop
+   git checkout -b feature/<功能名称>
+   ```
+
+2. **开发完成后：**
+   ```bash
+   # 提交修改
+   git add <修改文件>
+   git commit -m "feat: <描述>"
+   
+   # 推送到远程
+   git push origin feature/<功能名称>
+   ```
+
+3. **合并到 develop：**
+   ```bash
+   # 切换到 develop
+   git checkout develop
+   
+   # 合并功能分支
+   git merge feature/<功能名称>
+   
+   # 推送 develop
+   git push origin develop
+   ```
+
+4. **验证通过后合并到 main：**
+   ```bash
+   # ⚠️ 必须验证通过后才能执行此步骤
+   # 用户确认功能正常、测试通过后：
+   
+   git checkout main
+   git merge develop
+   git push origin main
+   ```
+
+### ⚠️ 合并规则（重要）
+
+**合并到 main 的要求：**
+- ✅ 所有功能在 develop 分支开发
+- ✅ 功能开发完成并测试通过
+- ✅ 用户验证功能正常
+- ✅ 用户明确同意合并
+- ✅ 代码审查通过（如有）
+
+**禁止：**
+- ❌ 直接在 main 上开发
+- ❌ 未经验证就合并到 main
+- ❌ 自动合并（必须用户确认）
 
 ### Commit 格式
 ```
