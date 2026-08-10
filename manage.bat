@@ -31,12 +31,12 @@ taskkill /F /IM pythonw.exe 2>nul
 taskkill /F /IM node.exe 2>nul
 timeout /t 2 /nobreak >nul
 
-echo Starting backend service (background)...
+echo Starting backend service...
 cd /d D:\Documents\AI\MusicFlow\backend
 start "" /B pythonw.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8082 --reload
 timeout /t 3 /nobreak >nul
 
-echo Starting frontend service (background)...
+echo Starting frontend service...
 cd /d D:\Documents\AI\MusicFlow\frontend
 start "" /B npm run dev
 timeout /t 3 /nobreak >nul
@@ -90,12 +90,12 @@ taskkill /F /IM pythonw.exe 2>nul
 taskkill /F /IM node.exe 2>nul
 timeout /t 2 /nobreak >nul
 
-echo Starting backend service (background)...
+echo Starting backend service...
 cd /d D:\Documents\AI\MusicFlow\backend
 start "" /B pythonw.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8082 --reload
 timeout /t 3 /nobreak >nul
 
-echo Starting frontend service (background)...
+echo Starting frontend service...
 cd /d D:\Documents\AI\MusicFlow\frontend
 start "" /B npm run dev
 timeout /t 3 /nobreak >nul
