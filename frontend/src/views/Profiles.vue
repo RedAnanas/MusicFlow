@@ -44,6 +44,16 @@ const bitrateOptions = [
   { label: '320 kbps', value: 320 },
 ]
 
+const codecOptions = [
+  { label: 'AAC (推荐)', value: 'aac' },
+  { label: 'ALAC (无损)', value: 'alac' },
+  { label: 'MP3 (libmp3lame)', value: 'libmp3lame' },
+  { label: 'FLAC (无损)', value: 'flac' },
+  { label: 'Vorbis', value: 'libvorbis' },
+  { label: 'Opus', value: 'libopus' },
+  { label: 'PCM (WAV)', value: 'pcm_s16le' },
+]
+
 const sampleRateOptions = [
   { label: '44100 Hz', value: 44100 },
   { label: '48000 Hz', value: 48000 },
@@ -217,7 +227,14 @@ const handleDelete = async (id: string) => {
         </el-form-item>
 
         <el-form-item label="编码器">
-          <el-input v-model="newProfile.codec" placeholder="例如：aac" />
+          <el-select v-model="newProfile.codec" filterable placeholder="选择编码器">
+            <el-option
+              v-for="option in codecOptions"
+              :key="option.value"
+              :label="option.label"
+              :value="option.value"
+            />
+          </el-select>
         </el-form-item>
 
         <el-form-item label="比特率">
@@ -294,12 +311,25 @@ const handleDelete = async (id: string) => {
         </el-form-item>
 
         <el-form-item label="编码器">
-          <el-input v-model="editProfile.codec" placeholder="例如：aac" />
+          <el-select v-model="editProfile.codec" filterable placeholder="选择编码器">
+            <el-option
+              v-for="option in codecOptions"
+              :key="option.value"
+              :label="option.label"
+              :value="option.value"
+            />
+          </el-select>
         </el-form-item>
 
         <el-form-item label="比特率">
-          <el-input-number v-model="editProfile.bitrate" :min="32" :max="320" :step="32" />
-          <span style="margin-left: 10px">kbps</span>
+          <el-select v-model="editProfile.bitrate">
+            <el-option
+              v-for="option in bitrateOptions"
+              :key="option.value"
+              :label="option.label"
+              :value="option.value"
+            />
+          </el-select>
         </el-form-item>
 
         <el-form-item label="采样率">
