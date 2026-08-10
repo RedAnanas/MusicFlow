@@ -14,7 +14,7 @@
     "filename_template": "{title}.{extension}",
     "directory_template": "{album_artist}/{year} - {album}",
     "output_dir": null,
-    "version": 17
+    "version": 21
   },
   "apple-lossless": {
     "id": "apple-lossless",
