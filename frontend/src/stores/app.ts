@@ -242,6 +242,44 @@ export const useAppStore = defineStore('app', () => {
     }
   }
 
+  async function updateWatchFolder(id: string, folder: Partial<WatchFolder>) {
+    try {
+      // 转换字段名为下划线格式
+      const apiData: Record<string, any> = {}
+      if (folder.name) apiData.name = folder.name
+      if (folder.inputDir) apiData.input_dir = folder.inputDir
+      if (folder.profileIds) apiData.profile_ids = folder.profileIds
+      if (folder.autoProcess !== undefined) apiData.auto_process = folder.autoProcess
+      if (folder.recursiveScan !== undefined) apiData.recursive_scan = folder.recursiveScan
+      if (folder.scanIntervalMinutes) apiData.scan_interval_minutes = folder.scanIntervalMinutes
+
+      console.log('Updating watch folder:', id, apiData)
+      const response = await axios.put(`/api/watch-folders/${id}`, apiData)
+
+      // 转换响应字段名到驼峰格式
+      const updatedFolder = {
+        id: response.data.id,
+        name: response.data.name,
+        inputDir: response.data.input_dir,
+        profileIds: response.data.profile_ids,
+        autoProcess: response.data.auto_process,
+        recursiveScan: response.data.recursive_scan,
+        scanIntervalMinutes: response.data.scan_interval_minutes,
+        enabled: response.data.enabled,
+        lastScan: response.data.last_scan,
+      }
+
+      const index = watchFolders.value.findIndex(f => f.id === id)
+      if (index !== -1) {
+        watchFolders.value[index] = updatedFolder
+      }
+      return updatedFolder
+    } catch (error) {
+      console.error('Failed to update watch folder:', error)
+      throw error
+    }
+  }
+
   async function scanWatchFolder(id: string) {
     try {
       const response = await axios.post(`/api/watch-folders/${id}/scan`)

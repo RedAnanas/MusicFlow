@@ -6,8 +6,19 @@ import type { WatchFolder } from '../types'
 
 const store = useAppStore()
 const showCreateDialog = ref(false)
+const showEditDialog = ref(false)
+const selectedFolder = ref<WatchFolder | null>(null)
 
 const newFolder = ref({
+  name: '',
+  inputDir: '',
+  profileIds: [] as string[],
+  autoProcess: true,
+  recursiveScan: true,
+  scanIntervalMinutes: 5,
+})
+
+const editFolder = ref({
   name: '',
   inputDir: '',
   profileIds: [] as string[],
@@ -37,6 +48,30 @@ const handleCreate = async () => {
     }
   } catch (error) {
     ElMessage.error('创建失败')
+  }
+}
+
+const handleEdit = (folder: WatchFolder) => {
+  selectedFolder.value = folder
+  editFolder.value = {
+    name: folder.name,
+    inputDir: folder.inputDir,
+    profileIds: folder.profileIds || [],
+    autoProcess: folder.autoProcess,
+    recursiveScan: folder.recursiveScan,
+    scanIntervalMinutes: folder.scanIntervalMinutes,
+  }
+  showEditDialog.value = true
+}
+
+const handleUpdate = async () => {
+  if (!selectedFolder.value) return
+  try {
+    await store.updateWatchFolder(selectedFolder.value.id, editFolder.value)
+    ElMessage.success('监控目录更新成功')
+    showEditDialog.value = false
+  } catch (error) {
+    ElMessage.error('更新失败')
   }
 }
 
@@ -150,13 +185,16 @@ const handleTriggerConvert = async (folderId: string) => {
           </template>
         </el-table-column>
 
-        <el-table-column label="操作" width="200" fixed="right">
+        <el-table-column label="操作" width="250" fixed="right">
           <template #default="{ row }">
             <el-button type="success" link size="small" @click="handleTriggerConvert(row.id)">
               立即转换
             </el-button>
             <el-button type="primary" link size="small" @click="handleScan(row.id)">
               扫描
+            </el-button>
+            <el-button type="warning" link size="small" @click="handleEdit(row)">
+              编辑
             </el-button>
             <el-button type="danger" link size="small" @click="handleDelete(row.id)">
               删除
@@ -213,6 +251,56 @@ const handleTriggerConvert = async (folderId: string) => {
       <template #footer>
         <el-button @click="showCreateDialog = false">取消</el-button>
         <el-button type="primary" @click="handleCreate">创建</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 编辑对话框 -->
+    <el-dialog
+      v-model="showEditDialog"
+      title="编辑监控目录"
+      width="600px"
+    >
+      <el-form :model="editFolder" label-width="120px">
+        <el-form-item label="名称">
+          <el-input v-model="editFolder.name" placeholder="例如：下载音乐" />
+        </el-form-item>
+
+        <el-form-item label="输入目录">
+          <el-input v-model="editFolder.inputDir" placeholder="/music/source" />
+        </el-form-item>
+
+        <el-form-item label="输出配置">
+          <el-select v-model="editFolder.profileIds" multiple placeholder="选择 Profile">
+            <el-option
+              v-for="profile in store.profiles"
+              :key="profile.id"
+              :label="profile.name"
+              :value="profile.id"
+            />
+          </el-select>
+        </el-form-item>
+
+        <el-form-item label="自动处理">
+          <el-switch v-model="editFolder.autoProcess" />
+        </el-form-item>
+
+        <el-form-item label="递归扫描">
+          <el-switch v-model="editFolder.recursiveScan" />
+        </el-form-item>
+
+        <el-form-item label="扫描间隔">
+          <el-select v-model="editFolder.scanIntervalMinutes">
+            <el-option label="每 5 分钟" :value="5" />
+            <el-option label="每 15 分钟" :value="15" />
+            <el-option label="每 30 分钟" :value="30" />
+            <el-option label="每小时" :value="60" />
+          </el-select>
+        </el-form-item>
+      </el-form>
+
+      <template #footer>
+        <el-button @click="showEditDialog = false">取消</el-button>
+        <el-button type="primary" @click="handleUpdate">更新</el-button>
       </template>
     </el-dialog>
   </div>
