@@ -101,19 +101,31 @@ html, body {
 
 .aside-menu {
   border: none;
+  background-color: #001529;
 }
 
 .aside-menu .el-menu-item {
-  color: #889aa4;
+  color: #889aa4 !important;
+  background-color: transparent !important;
 }
 
 .aside-menu .el-menu-item:hover {
-  background-color: #0d2137;
+  background-color: #0d2137 !important;
+  color: #fff !important;
 }
 
 .aside-menu .el-menu-item.is-active {
-  color: #409eff;
-  background-color: #0d2137;
+  color: #409eff !important;
+  background-color: #0d2137 !important;
+}
+
+.aside-menu .el-menu-item:focus {
+  background-color: transparent !important;
+  color: #889aa4 !important;
+}
+
+.aside-menu .el-menu-item:active {
+  background-color: #0d2137 !important;
 }
 
 .main-container {
