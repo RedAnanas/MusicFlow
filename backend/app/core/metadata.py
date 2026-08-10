@@ -55,33 +55,37 @@ class MetadataService:
                 logger.error(f"File not found: {file_path}")
                 return None
 
-            audio = MutagenFile(file_path, easy=True)
+            # 使用非 easy 模式读取，以便获取所有标签包括封面
+            audio = MutagenFile(file_path)
             if audio is None:
                 logger.warning(f"Cannot read metadata for {file_path}")
                 return None
 
-            metadata = {
-                "title": self._get_tag(audio, "title"),
-                "artist": self._get_tag(audio, "artist"),
-                "album": self._get_tag(audio, "album"),
-                "albumartist": self._get_tag(audio, "albumartist"),
-                "composer": self._get_tag(audio, "composer"),
-                "genre": self._get_tag(audio, "genre"),
-                "date": self._get_tag(audio, "date"),
-                "track": self._get_tag(audio, "tracknumber"),
-                "disc": self._get_tag(audio, "discnumber"),
-                "comment": self._get_tag(audio, "comment"),
-                "copyright": self._get_tag(audio, "copyright"),
-                "grouping": self._get_tag(audio, "grouping"),
-                "lyrics": self._get_tag(audio, "lyrics"),
-            }
+            # 对于 M4A/MP4 文件，需要使用不同的方式读取标签
+            metadata = {}
+            if hasattr(audio, 'tags') and audio.tags:
+                # 读取文本标签
+                for tag_key, mutagen_key in [
+                    ("title", "©nam"),
+                    ("artist", "©ART"),
+                    ("album", "©alb"),
+                    ("albumartist", "aART"),
+                    ("date", "©day"),
+                    ("track", "trkn"),
+                    ("disc", "disk"),
+                    ("copyright", "cprt"),
+                ]:
+                    if mutagen_key in audio.tags:
+                        value = audio.tags[mutagen_key]
+                        if isinstance(value, list) and len(value) > 0:
+                            metadata[tag_key] = str(value[0])
+                        elif isinstance(value, tuple):
+                            # trkn 和 disk 返回元组 (track, total)
+                            metadata[tag_key] = str(value[0])
+                        else:
+                            metadata[tag_key] = str(value)
 
-            # 提取封面
-            cover = self._extract_cover(audio)
-            if cover:
-                metadata["cover"] = cover
-            else:
-                # 对于 M4A/MP4 文件，尝试从 covr 字段读取封面
+                # 读取封面
                 if "covr" in audio.tags:
                     try:
                         pic = audio.tags["covr"][0]
