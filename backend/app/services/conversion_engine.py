@@ -207,9 +207,26 @@ class ConversionEngine:
 
             # 复制元数据
             if profile.metadata_policy.value == "keep":
+                logger.info(f"Reading metadata from source: {task.source_file}")
                 metadata = metadata_service.read_metadata(task.source_file)
                 if metadata:
-                    metadata_service.write_metadata(task.output_file, metadata)
+                    logger.info(f"Metadata read successfully: {list(metadata.keys())}")
+                    # 检查关键元数据字段
+                    for key in ['title', 'artist', 'album', 'track', 'date', 'cover']:
+                        if key in metadata:
+                            value = metadata[key]
+                            if key == 'cover':
+                                logger.info(f"  {key}: {'有封面图片' if value else '无'}")
+                            else:
+                                logger.info(f"  {key}: {value}")
+
+                    logger.info(f"Writing metadata to output: {task.output_file}")
+                    write_success = metadata_service.write_metadata(task.output_file, metadata)
+                    logger.info(f"Metadata write result: {'成功' if write_success else '失败'}")
+                else:
+                    logger.warning(f"No metadata found in source file: {task.source_file}")
+            else:
+                logger.info(f"Metadata policy is '{profile.metadata_policy.value}', skipping metadata copy")
 
             # 任务完成
             task.status = TaskStatus.SUCCESS
