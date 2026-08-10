@@ -80,6 +80,18 @@ class MetadataService:
             cover = self._extract_cover(audio)
             if cover:
                 metadata["cover"] = cover
+            else:
+                # 对于 M4A/MP4 文件，尝试从 covr 字段读取封面
+                if "covr" in audio.tags:
+                    try:
+                        pic = audio.tags["covr"][0]
+                        metadata["cover"] = {
+                            "data": bytes(pic),
+                            "mime": "image/jpeg",
+                            "type": 3
+                        }
+                    except Exception as e:
+                        logger.warning(f"Could not read cover from covr field: {e}")
 
             return metadata
 
@@ -138,7 +150,7 @@ class MetadataService:
                             pic.data = cover["data"]
                             audio.add_picture(pic)
                         elif file_ext in [".m4a", ".mp4"]:
-                            # M4A/MP4 使用 ITUNSMPIC
+                            # M4A/MP4 需要使用 MP4Cover
                             from mutagen.mp4 import MP4Cover
                             pic = MP4Cover(cover["data"], imageformat=MP4Cover.FORMAT_JPEG)
                             audio["covr"] = [pic]
