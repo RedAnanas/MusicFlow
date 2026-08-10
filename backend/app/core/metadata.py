@@ -109,13 +109,21 @@ class MetadataService:
                 logger.error(f"Cannot open file for writing: {file_path}")
                 return False
 
-            # 写入文本元数据
+            # 写入文本元数据（带错误处理）
+            success_count = 0
+            fail_count = 0
             for field in self.METADATA_FIELDS:
                 if field in metadata and metadata[field] is not None:
-                    audio[field] = metadata[field]
+                    try:
+                        audio[field] = metadata[field]
+                        success_count += 1
+                    except Exception as e:
+                        logger.warning(f"Could not write field '{field}' to {file_path}: {e}")
+                        fail_count += 1
+                        continue
 
             audio.save()
-            logger.info(f"Metadata written to {file_path}")
+            logger.info(f"Metadata written to {file_path}: {success_count} fields written, {fail_count} fields skipped")
             return True
 
         except Exception as e:
