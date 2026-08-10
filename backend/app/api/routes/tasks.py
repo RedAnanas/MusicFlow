@@ -96,7 +96,7 @@ def update_task_progress(task_id: str, progress: float, status: str = None):
         task = tasks_cache[task_id]
         task.progress = progress
         if status:
-            task.status = status
+            task.status = TaskStatus(status)
         if status in ['success', 'failed', 'cancelled']:
             task.end_time = datetime.now()
         logger.info(f"Task {task_id} progress: {progress}%, status: {status}")
@@ -129,9 +129,29 @@ async def get_task(task_id: str):
     return tasks_cache[task_id]
 
 
-@router.post("/", response_model=TaskResponse)
-async def create_task(task_create: TaskCreate):
-    """创建转换任务"""
+async def enqueue_conversion_task(
+    task_create: TaskCreate,
+    skip_existing: bool = False,
+) -> Optional[TaskResponse]:
+    """创建并提交转换任务，供 API 与目录监控共同使用。"""
+    output_path = Path(task_create.output_file)
+    if skip_existing:
+        if output_path.exists():
+            logger.info(f"Skipping existing output: {output_path}")
+            return None
+        for existing in tasks_cache.values():
+            same_task = (
+                existing.source_file == task_create.source_file
+                and existing.output_file == task_create.output_file
+                and existing.profile_id == task_create.profile_id
+            )
+            if same_task and existing.status in {
+                TaskStatus.WAITING,
+                TaskStatus.CONVERTING,
+            }:
+                logger.info(f"Skipping duplicate active task: {existing.id}")
+                return None
+
     task_id = str(uuid.uuid4())
 
     task = TaskResponse(
@@ -169,7 +189,7 @@ async def create_task(task_create: TaskCreate):
             )
 
             # 提交到转换引擎，传入进度回调
-            await conversion_engine.submit_task(
+            submitted = await conversion_engine.submit_task(
                 model_task,
                 profile,
                 progress_callback=lambda t: update_task_progress(
@@ -178,6 +198,8 @@ async def create_task(task_create: TaskCreate):
                     t.status.value if t.status else None
                 )
             )
+            if not submitted:
+                raise RuntimeError("Conversion engine rejected the task")
             logger.info(f"Task {task_id} submitted to conversion engine")
 
             # 更新状态为转换中
@@ -185,10 +207,23 @@ async def create_task(task_create: TaskCreate):
             # 保存任务到文件
             save_tasks()
         else:
-            logger.warning(f"Profile {task_create.profile_id} not found")
-    except Exception as e:
-        logger.error(f"Failed to start conversion: {e}")
+            raise ValueError(f"Profile {task_create.profile_id} not found")
+    except Exception as exc:
+        task.status = TaskStatus.FAILED
+        task.error = str(exc)
+        task.end_time = datetime.now()
+        save_tasks()
+        logger.error(f"Failed to start conversion: {exc}")
 
+    return task
+
+
+@router.post("/", response_model=TaskResponse)
+async def create_task(task_create: TaskCreate):
+    """创建转换任务"""
+    task = await enqueue_conversion_task(task_create)
+    if task is None:
+        raise HTTPException(status_code=409, detail="Task already exists")
     return task
 
 

@@ -103,6 +103,7 @@ class WatchFolder(BaseModel):
     auto_process: bool = True
     recursive_scan: bool = True
     scan_interval_minutes: int = 5
+    output_dir: Optional[str] = None
     enabled: bool = True
 
 

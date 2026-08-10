@@ -1,17 +1,16 @@
 import logging
 import uuid
 from pathlib import Path
-from fastapi import APIRouter, HTTPException
+from typing import Any, Dict, List, Optional
+
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
-from typing import List, Optional
-from datetime import datetime
-from app.config import settings
+
+from app.models import WatchFolder
+from app.services.watch_folder_manager import watch_folder_manager
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
-
-# 监控目录存储（内存缓存）
-watch_folders_cache: dict = {}
 
 
 class WatchFolderCreate(BaseModel):
@@ -21,165 +20,158 @@ class WatchFolderCreate(BaseModel):
     auto_process: bool = True
     recursive_scan: bool = True
     scan_interval_minutes: int = 5
+    output_dir: Optional[str] = None
 
 
 class WatchFolderUpdate(BaseModel):
-    """监控目录更新模型 - 所有字段可选"""
-    name: str = None
-    input_dir: str = None
-    profile_ids: List[str] = None
-    auto_process: bool = None
-    recursive_scan: bool = None
-    scan_interval_minutes: int = None
+    name: Optional[str] = None
+    input_dir: Optional[str] = None
+    profile_ids: Optional[List[str]] = None
+    auto_process: Optional[bool] = None
+    recursive_scan: Optional[bool] = None
+    scan_interval_minutes: Optional[int] = None
+    output_dir: Optional[str] = None
 
 
 class WatchFolderResponse(WatchFolderCreate):
     id: str
     enabled: bool = True
+    watching: bool = False
     last_scan: Optional[str] = None
+    last_scan_count: int = 0
+    last_event: Optional[str] = None
+    last_error: Optional[str] = None
+    next_scan_at: Optional[str] = None
+    created_tasks: int = 0
+
+
+def validate_input_directory(directory: str):
+    input_path = Path(directory)
+    if not input_path.exists():
+        raise HTTPException(status_code=400, detail=f"Directory does not exist: {directory}")
+    if not input_path.is_dir():
+        raise HTTPException(status_code=400, detail=f"Path is not a directory: {directory}")
+
+
+def prepare_output_directory(directory: Optional[str]):
+    if not directory:
+        return
+    try:
+        Path(directory).mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot create output directory {directory}: {exc}",
+        ) from exc
+
+
+def build_response(folder: WatchFolder) -> WatchFolderResponse:
+    data = folder.model_dump()
+    data.update(watch_folder_manager.get_status(folder.id))
+    return WatchFolderResponse(**data)
 
 
 @router.get("/", response_model=List[WatchFolderResponse])
 async def get_watch_folders():
-    """获取所有监控目录"""
-    return list(watch_folders_cache.values())
+    return [build_response(folder) for folder in watch_folder_manager.get_all_watch_folders()]
 
 
 @router.get("/{folder_id}", response_model=WatchFolderResponse)
 async def get_watch_folder(folder_id: str):
-    """获取单个监控目录"""
-    if folder_id not in watch_folders_cache:
+    folder = watch_folder_manager.get_watch_folder(folder_id)
+    if not folder:
         raise HTTPException(status_code=404, detail="Watch folder not found")
-
-    return watch_folders_cache[folder_id]
+    return build_response(folder)
 
 
 @router.post("/", response_model=WatchFolderResponse)
 async def create_watch_folder(folder_create: WatchFolderCreate):
-    """创建监控目录"""
-    # 验证目录是否存在
-    input_path = Path(folder_create.input_dir)
-    if not input_path.exists():
-        raise HTTPException(status_code=400, detail=f"Directory does not exist: {folder_create.input_dir}")
+    validate_input_directory(folder_create.input_dir)
+    prepare_output_directory(folder_create.output_dir)
 
-    if not input_path.is_dir():
-        raise HTTPException(status_code=400, detail=f"Path is not a directory: {folder_create.input_dir}")
-
-    folder_id = str(uuid.uuid4())
-
-    folder = WatchFolderResponse(
-        id=folder_id,
-        name=folder_create.name,
-        input_dir=folder_create.input_dir,
-        profile_ids=folder_create.profile_ids,
-        auto_process=folder_create.auto_process,
-        recursive_scan=folder_create.recursive_scan,
-        scan_interval_minutes=folder_create.scan_interval_minutes,
+    folder = WatchFolder(
+        id=str(uuid.uuid4()),
+        **folder_create.model_dump(),
         enabled=True,
-        last_scan=None,
     )
-
-    watch_folders_cache[folder_id] = folder
-    logger.info(f"Created watch folder: {folder.name} ({folder.input_dir})")
-
-    return folder
+    watch_folder_manager.create_watch_folder(folder)
+    return build_response(folder)
 
 
 @router.put("/{folder_id}", response_model=WatchFolderResponse)
-async def update_watch_folder(folder_id: str, folder_update: dict):
-    """更新监控目录 - 支持部分更新"""
-    if folder_id not in watch_folders_cache:
+async def update_watch_folder(folder_id: str, folder_update: WatchFolderUpdate):
+    existing_folder = watch_folder_manager.get_watch_folder(folder_id)
+    if not existing_folder:
         raise HTTPException(status_code=404, detail="Watch folder not found")
 
-    existing_folder = watch_folders_cache[folder_id]
+    update_data = folder_update.model_dump(exclude_unset=True)
+    if update_data.get("input_dir"):
+        validate_input_directory(update_data["input_dir"])
+    if "output_dir" in update_data:
+        prepare_output_directory(update_data["output_dir"])
 
-    # 合并更新数据
-    update_data = {k: v for k, v in folder_update.items() if v is not None}
-
-    # 如果更新了输入目录，验证目录是否存在
-    if 'input_dir' in update_data:
-        input_path = Path(update_data['input_dir'])
-        if not input_path.exists():
-            raise HTTPException(status_code=400, detail=f"Directory does not exist: {update_data['input_dir']}")
-        if not input_path.is_dir():
-            raise HTTPException(status_code=400, detail=f"Path is not a directory: {update_data['input_dir']}")
-
-    # 构建更新后的监控目录
-    folder_dict = existing_folder.dict()
-    folder_dict.update(update_data)
-
-    updated_folder = WatchFolderResponse(**folder_dict)
-
-    watch_folders_cache[folder_id] = updated_folder
-    logger.info(f"Updated watch folder: {folder_id}")
-
-    return updated_folder
+    folder_data = existing_folder.model_dump()
+    folder_data.update(update_data)
+    updated_folder = WatchFolder(**folder_data)
+    watch_folder_manager.update_watch_folder(folder_id, updated_folder)
+    return build_response(updated_folder)
 
 
 @router.delete("/{folder_id}")
 async def delete_watch_folder(folder_id: str):
-    """删除监控目录"""
-    if folder_id not in watch_folders_cache:
+    if not watch_folder_manager.delete_watch_folder(folder_id):
         raise HTTPException(status_code=404, detail="Watch folder not found")
-
-    folder = watch_folders_cache.pop(folder_id)
-    logger.info(f"Deleted watch folder: {folder.name}")
-
     return {"status": "success", "message": f"Watch folder {folder_id} deleted"}
 
 
 @router.post("/{folder_id}/scan")
 async def scan_watch_folder(folder_id: str):
-    """立即扫描监控目录"""
-    if folder_id not in watch_folders_cache:
+    if not watch_folder_manager.get_watch_folder(folder_id):
         raise HTTPException(status_code=404, detail="Watch folder not found")
-
-    folder = watch_folders_cache[folder_id]
-
-    # 扫描目录
-    input_path = Path(folder.input_dir)
-    if not input_path.exists():
-        raise HTTPException(status_code=400, detail="Directory does not exist")
-
-    # 查找音频文件
-    audio_files = []
-    pattern = "**/*" if folder.recursive_scan else "*"
-
-    for file_path in input_path.glob(pattern):
-        if not file_path.is_file():
-            continue
-
-        ext = file_path.suffix.lower()[1:]
-        if ext in settings.SUPPORTED_FORMATS:
-            audio_files.append(str(file_path))
-
-    # 更新最后扫描时间
-    folder.last_scan = datetime.now().isoformat()
-
-    logger.info(f"Scanned {folder.name}: found {len(audio_files)} audio files")
-
+    try:
+        files = watch_folder_manager.scan_watch_folder(folder_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    status = watch_folder_manager.get_status(folder_id)
     return {
         "status": "success",
-        "message": f"Found {len(audio_files)} audio files",
-        "files": audio_files,
-        "last_scan": folder.last_scan,
+        "message": f"Found {len(files)} audio files",
+        "files": files,
+        "last_scan": status.get("last_scan"),
     }
 
 
-@router.post("/{folder_id}/toggle")
+@router.post("/{folder_id}/process")
+async def process_watch_folder(folder_id: str):
+    if not watch_folder_manager.get_watch_folder(folder_id):
+        raise HTTPException(status_code=404, detail="Watch folder not found")
+    try:
+        result = await watch_folder_manager.process_watch_folder(folder_id, "manual")
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"status": "success", **result}
+
+
+@router.get("/{folder_id}/status")
+async def get_watch_folder_status(folder_id: str):
+    if not watch_folder_manager.get_watch_folder(folder_id):
+        raise HTTPException(status_code=404, detail="Watch folder not found")
+    return watch_folder_manager.get_status(folder_id)
+
+
+@router.get("/{folder_id}/events", response_model=List[Dict[str, Any]])
+async def get_watch_folder_events(
+    folder_id: str,
+    limit: int = Query(50, ge=1, le=100),
+):
+    if not watch_folder_manager.get_watch_folder(folder_id):
+        raise HTTPException(status_code=404, detail="Watch folder not found")
+    return watch_folder_manager.get_events(folder_id, limit)
+
+
+@router.post("/{folder_id}/toggle", response_model=WatchFolderResponse)
 async def toggle_watch_folder(folder_id: str):
-    """启用/禁用监控目录"""
-    if folder_id not in watch_folders_cache:
+    folder = watch_folder_manager.toggle_watch_folder(folder_id)
+    if not folder:
         raise HTTPException(status_code=404, detail="Watch folder not found")
-
-    folder = watch_folders_cache[folder_id]
-    folder.enabled = not folder.enabled
-
-    logger.info(f"Toggle watch folder {folder_id}: {'enabled' if folder.enabled else 'disabled'}")
-
-    return {
-        "status": "success",
-        "message": f"Watch folder {'enabled' if folder.enabled else 'disabled'}",
-        "enabled": folder.enabled,
-    }
-
+    return build_response(folder)

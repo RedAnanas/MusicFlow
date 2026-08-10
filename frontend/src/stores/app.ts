@@ -1,7 +1,15 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import axios from 'axios'
-import type { FileItem, Task, Profile, WatchFolder, Settings, LogEntry } from '../types'
+import type {
+  FileItem,
+  Task,
+  Profile,
+  WatchFolder,
+  WatchFolderEvent,
+  Settings,
+  LogEntry,
+} from '../types'
 
 interface WatchFolderApiResponse {
   id: string
@@ -11,7 +19,15 @@ interface WatchFolderApiResponse {
   auto_process: boolean
   recursive_scan: boolean
   scan_interval_minutes: number
+  output_dir: string | null
   enabled: boolean
+  watching: boolean
+  last_scan: string | null
+  last_scan_count: number
+  last_event: string | null
+  last_error: string | null
+  next_scan_at: string | null
+  created_tasks: number
 }
 
 function mapWatchFolder(data: WatchFolderApiResponse): WatchFolder {
@@ -23,7 +39,15 @@ function mapWatchFolder(data: WatchFolderApiResponse): WatchFolder {
     autoProcess: data.auto_process,
     recursiveScan: data.recursive_scan,
     scanIntervalMinutes: data.scan_interval_minutes,
+    outputDir: data.output_dir || undefined,
     enabled: data.enabled,
+    watching: data.watching,
+    lastScan: data.last_scan || undefined,
+    lastScanCount: data.last_scan_count,
+    lastEvent: data.last_event || undefined,
+    lastError: data.last_error || undefined,
+    nextScanAt: data.next_scan_at || undefined,
+    createdTasks: data.created_tasks,
   }
 }
 
@@ -208,15 +232,15 @@ export const useAppStore = defineStore('app', () => {
   }
 
   // 监控目录操作
-  async function fetchWatchFolders() {
-    loading.value = true
+  async function fetchWatchFolders(silent: boolean = false) {
+    if (!silent) loading.value = true
     try {
       const response = await axios.get<WatchFolderApiResponse[]>('/api/watch-folders/')
       watchFolders.value = response.data.map(mapWatchFolder)
     } catch (error) {
       console.error('Failed to fetch watch folders:', error)
     } finally {
-      loading.value = false
+      if (!silent) loading.value = false
     }
   }
 
@@ -230,6 +254,7 @@ export const useAppStore = defineStore('app', () => {
         auto_process: folder.autoProcess ?? true,
         recursive_scan: folder.recursiveScan ?? true,
         scan_interval_minutes: folder.scanIntervalMinutes ?? 5,
+        output_dir: folder.outputDir || null,
       }
 
       console.log('Creating watch folder:', apiData)
@@ -272,6 +297,7 @@ export const useAppStore = defineStore('app', () => {
       if (folder.autoProcess !== undefined) apiData.auto_process = folder.autoProcess
       if (folder.recursiveScan !== undefined) apiData.recursive_scan = folder.recursiveScan
       if (folder.scanIntervalMinutes) apiData.scan_interval_minutes = folder.scanIntervalMinutes
+      if (folder.outputDir !== undefined) apiData.output_dir = folder.outputDir || null
 
       console.log('Updating watch folder:', id, apiData)
       console.log('API URL:', `/api/watch-folders/${id}`)
@@ -304,6 +330,25 @@ export const useAppStore = defineStore('app', () => {
       console.error('Failed to scan watch folder:', error)
       throw error
     }
+  }
+
+  async function processWatchFolder(id: string) {
+    const response = await axios.post(`/api/watch-folders/${id}/process`)
+    await fetchWatchFolders(true)
+    return response.data
+  }
+
+  async function fetchWatchFolderEvents(id: string): Promise<WatchFolderEvent[]> {
+    const response = await axios.get<WatchFolderEvent[]>(`/api/watch-folders/${id}/events`)
+    return response.data
+  }
+
+  async function toggleWatchFolder(id: string) {
+    const response = await axios.post<WatchFolderApiResponse>(`/api/watch-folders/${id}/toggle`)
+    const updatedFolder = mapWatchFolder(response.data)
+    const index = watchFolders.value.findIndex(folder => folder.id === id)
+    if (index !== -1) watchFolders.value[index] = updatedFolder
+    return updatedFolder
   }
 
   // 设置操作
@@ -362,6 +407,9 @@ export const useAppStore = defineStore('app', () => {
     updateWatchFolder,
     deleteWatchFolder,
     scanWatchFolder,
+    processWatchFolder,
+    fetchWatchFolderEvents,
+    toggleWatchFolder,
     fetchSettings,
     updateSettings,
     fetchLogs,

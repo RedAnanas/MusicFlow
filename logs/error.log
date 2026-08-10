@@ -8,3 +8,11 @@
 
 2026-08-10 10:48:19,454 - app.core.metadata - ERROR - Error writing metadata to D:/Music/output/01 - Layers.m4a: "'track' is not a valid key"
 
+2026-08-10 16:57:49,531 - app.core.metadata - ERROR - Error writing metadata to D:/Music/output/01 - Layers.m4a: "'track' is not a valid key"
+
+2026-08-10 17:19:47,619 - app.core.metadata - ERROR - Error writing metadata to D:/Music/output/01 - Layers.m4a: "'track' is not a valid key"
+
+2026-08-10 17:30:44,428 - app.core.metadata - ERROR - Error writing metadata to D:/Music/output/03 - SEVEN.m4a: "'track' is not a valid key"
+
+2026-08-10 17:44:30,917 - app.core.metadata - ERROR - Error writing metadata to D:/Music/output/05 - Safari.m4a: "'track' is not a valid key"
+

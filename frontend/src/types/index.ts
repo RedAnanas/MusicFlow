@@ -86,7 +86,21 @@ export interface WatchFolder {
   autoProcess: boolean
   recursiveScan: boolean
   scanIntervalMinutes: number
+  outputDir?: string
   enabled: boolean
+  watching: boolean
+  lastScan?: string
+  lastScanCount: number
+  lastEvent?: string
+  lastError?: string
+  nextScanAt?: string
+  createdTasks: number
+}
+
+export interface WatchFolderEvent {
+  timestamp: string
+  type: string
+  message: string
 }
 
 export interface Settings {

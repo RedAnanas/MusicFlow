@@ -1,0 +1,68 @@
+{
+  "ba45250d-12b3-42fa-8339-1f50b09d25fa": {
+    "id": "ba45250d-12b3-42fa-8339-1f50b09d25fa",
+    "source_file": "D:/Music/source/蔡依林 - Pleasure/01 - Layers.flac",
+    "output_file": "D:/Music/output/01 - Layers.m4a",
+    "profile_id": "apple-music-aac-256",
+    "status": "success",
+    "progress": 100.0,
+    "start_time": "2026-08-10T17:19:46.681653",
+    "end_time": "2026-08-10T17:19:47.620262",
+    "error": null
+  },
+  "8dad6583-92c3-4e46-b3e7-af3c4b4b52b7": {
+    "id": "8dad6583-92c3-4e46-b3e7-af3c4b4b52b7",
+    "source_file": "D:\\Music\\source\\蔡依林 - Pleasure\\03 - SEVEN.flac",
+    "output_file": "D:/Music/output/03 - SEVEN.m4a",
+    "profile_id": "apple-music-aac-256",
+    "status": "success",
+    "progress": 100.0,
+    "start_time": "2026-08-10T17:30:43.554431",
+    "end_time": "2026-08-10T17:30:44.429864",
+    "error": null
+  },
+  "43e1260d-6316-4803-9fd2-c235c79c2ef3": {
+    "id": "43e1260d-6316-4803-9fd2-c235c79c2ef3",
+    "source_file": "D:\\Music\\source\\蔡依林 - Pleasure\\05 - Safari.flac",
+    "output_file": "D:/Music/output/05 - Safari.m4a",
+    "profile_id": "5069c717-4619-4712-9e65-fcc6ac1c521f",
+    "status": "success",
+    "progress": 100.0,
+    "start_time": "2026-08-10T17:44:24.913792",
+    "end_time": "2026-08-10T17:44:30.919214",
+    "error": null
+  },
+  "3f51d7a3-d875-4858-b383-ea27dfbbe97a": {
+    "id": "3f51d7a3-d875-4858-b383-ea27dfbbe97a",
+    "source_file": "D:\\Music\\source\\test\\1K - 就忘了吧 (DJAh版).flac",
+    "output_file": "D:\\Music\\source\\test\\1K - 就忘了吧 (DJAh版).m4a",
+    "profile_id": "apple-music-aac-256",
+    "status": "success",
+    "progress": 100.0,
+    "start_time": "2026-08-10T19:18:41.634450",
+    "end_time": "2026-08-10T19:18:42.672827",
+    "error": null
+  },
+  "d61fa59e-5d9f-4a53-8e19-3881d5a564ef": {
+    "id": "d61fa59e-5d9f-4a53-8e19-3881d5a564ef",
+    "source_file": "D:\\Music\\source\\test\\1K - 就忘了吧 (DJAh版).flac",
+    "output_file": "D:\\Music\\source\\test\\1K - 就忘了吧 (DJAh版).m4a",
+    "profile_id": "apple-music-aac-256",
+    "status": "success",
+    "progress": 100.0,
+    "start_time": "2026-08-10T19:32:27.711186",
+    "end_time": "2026-08-10T19:32:28.655520",
+    "error": null
+  },
+  "30893f98-d275-4619-9ac7-c67b01a391a3": {
+    "id": "30893f98-d275-4619-9ac7-c67b01a391a3",
+    "source_file": "D:\\Music\\source\\test\\2PM、尹恩惠 - Tik Tok.flac",
+    "output_file": "D:\\Music\\source\\test\\2PM、尹恩惠 - Tik Tok.m4a",
+    "profile_id": "apple-music-aac-256",
+    "status": "success",
+    "progress": 100.0,
+    "start_time": "2026-08-10T19:32:27.717704",
+    "end_time": "2026-08-10T19:32:28.752279",
+    "error": null
+  }
+}

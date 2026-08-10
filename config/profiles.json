@@ -4,8 +4,8 @@
     "name": "Apple Music AAC 256",
     "enabled": true,
     "output_format": "m4a",
-    "codec": "aac",
-    "bitrate": 320,
+    "codec": "alac",
+    "bitrate": 64,
     "sample_rate": 44100,
     "channels": null,
     "bit_depth": null,
@@ -14,7 +14,7 @@
     "filename_template": "{title}.{extension}",
     "directory_template": "{album_artist}/{year} - {album}",
     "output_dir": null,
-    "version": 15
+    "version": 17
   },
   "apple-lossless": {
     "id": "apple-lossless",

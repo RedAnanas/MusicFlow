@@ -70,12 +70,19 @@ async def startup_event():
     import asyncio
     asyncio.create_task(conversion_engine.process_queue())
 
+    # 启动监控目录的实时监听和周期扫描
+    from app.services.watch_folder_manager import watch_folder_manager
+    await watch_folder_manager.start()
+
     logger_service.info("Application started", "main")
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
     """应用关闭事件"""
+    from app.services.watch_folder_manager import watch_folder_manager
+    await watch_folder_manager.stop()
+
     from app.services.conversion_engine import conversion_engine
     await conversion_engine.shutdown()
     logger_service.info("Application shutting down", "main")

@@ -42,6 +42,7 @@ temp/
 tmp/
 *.tmp
 *.temp
+config/watch_folders.json
 
 # 系统文件
 .DS_Store

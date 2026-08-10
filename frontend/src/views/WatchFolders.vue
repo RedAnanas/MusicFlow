@@ -1,13 +1,18 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, onUnmounted, ref } from 'vue'
 import { useAppStore } from '../stores/app'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import type { WatchFolder } from '../types'
+import type { WatchFolder, WatchFolderEvent } from '../types'
 
 const store = useAppStore()
 const showCreateDialog = ref(false)
 const showEditDialog = ref(false)
 const selectedFolder = ref<WatchFolder | null>(null)
+const showEventsDialog = ref(false)
+const selectedFolderName = ref('')
+const watchEvents = ref<WatchFolderEvent[]>([])
+const eventsLoading = ref(false)
+let refreshTimer: ReturnType<typeof setInterval> | undefined
 
 const newFolder = ref({
   name: '',
@@ -16,6 +21,7 @@ const newFolder = ref({
   autoProcess: true,
   recursiveScan: true,
   scanIntervalMinutes: 5,
+  outputDir: 'D:/Music/output',
 })
 
 const editFolder = ref({
@@ -25,14 +31,26 @@ const editFolder = ref({
   autoProcess: true,
   recursiveScan: true,
   scanIntervalMinutes: 5,
+  outputDir: '',
 })
 
-onMounted(() => {
-  store.fetchWatchFolders()
-  store.fetchProfiles()
+onMounted(async () => {
+  await Promise.all([store.fetchWatchFolders(), store.fetchProfiles()])
+  refreshTimer = setInterval(() => store.fetchWatchFolders(true), 5000)
 })
+
+onUnmounted(() => {
+  if (refreshTimer) clearInterval(refreshTimer)
+})
+
+const formatTime = (value?: string) => {
+  if (!value) return '-'
+  return new Date(value).toLocaleString('zh-CN', { hour12: false })
+}
 
 const handleCreate = async () => {
+  console.log('>>> handleCreate called! <<<')
+  console.log('>>> form data:', JSON.stringify(newFolder.value))
   try {
     await store.createWatchFolder(newFolder.value)
     ElMessage.success('监控目录创建成功')
@@ -45,8 +63,10 @@ const handleCreate = async () => {
       autoProcess: true,
       recursiveScan: true,
       scanIntervalMinutes: 5,
+      outputDir: 'D:/Music/output',
     }
   } catch (error) {
+    console.error('>>> handleCreate error:', error)
     ElMessage.error('创建失败')
   }
 }
@@ -60,17 +80,21 @@ const handleEdit = (folder: WatchFolder) => {
     autoProcess: folder.autoProcess,
     recursiveScan: folder.recursiveScan,
     scanIntervalMinutes: folder.scanIntervalMinutes,
+    outputDir: folder.outputDir || '',
   }
   showEditDialog.value = true
 }
 
 const handleUpdate = async () => {
+  console.log('>>> handleUpdate called! <<<')
+  console.log('>>> form data:', JSON.stringify(editFolder.value))
   if (!selectedFolder.value) return
   try {
     await store.updateWatchFolder(selectedFolder.value.id, editFolder.value)
     ElMessage.success('监控目录更新成功')
     showEditDialog.value = false
   } catch (error) {
+    console.error('>>> handleUpdate error:', error)
     ElMessage.error('更新失败')
   }
 }
@@ -100,42 +124,36 @@ const handleDelete = async (id: string) => {
 
 const handleTriggerConvert = async (folderId: string) => {
   try {
-    // 先扫描目录
-    const scanResult = await store.scanWatchFolder(folderId)
-
-    if (!scanResult.files || scanResult.files.length === 0) {
+    const result = await store.processWatchFolder(folderId)
+    if (!result.files?.length) {
       ElMessage.warning('目录中没有找到音频文件')
       return
     }
-
-    // 为每个文件创建转换任务
-    let taskCount = 0
-    for (const filePath of scanResult.files) {
-      // 获取文件名
-      const fileName = filePath.split(/[/\\]/).pop() || ''
-      const fileExt = fileName.split('.').pop() || ''
-      const outputFile = filePath.replace('.' + fileExt, '.m4a')
-
-      // 创建转换任务
-      try {
-        await fetch('http://localhost:8082/api/tasks/', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            source_file: filePath,
-            output_file: outputFile,
-            profile_id: store.profiles[0]?.id || 'apple-music-aac-256'
-          })
-        })
-        taskCount++
-      } catch (err) {
-        console.error('Failed to create task:', err)
-      }
-    }
-
-    ElMessage.success(`已创建 ${taskCount} 个转换任务`)
+    ElMessage.success(`扫描完成，已创建 ${result.created_tasks} 个转换任务`)
   } catch (error) {
     ElMessage.error('触发转换失败')
+  }
+}
+
+const handleToggle = async (folder: WatchFolder) => {
+  try {
+    const updated = await store.toggleWatchFolder(folder.id)
+    ElMessage.success(updated.enabled ? '实时监控已启用' : '实时监控已停用')
+  } catch (error) {
+    ElMessage.error('切换监控状态失败')
+  }
+}
+
+const handleEvents = async (folder: WatchFolder) => {
+  selectedFolderName.value = folder.name
+  showEventsDialog.value = true
+  eventsLoading.value = true
+  try {
+    watchEvents.value = await store.fetchWatchFolderEvents(folder.id)
+  } catch (error) {
+    ElMessage.error('获取监控事件失败')
+  } finally {
+    eventsLoading.value = false
   }
 }
 </script>
@@ -156,6 +174,12 @@ const handleTriggerConvert = async (folderId: string) => {
         <el-table-column prop="name" label="名称" min-width="150" />
 
         <el-table-column prop="inputDir" label="输入目录" min-width="200" />
+
+        <el-table-column prop="outputDir" label="输出目录" min-width="200">
+          <template #default="{ row }">
+            {{ row.outputDir || '使用配置或全局默认目录' }}
+          </template>
+        </el-table-column>
 
         <el-table-column label="输出配置" width="150">
           <template #default="{ row }">
@@ -185,7 +209,19 @@ const handleTriggerConvert = async (folderId: string) => {
           </template>
         </el-table-column>
 
-        <el-table-column label="操作" width="250" fixed="right">
+        <el-table-column label="实时状态" min-width="180">
+          <template #default="{ row }">
+            <div class="watch-status">
+              <el-tag :type="row.watching ? 'success' : 'danger'" size="small">
+                {{ row.watching ? '监听中' : '未监听' }}
+              </el-tag>
+              <span>下次：{{ formatTime(row.nextScanAt) }}</span>
+              <span v-if="row.lastError" class="status-error">{{ row.lastError }}</span>
+            </div>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="操作" width="330" fixed="right">
           <template #default="{ row }">
             <el-button type="success" link size="small" @click="handleTriggerConvert(row.id)">
               立即转换
@@ -195,6 +231,12 @@ const handleTriggerConvert = async (folderId: string) => {
             </el-button>
             <el-button type="warning" link size="small" @click="handleEdit(row)">
               编辑
+            </el-button>
+            <el-button type="info" link size="small" @click="handleEvents(row)">
+              事件
+            </el-button>
+            <el-button :type="row.enabled ? 'info' : 'success'" link size="small" @click="handleToggle(row)">
+              {{ row.enabled ? '停用' : '启用' }}
             </el-button>
             <el-button type="danger" link size="small" @click="handleDelete(row.id)">
               删除
@@ -217,6 +259,10 @@ const handleTriggerConvert = async (folderId: string) => {
 
         <el-form-item label="输入目录">
           <el-input v-model="newFolder.inputDir" placeholder="/music/source" />
+        </el-form-item>
+
+        <el-form-item label="输出目录">
+          <el-input v-model="newFolder.outputDir" placeholder="/music/output" />
         </el-form-item>
 
         <el-form-item label="输出配置">
@@ -269,6 +315,10 @@ const handleTriggerConvert = async (folderId: string) => {
           <el-input v-model="editFolder.inputDir" placeholder="/music/source" />
         </el-form-item>
 
+        <el-form-item label="输出目录">
+          <el-input v-model="editFolder.outputDir" placeholder="留空则使用配置或全局默认目录" />
+        </el-form-item>
+
         <el-form-item label="输出配置">
           <el-select v-model="editFolder.profileIds" multiple placeholder="选择 Profile">
             <el-option
@@ -303,6 +353,20 @@ const handleTriggerConvert = async (folderId: string) => {
         <el-button type="primary" @click="handleUpdate">更新</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog
+      v-model="showEventsDialog"
+      :title="`${selectedFolderName} - 监控事件`"
+      width="760px"
+    >
+      <el-table v-loading="eventsLoading" :data="watchEvents" max-height="440">
+        <el-table-column label="时间" width="180">
+          <template #default="{ row }">{{ formatTime(row.timestamp) }}</template>
+        </el-table-column>
+        <el-table-column prop="type" label="类型" width="110" />
+        <el-table-column prop="message" label="详情" min-width="380" />
+      </el-table>
+    </el-dialog>
   </div>
 </template>
 
@@ -321,5 +385,18 @@ const handleTriggerConvert = async (folderId: string) => {
 h1 {
   margin: 0;
   color: #303133;
+}
+
+.watch-status {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  font-size: 12px;
+  color: #606266;
+}
+
+.status-error {
+  color: #f56c6c;
 }
 </style>
