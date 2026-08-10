@@ -115,3 +115,7 @@
 2026-08-10 11:41:09,570 - app.services.config_manager - INFO - Saved config: profiles.json
 2026-08-10 11:41:09,571 - app.services.profile_manager - INFO - Updated profile: Apple Music AAC 256 to version 14
 2026-08-10 11:41:18,516 - app.services.config_manager - INFO - Saved config: profiles.json
+2026-08-10 11:41:18,516 - app.services.profile_manager - INFO - Updated profile: Apple Music AAC 256 to version 15
+2026-08-10 15:53:00,556 - app - INFO - [main] Starting MusicFlow API
+2026-08-10 15:53:00,719 - app.services.conversion_engine - INFO - Conversion engine initialized (max concurrent: 2)
+2026-08-10 15:53:00,720 - app - INFO - [main] Application started
