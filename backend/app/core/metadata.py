@@ -1,10 +1,12 @@
 import logging
+import base64
 from pathlib import Path
 from typing import Dict, Optional, List
 from mutagen import File as MutagenFile
 from mutagen.mp3 import MP3
-from mutagen.flac import FLAC
-from mutagen.mp4 import MP4
+from mutagen.flac import FLAC, Picture
+from mutagen.id3 import APIC
+from mutagen.mp4 import MP4, MP4Cover
 from mutagen.oggvorbis import OggVorbis
 from mutagen.oggopus import OggOpus
 
@@ -113,29 +115,9 @@ class MetadataService:
                     except (ValueError, TypeError) as e:
                         pass
 
-                # 读取封面 - M4A/MP4 格式
-                try:
-                    if "covr" in audio.tags:
-                        pic = audio.tags["covr"][0]
-                        metadata["cover"] = {
-                            "data": bytes(pic),
-                            "mime": "image/jpeg",
-                            "type": 3
-                        }
-                except (ValueError, TypeError, KeyError) as e:
-                    pass
-
-            # 读取封面 - FLAC/MP3/OGG 格式
-            try:
-                if hasattr(audio, 'pictures') and audio.pictures:
-                    pic = audio.pictures[0]
-                    metadata["cover"] = {
-                        "data": pic.data,
-                        "mime": pic.mime,
-                        "type": pic.type
-                    }
-            except Exception as e:
-                pass
+            cover = self._extract_cover(audio)
+            if cover:
+                metadata["cover"] = cover
 
             return metadata
 
@@ -170,47 +152,36 @@ class MetadataService:
             # 写入文本元数据（带错误处理）
             success_count = 0
             fail_count = 0
+            field_mapping = {
+                "track": "tracknumber",
+                "disc": "discnumber",
+                "year": "date",
+            }
             for field in self.METADATA_FIELDS:
                 if field in metadata and metadata[field] is not None:
                     try:
-                        audio[field] = metadata[field]
+                        target_field = field_mapping.get(field, field)
+                        audio[target_field] = metadata[field]
                         success_count += 1
                     except Exception as e:
                         logger.warning(f"Could not write field '{field}' to {file_path}: {e}")
                         fail_count += 1
                         continue
 
-            # 写入封面图片（带错误处理）
+            audio.save()
+
+            # EasyMutagen 不能写入 MP4 的 covr 等原生封面标签，需重新以原生模式打开
             if "cover" in metadata and metadata["cover"]:
                 cover = metadata["cover"]
                 if "data" in cover and "mime" in cover:
                     try:
-                        # 根据文件类型选择不同的封面写入方式
-                        file_ext = path.suffix.lower()
-                        if file_ext in [".mp3", ".flac", ".ogg"]:
-                            # MP3/FLAC/OGG 使用 add_picture
-                            from mutagen.flac import Picture
-                            pic = Picture()
-                            pic.type = 3  # Front cover
-                            pic.mime = cover["mime"]
-                            pic.data = cover["data"]
-                            audio.add_picture(pic)
-                        elif file_ext in [".m4a", ".mp4"]:
-                            # M4A/MP4 需要使用 MP4Cover
-                            from mutagen.mp4 import MP4Cover
-                            pic = MP4Cover(cover["data"], imageformat=MP4Cover.FORMAT_JPEG)
-                            audio["covr"] = [pic]
-                        else:
-                            # 其他格式尝试使用通用方式
-                            audio["APIC:Front"] = cover["data"]
-
+                        self._write_cover(file_path, cover)
                         success_count += 1
                         logger.info(f"Cover image added to {file_path}")
                     except Exception as e:
                         logger.warning(f"Could not write cover to {file_path}: {e}")
                         fail_count += 1
 
-            audio.save()
             logger.info(f"Metadata written to {file_path}: {success_count} fields written, {fail_count} fields skipped")
             return True
 
@@ -234,7 +205,34 @@ class MetadataService:
         """提取封面图片"""
         try:
             if hasattr(audio, 'pictures') and audio.pictures:
-                for pic in audio.pictures:
+                pic = audio.pictures[0]
+                return {
+                    "data": pic.data,
+                    "mime": pic.mime,
+                    "type": pic.type,
+                    "desc": pic.desc,
+                }
+
+            if isinstance(audio, MP4) and audio.tags and "covr" in audio.tags:
+                pic = audio.tags["covr"][0]
+                mime = "image/png" if pic.imageformat == MP4Cover.FORMAT_PNG else "image/jpeg"
+                return {"data": bytes(pic), "mime": mime, "type": 3, "desc": ""}
+
+            if isinstance(audio, MP3) and audio.tags:
+                pictures = audio.tags.getall("APIC")
+                if pictures:
+                    pic = pictures[0]
+                    return {
+                        "data": pic.data,
+                        "mime": pic.mime,
+                        "type": pic.type,
+                        "desc": pic.desc,
+                    }
+
+            if isinstance(audio, (OggVorbis, OggOpus)) and audio.tags:
+                values = audio.tags.get("metadata_block_picture", [])
+                if values:
+                    pic = Picture(base64.b64decode(values[0]))
                     return {
                         "data": pic.data,
                         "mime": pic.mime,
@@ -244,6 +242,49 @@ class MetadataService:
         except Exception as e:
             logger.warning(f"Error extracting cover: {e}")
         return None
+
+    def _write_cover(self, file_path: str, cover: Dict) -> None:
+        """使用各格式的原生标签接口写入封面"""
+        audio = MutagenFile(file_path)
+        if audio is None:
+            raise ValueError(f"Cannot open file for cover writing: {file_path}")
+
+        mime = cover["mime"]
+        data = cover["data"]
+        picture_type = cover.get("type", 3)
+        description = cover.get("desc", "")
+
+        if isinstance(audio, MP4):
+            if audio.tags is None:
+                audio.add_tags()
+            image_format = MP4Cover.FORMAT_PNG if mime == "image/png" else MP4Cover.FORMAT_JPEG
+            audio.tags["covr"] = [MP4Cover(data, imageformat=image_format)]
+        elif isinstance(audio, FLAC):
+            audio.clear_pictures()
+            picture = Picture()
+            picture.type = picture_type
+            picture.mime = mime
+            picture.desc = description
+            picture.data = data
+            audio.add_picture(picture)
+        elif isinstance(audio, MP3):
+            if audio.tags is None:
+                audio.add_tags()
+            audio.tags.delall("APIC")
+            audio.tags.add(APIC(mime=mime, type=picture_type, desc=description, data=data))
+        elif isinstance(audio, (OggVorbis, OggOpus)):
+            if audio.tags is None:
+                audio.add_tags()
+            picture = Picture()
+            picture.type = picture_type
+            picture.mime = mime
+            picture.desc = description
+            picture.data = data
+            audio.tags["metadata_block_picture"] = [base64.b64encode(picture.write()).decode("ascii")]
+        else:
+            raise ValueError(f"Unsupported cover format: {Path(file_path).suffix}")
+
+        audio.save()
 
 
 metadata_service = MetadataService()
