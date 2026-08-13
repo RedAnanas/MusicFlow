@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref, computed } from 'vue'
 import { useAppStore } from '../stores/app'
-import type { Task } from '../types'
 
 const store = useAppStore()
 const activeTab = ref('all')

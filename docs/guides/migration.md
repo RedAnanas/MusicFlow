@@ -97,13 +97,13 @@ ls -la MusicFlow/
 ### 步骤 2：推送到远程
 
 ```bash
-cd D:/Documents/AI/MusicFlow
+cd /path/to/MusicFlow
 
 # 添加远程仓库
 git remote add origin https://github.com/username/MusicFlow.git
 
 # 推送
-git push -u origin master
+git push -u origin main
 ```
 
 ### 步骤 3：在 Mac 上克隆
@@ -380,7 +380,7 @@ chmod -R 755 MusicFlow/logs
 
 3. **文档**
    - README.md - 项目介绍
-   - CLAUDE.md - AI 编程规范
+   - AGENTS.md - 工程与协作规范
    - AGENTS.md - Agent 工作规范
    - docs/ARCHITECTURE.md - 系统架构
    - docs/CHANGELOG.md - 变更记录
@@ -529,10 +529,10 @@ curl http://localhost:8082/api/files/
 
 ## 相关文档
 
-- [README.md](./README.md) - 项目介绍
-- [CLAUDE.md](./CLAUDE.md) - AI 编程规范
-- [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) - 系统架构
-- [docs/CHANGELOG.md](./docs/CHANGELOG.md) - 变更记录
+- [README.md](../../README.md) - 项目介绍
+- [AGENTS.md](../../AGENTS.md) - 工程与协作规范
+- [ARCHITECTURE.md](../ARCHITECTURE.md) - 系统架构
+- [CHANGELOG.md](../CHANGELOG.md) - 变更记录
 
 ---
 

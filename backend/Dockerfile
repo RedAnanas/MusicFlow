@@ -21,7 +21,7 @@ COPY . .
 RUN mkdir -p /config /logs /temp /music/source /music/output /music/archive
 
 # 暴露端口
-EXPOSE 8080
+EXPOSE 8082
 
 # 启动应用
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8082"]

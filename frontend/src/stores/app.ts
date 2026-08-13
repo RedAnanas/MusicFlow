@@ -117,6 +117,7 @@ export const useAppStore = defineStore('app', () => {
         filenameTemplate: p.filename_template,
         directoryTemplate: p.directory_template,
         outputDir: p.output_dir,
+        version: p.version,
       }))
     } catch (error) {
       console.error('Failed to fetch profiles:', error)
@@ -160,6 +161,7 @@ export const useAppStore = defineStore('app', () => {
         filenameTemplate: response.data.filename_template,
         directoryTemplate: response.data.directory_template,
         outputDir: response.data.output_dir,
+        version: response.data.version,
       }
 
       profiles.value.push(newProfile)
@@ -204,6 +206,7 @@ export const useAppStore = defineStore('app', () => {
         filenameTemplate: response.data.filename_template,
         directoryTemplate: response.data.directory_template,
         outputDir: response.data.output_dir,
+        version: response.data.version,
       }
 
       const index = profiles.value.findIndex(p => p.id === id)

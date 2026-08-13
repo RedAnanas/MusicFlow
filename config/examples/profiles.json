@@ -1,0 +1,19 @@
+{
+  "apple-music-aac-256": {
+    "id": "apple-music-aac-256",
+    "name": "Apple Music AAC 256",
+    "enabled": true,
+    "output_format": "m4a",
+    "codec": "aac",
+    "bitrate": 256,
+    "sample_rate": 44100,
+    "channels": null,
+    "bit_depth": null,
+    "metadata_policy": "keep",
+    "cover_policy": "embed",
+    "filename_template": "{title}.{extension}",
+    "directory_template": "{album_artist}/{year} - {album}",
+    "output_dir": null,
+    "version": 1
+  }
+}
