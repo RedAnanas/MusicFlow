@@ -23,7 +23,7 @@ export interface Metadata {
   copyright?: string
   lyrics?: string
   cover?: {
-    data: Buffer
+    data: string | number[]
     mime: string
   }
 }

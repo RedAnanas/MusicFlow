@@ -51,10 +51,10 @@ cd MusicFlow
 
 ```bash
 # 给脚本执行权限
-chmod +x setup-mac.sh
+chmod +x scripts/setup-macos.sh
 
 # 运行脚本
-./setup-mac.sh
+./scripts/setup-macos.sh
 ```
 
 **脚本会自动：**
@@ -158,7 +158,7 @@ kill -9 <PID>  # 杀死进程
 
 ## 详细文档
 
-📖 **完整迁移指南：** `MIGRATION_GUIDE.md`
+📖 **完整迁移指南：** [migration.md](migration.md)
 - 详细的步骤说明
 - 多种传输方式
 - 完整的故障排除

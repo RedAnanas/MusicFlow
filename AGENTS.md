@@ -1,90 +1,95 @@
-# AGENTS.md - MusicFlow AI Agent Rules (Codex Compatible)
+# AGENTS.md - MusicFlow 工程规范
 
-## Project Info
-- **Name:** MusicFlow - NAS Music Conversion Tool
-- **Stack:** Python 3.12/FastAPI + Vue 3/Element Plus
-- **Deploy:** Docker + Docker Compose
+## 项目信息
 
-## Agent Behavior Rules
+- 名称：MusicFlow - NAS 音乐转换工具
+- 后端：Python 3.12+、FastAPI、Pydantic、Mutagen、FFmpeg、Watchdog
+- 前端：Vue 3、TypeScript、Vite、Element Plus、Pinia、Vue Router
+- 部署：Docker Compose
 
-### 1. Think Before Coding
-- State assumptions explicitly. If uncertain, ask.
-- Present multiple interpretations, don't pick silently.
-- Surface tradeoffs. Push back when warranted.
+## 工作原则
 
-### 2. Simplicity First
-- Minimum code that solves the problem.
-- No abstractions for single-use code.
-- No error handling for impossible scenarios.
+1. 编码前明确假设、目标和验证标准；不确定时先说明。
+2. 实现满足需求的最少代码，不做推测性扩展和无关重构。
+3. 每一处改动必须能追溯到当前任务，并保持现有风格。
+4. 缺陷修复应先复现或建立回归测试，再验证修复。
+5. 回复、文档、代码注释、测试描述和 Git 提交使用简体中文；代码标识符使用英文。
 
-### 3. Surgical Changes
-- Don't modify adjacent code unless needed.
-- Don't refactor things that aren't broken.
-- Match existing style exactly.
+## 分支与 Git
 
-### 4. Goal-Driven
-- Define success criteria. Loop until verified.
-- For multi-step tasks, state a plan with verification steps.
-
-### 5. Chinese Language Priority (中文优先)
-- All replies, docs, analysis in Simplified Chinese.
-- Code comments in Chinese.
-- Variable/function/class names in English.
-- Git commits in Chinese.
-
-## Git Workflow
-
-### Branch Rules (CRITICAL)
-```
-main     - Production (NEVER commit directly)
-develop  - Daily development
-feature/<name> - New features from develop
-fix/<name>     - Bug fixes from develop
+```text
+main                 生产主干，禁止直接开发或提交
+develop              日常集成分支
+feature/<name>       新功能分支，从 develop 创建
+fix/<name>           修复分支，从 develop 创建
 ```
 
-### Workflow
-```
-1. Create branch:  git checkout -b feature/<name>
-2. Develop & commit
-3. Merge to develop: git checkout develop && git merge feature/<name>
-4. User verifies
-5. Merge to main (USER CONFIRMATION REQUIRED): git checkout main && git merge develop
-```
+标准流程：
 
-### Commit Format
-```
-<type>: <description>
-types: feat | fix | docs | style | refactor | test | perf | build | ci | chore
-```
+1. 检查工作区并保护用户已有改动。
+2. 从 `develop` 创建功能或修复分支。
+3. 开发、测试并检查差异。
+4. 获得用户许可后提交。
+5. 合并到 `develop` 供用户验证。
+6. 只有用户明确确认后才能合并并推送 `main`。
 
-### Forbidden
-- git reset --hard
-- git push --force
-- Auto-commit without permission
-- Auto-merge to main
+提交格式：`<type>: <中文描述>`，其中 type 为 `feat`、`fix`、`docs`、`style`、`refactor`、`test`、`perf`、`build`、`ci` 或 `chore`。
 
-## Tech Stack
-### Backend: Python 3.12+, FastAPI, Pydantic, Mutagen, FFmpeg/FFprobe, Watchdog
-### Frontend: Vue 3, TypeScript, Vite, Element Plus, Pinia, Vue Router
+禁止：
 
-## Project Structure
-```
-backend/app/ → main.py, config.py, api/routes/, core/, models/, services/, utils/
-frontend/src/ → views/, stores/, router/, types/
-```
+- `git reset --hard`
+- `git push --force`
+- 未经许可自动提交
+- 未经明确确认合并到 `main`
+- 提交 `.env`、密码、令牌、密钥、日志、任务历史、数据库备份或个人路径配置
 
-## Startup
-```bash
-# Backend: cd backend && python -m uvicorn app.main:app --host 127.0.0.1 --port 8082 --reload
-# Frontend: cd frontend && npm run dev
-# URLs: http://localhost:3000 (frontend), http://localhost:8082 (backend/docs)
+## 项目结构
+
+```text
+backend/app/          后端源码
+backend/tests/        后端测试
+frontend/src/         前端源码
+config/               本地运行配置，Git 忽略
+config/examples/      脱敏配置示例
+docs/                 当前文档与历史记录
+scripts/              工程管理脚本
+logs/                 本地日志，Git 忽略
+temp/                 临时文件，Git 忽略
 ```
 
-## Known Issues (UNFIXED)
-See: `UNFIXED_ISSUES.md`
-1. Profile bitrate/codec dropdowns, output format display, create function
-2. Watch folder create/edit API calls
-3. Metadata/cover image copy for some formats
+根目录仅保留项目入口、工程配置和核心目录。过程文档不得新增到根目录。
 
-## Security
-Never commit: .env, passwords, tokens, keys, logs, database backups
+## 统一命令
+
+```powershell
+# 启动
+.\scripts\musicflow.ps1 start
+
+# 停止
+.\scripts\musicflow.ps1 stop
+
+# 重启
+.\scripts\musicflow.ps1 restart
+
+# 状态
+.\scripts\musicflow.ps1 status
+
+# 全量质量检查
+.\scripts\check.ps1
+```
+
+访问地址：前端 `http://127.0.0.1:3000`，后端文档 `http://127.0.0.1:8082/docs`。
+
+## 完成标准
+
+任何代码改动交付前必须：
+
+1. 相关测试通过；
+2. Python 编译检查通过；
+3. 前端生产构建通过；
+4. Docker Compose 配置检查通过；
+5. Git 空白错误检查通过；
+6. 工作区差异只包含本次任务内容；
+7. 文档、配置样例与实际行为一致。
+
+完整流程见 `docs/development/workflow.md`。

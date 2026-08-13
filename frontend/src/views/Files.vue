@@ -97,7 +97,6 @@ const executeConvert = async () => {
     })
 
     if (response.ok) {
-      const task = await response.json()
       ElMessage.success('转换任务已创建')
 
       // 触发转换引擎执行

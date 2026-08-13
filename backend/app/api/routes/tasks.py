@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from typing import List, Optional
 from datetime import datetime
 from enum import Enum
+from app.config import settings
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -15,7 +16,7 @@ logger = logging.getLogger(__name__)
 tasks_cache: dict = {}
 
 # 任务持久化文件路径
-TASKS_FILE = Path("D:/Documents/AI/MusicFlow/config/tasks.json")
+TASKS_FILE = Path(settings.CONFIG_DIR) / "tasks.json"
 
 
 class TaskStatus(str, Enum):
