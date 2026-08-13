@@ -1,7 +1,10 @@
-import os
 from pathlib import Path
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import List
+
+
+BACKEND_DIR = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = BACKEND_DIR.parent
 
 
 class Settings(BaseSettings):
@@ -9,9 +12,9 @@ class Settings(BaseSettings):
     MUSIC_SOURCE_DIR: str = "D:/Music"
     MUSIC_OUTPUT_DIR: str = "D:/Music/output"
     MUSIC_ARCHIVE_DIR: str = "D:/Music/archive"
-    CONFIG_DIR: str = "D:/Documents/AI/MusicFlow/config"
-    LOGS_DIR: str = "D:/Documents/AI/MusicFlow/logs"
-    TEMP_DIR: str = "D:/Documents/AI/MusicFlow/temp"
+    CONFIG_DIR: str = str(PROJECT_ROOT / "config")
+    LOGS_DIR: str = str(PROJECT_ROOT / "logs")
+    TEMP_DIR: str = str(PROJECT_ROOT / "temp")
 
     # FFmpeg 路径
     FFMPEG_PATH: str = "D:/download/ffmpeg-master-latest-win64-gpl/bin/ffmpeg.exe"
@@ -30,9 +33,11 @@ class Settings(BaseSettings):
     # 支持的音频格式
     SUPPORTED_FORMATS: List[str] = ["mp3", "flac", "m4a", "aac", "alac", "wav", "ape", "ogg", "opus", "wma"]
 
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
+    model_config = SettingsConfigDict(
+        env_file=BACKEND_DIR / ".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
 
 settings = Settings()

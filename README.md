@@ -1,210 +1,98 @@
-# 🎵 MusicFlow
+# MusicFlow
 
-NAS 音乐转换与整理工具 - 自动监控、格式转换、元数据保留
+MusicFlow 是面向 NAS/本地音乐库的自动监控、音频转换与元数据保留工具。后端采用 FastAPI，前端采用 Vue 3 与 Element Plus。
 
-[![Python](https://img.shields.io/badge/Python-3.12+-blue.svg)](https://python.org)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.115-green.svg)](https://fastapi.tiangolo.com)
-[![Vue](https://img.shields.io/badge/Vue-3.4-brightgreen.svg)](https://vuejs.org)
-[![Docker](https://img.shields.io/badge/Docker-20.10+-blue.svg)](https://docker.com)
+## 功能
 
----
+- 监控目录并自动发现稳定的音频文件
+- 支持 M4A、MP3、FLAC、OGG、Opus 等输出格式
+- 支持 AAC、ALAC、FLAC、MP3 等编码器
+- 保留文本元数据、歌词和封面
+- 管理转换配置、监控目录和任务状态
+- 支持 Docker Compose 部署
 
-## ✨ 功能特性
+## 项目结构
 
-- 🔄 **自动监控** - 监控音乐目录，自动发现新文件
-- 🎵 **多格式转换** - 支持 FLAC、MP3、M4A、AAC、ALAC 等
-- 📝 **元数据保留** - 保留标题、艺术家、专辑等元数据
-- 🎨 **封面保留** - 保留嵌入式封面图片
-- 📊 **多版本输出** - 一个文件可生成多个版本
-- 🌐 **Web UI** - 完整的管理界面
-- ⚡ **并发处理** - 支持多任务并行转换
-- 🐳 **Docker 部署** - 单容器即可运行
-
----
-
-## 🚀 快速开始
-
-### 使用 Docker Compose（推荐）
-
-```bash
-# 克隆项目
-git clone <repository-url>
-cd MusicFlow
-
-# 启动服务
-docker compose up -d
-
-# 访问
-# 前端：http://localhost:8080
-# 后端：http://localhost:8082
-# API 文档：http://localhost:8082/docs
-```
-
-### 开发环境
-
-#### 后端
-```bash
-cd backend
-pip install -r requirements.txt
-python -m uvicorn app.main:app --host 127.0.0.1 --port 8082 --reload
-```
-
-#### 前端
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
----
-
-## 📁 项目结构
-
-```
+```text
 MusicFlow/
-├── backend/
-│   ├── app/
-│   │   ├── main.py              # FastAPI 入口
-│   │   ├── config.py            # 配置管理
-│   │   ├── api/routes/          # API 路由
-│   │   ├── core/                # 核心服务
-│   │   ├── models/              # 数据模型
-│   │   └── services/            # 业务逻辑
-│   ├── requirements.txt
-│   ├── Dockerfile
-│   └── docker-compose.yml
-├── frontend/
-│   ├── src/
-│   │   ├── views/               # 页面组件
-│   │   ├── stores/              # Pinia 状态
-│   │   ├── router/              # 路由配置
-│   │   └── types/               # TypeScript 类型
-│   ├── package.json
-│   ├── Dockerfile
-│   └── nginx.conf
-├── docs/
-│   ├── ARCHITECTURE.md          # 架构文档
-│   └── CHANGELOG.md             # 变更记录
-├── CLAUDE.md                    # AI 编程规范
-├── AGENTS.md                    # Agent 规范
-└── docker-compose.yml           # 项目级 compose
+├─ backend/                 FastAPI 后端与测试
+├─ frontend/                Vue 3 前端
+├─ config/                  本地运行配置（Git 忽略）
+│  └─ examples/             可提交的配置示例
+├─ docs/                    架构、指南和历史文档
+├─ scripts/                 启停、检查和环境安装脚本
+├─ logs/                    本地日志（Git 忽略）
+├─ temp/                    临时文件和进程状态（Git 忽略）
+├─ AGENTS.md                工程与协作规范
+├─ CONTRIBUTING.md          开发流程入口
+├─ docker-compose.yml       唯一的 Compose 入口
+└─ pyproject.toml           Python 测试配置
 ```
 
----
+## 本地开发
 
-## 🔧 配置
+环境要求：Python 3.12+、Node.js 18+、FFmpeg/FFprobe。
 
-### 环境变量
-
-```bash
-# 后端配置
-MUSIC_SOURCE_DIR=/music/source      # 音乐源目录
-MUSIC_OUTPUT_DIR=/music/output      # 输出目录
-MAX_CONCURRENT_TASKS=2              # 最大并发任务
-FFMPEG_THREADS=2                    # FFmpeg 线程数
+```powershell
+pip install -r backend/requirements-dev.txt
+Copy-Item backend/.env.example backend/.env
+Set-Location frontend
+npm install
+Set-Location ..
 ```
 
-### 音乐目录映射
+按本机环境修改 `backend/.env`，然后统一通过项目脚本管理服务：
 
-在 `docker-compose.yml` 中配置：
+```powershell
+# 启动
+.\scripts\musicflow.ps1 start
 
-```yaml
-volumes:
-  - /your/music/source:/music/source
-  - /your/music/output:/music/output
+# 状态
+.\scripts\musicflow.ps1 status
+
+# 重启
+.\scripts\musicflow.ps1 restart
+
+# 停止
+.\scripts\musicflow.ps1 stop
 ```
 
----
+- 前端：http://127.0.0.1:3000
+- 后端：http://127.0.0.1:8082
+- API 文档：http://127.0.0.1:8082/docs
 
-## 📚 API 文档
+## 质量检查
 
-启动后端后访问：
-- **Swagger UI:** http://localhost:8082/docs
-- **ReDoc:** http://localhost:8082/redoc
+提交前必须执行：
 
-### 主要 API
+```powershell
+.\scripts\check.ps1
+```
 
-- `GET /api/files/` - 获取音乐文件列表
-- `POST /api/tasks/` - 创建转换任务
-- `GET /api/tasks/` - 获取任务列表
-- `GET /api/profiles/` - 获取转换配置
-- `POST /api/profiles/` - 创建转换配置
-- `GET /api/logs/` - 获取日志
+该脚本依次执行后端测试、Python 编译检查、前端生产构建、Compose 配置检查和 Git 空白错误检查。GitHub Actions 会在推送和拉取请求中执行同等质量门禁。
 
----
+## Docker Compose
 
-## 🎯 使用流程
+默认使用项目内的 `data/` 作为音乐目录；也可通过环境变量映射真实路径：
 
-1. **配置监控目录** - 添加要监控的音乐目录
-2. **创建转换配置** - 设置输出格式、比特率等
-3. **启动监控** - 自动发现新音乐文件
-4. **执行转换** - 手动或自动转换
-5. **查看结果** - 在输出目录查看转换后的文件
+```powershell
+$env:MUSIC_SOURCE_PATH = 'D:\Music\source'
+$env:MUSIC_OUTPUT_PATH = 'D:\Music\output'
+$env:MUSIC_ARCHIVE_PATH = 'D:\Music\archive'
+docker compose up -d --build
+```
 
----
+- Web UI：http://127.0.0.1:8080
+- 后端 API：http://127.0.0.1:8082
 
-## 🛠️ 技术栈
+## 文档
 
-### 后端
-- **框架:** FastAPI
-- **音频处理:** FFmpeg, FFprobe, Mutagen
-- **文件监控:** Watchdog
-- **任务队列:** asyncio + ThreadPoolExecutor
-- **数据存储:** JSON 文件
+- [文档索引](docs/README.md)
+- [系统架构](docs/ARCHITECTURE.md)
+- [开发流程](docs/development/workflow.md)
+- [服务管理](docs/development/service-management.md)
+- [变更记录](docs/CHANGELOG.md)
 
-### 前端
-- **框架:** Vue 3 + TypeScript
-- **UI 组件:** Element Plus
-- **状态管理:** Pinia
-- **路由:** Vue Router
-- **构建:** Vite
+## 数据边界
 
-### 部署
-- **容器:** Docker + Docker Compose
-- **Web 服务器:** Nginx（前端）
-
----
-
-## 📝 开发规范
-
-请参考：
-- [CLAUDE.md](./CLAUDE.md) - AI 编程规范
-- [AGENTS.md](./AGENTS.md) - Agent 工作规范
-- [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) - 系统架构
-
----
-
-## 🤝 贡献
-
-1. Fork 项目
-2. 创建特性分支 (`git checkout -b feature/amazing-feature`)
-3. 提交修改 (`git commit -m 'feat: add amazing feature'`)
-4. 推送到分支 (`git push origin feature/amazing-feature`)
-5. 创建 Pull Request
-
----
-
-## 📄 许可证
-
-MIT License - 详见 [LICENSE](./LICENSE)
-
----
-
-## 🙏 致谢
-
-- [FastAPI](https://fastapi.tiangolo.com/) - 现代 Web 框架
-- [Vue.js](https://vuejs.org/) - 渐进式 JavaScript 框架
-- [Element Plus](https://element-plus.org/) - Vue 3 UI 组件库
-- [FFmpeg](https://ffmpeg.org/) - 音视频处理工具
-- [Mutagen](https://mutagen.readthedocs.io/) - 元数据处理库
-
----
-
-## 📧 联系方式
-
-- **Issues:** [GitHub Issues](<repository-url>/issues)
-- **Email:** [your-email@example.com]
-
----
-
-**⭐ 如果这个项目对你有帮助，请给个 Star 支持一下！**
+`config/*.json`、`logs/`、`temp/`、`data/` 和 `backend/.env` 都是本地运行数据，不进入版本库。仓库中的配置示例位于 `config/examples/`。

@@ -9,29 +9,32 @@ const showCreateDialog = ref(false)
 const showEditDialog = ref(false)
 const selectedProfile = ref<Profile | null>(null)
 
-const newProfile = ref({
+interface ProfileForm {
+  name: string
+  outputFormat: Profile['outputFormat']
+  codec: string
+  bitrate: number
+  sampleRate: number
+  metadataPolicy: Profile['metadataPolicy']
+  coverPolicy: Profile['coverPolicy']
+  filenameTemplate: string
+  directoryTemplate: string
+}
+
+const createDefaultProfileForm = (): ProfileForm => ({
   name: '',
-  outputFormat: 'm4a' as const,
+  outputFormat: 'm4a',
   codec: 'aac',
   bitrate: 256,
   sampleRate: 44100,
-  metadataPolicy: 'keep' as const,
-  coverPolicy: 'embed' as const,
+  metadataPolicy: 'keep',
+  coverPolicy: 'embed',
   filenameTemplate: '{title}.{extension}',
   directoryTemplate: '{album_artist}/{year} - {album}',
 })
 
-const editProfile = ref({
-  name: '',
-  outputFormat: 'm4a' as const,
-  codec: 'aac',
-  bitrate: 256,
-  sampleRate: 44100,
-  metadataPolicy: 'keep' as const,
-  coverPolicy: 'embed' as const,
-  filenameTemplate: '{title}.{extension}',
-  directoryTemplate: '{album_artist}/{year} - {album}',
-})
+const newProfile = ref<ProfileForm>(createDefaultProfileForm())
+const editProfile = ref<ProfileForm>(createDefaultProfileForm())
 
 const bitrateOptions = [
   { label: '64 kbps', value: 64 },
@@ -54,12 +57,6 @@ const codecOptions = [
   { label: 'PCM (WAV)', value: 'pcm_s16le' },
 ]
 
-const sampleRateOptions = [
-  { label: '44100 Hz', value: 44100 },
-  { label: '48000 Hz', value: 48000 },
-  { label: '96000 Hz', value: 96000 },
-]
-
 onMounted(() => {
   store.fetchProfiles()
 })
@@ -71,17 +68,7 @@ const handleCreate = async () => {
     showCreateDialog.value = false
     ElMessage.success('Profile 创建成功')
     // 重置表单
-    newProfile.value = {
-      name: '',
-      outputFormat: 'm4a',
-      codec: 'aac',
-      bitrate: 256,
-      sampleRate: 44100,
-      metadataPolicy: 'keep',
-      coverPolicy: 'embed',
-      filenameTemplate: '{title}.{extension}',
-      directoryTemplate: '{album_artist}/{year} - {album}',
-    }
+    newProfile.value = createDefaultProfileForm()
     // 重新加载列表
     await store.fetchProfiles()
   } catch (error) {
