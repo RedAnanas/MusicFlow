@@ -23,6 +23,7 @@ const statusFilters = [
 
 onMounted(() => {
   store.fetchTasks()
+  store.fetchProfiles()
 })
 
 const filteredTasks = computed(() => {
@@ -60,6 +61,10 @@ const handleSizeChange = () => {
 
 const handleSelectionChange = (selection: Task[]) => {
   selectedTasks.value = selection
+}
+
+const getProfileName = (profileId?: string) => {
+  return store.profiles.find(profile => profile.id === profileId)?.name || profileId || '--'
 }
 
 const ensureRequestSucceeded = async (response: Response) => {
@@ -296,7 +301,11 @@ const handleBatchRetry = async () => {
           </template>
         </el-table-column>
 
-        <el-table-column prop="profile_id" label="转换配置" width="130" />
+        <el-table-column label="转换配置" width="130">
+          <template #default="{ row }">
+            {{ getProfileName(row.profile_id) }}
+          </template>
+        </el-table-column>
 
         <el-table-column label="创建时间" width="180">
           <template #default="{ row }">
