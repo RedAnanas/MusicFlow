@@ -276,9 +276,9 @@ const handleBatchRetry = async () => {
         v-loading="store.loading"
         @selection-change="handleSelectionChange"
       >
-        <el-table-column type="selection" width="55" />
+        <el-table-column type="selection" width="50" />
 
-        <el-table-column label="序号" width="70" align="center">
+        <el-table-column label="序号" width="60" align="center">
           <template #default="{ $index }">
             {{ (currentPage - 1) * pageSize + $index + 1 }}
           </template>
@@ -296,7 +296,7 @@ const handleBatchRetry = async () => {
           </template>
         </el-table-column>
 
-        <el-table-column prop="profile_id" label="转换配置" width="150" />
+        <el-table-column prop="profile_id" label="转换配置" width="130" />
 
         <el-table-column label="创建时间" width="180">
           <template #default="{ row }">
@@ -304,7 +304,7 @@ const handleBatchRetry = async () => {
           </template>
         </el-table-column>
 
-        <el-table-column prop="status" label="状态" width="100">
+        <el-table-column prop="status" label="状态" width="90">
           <template #default="{ row }">
             <el-tag :type="getStatusType(row.status)" size="small">
               {{ getStatusLabel(row.status) }}
@@ -312,7 +312,7 @@ const handleBatchRetry = async () => {
           </template>
         </el-table-column>
 
-        <el-table-column label="进度" width="200">
+        <el-table-column label="进度" width="150">
           <template #default="{ row }">
             <el-progress
               v-if="row.status === 'converting'"
@@ -324,20 +324,13 @@ const handleBatchRetry = async () => {
           </template>
         </el-table-column>
 
-        <el-table-column label="耗时" width="120">
+        <el-table-column label="耗时" width="100">
           <template #default="{ row }">
             {{ formatDuration(row.start_time, row.end_time) }}
           </template>
         </el-table-column>
 
-        <el-table-column prop="error" label="错误信息" min-width="200">
-          <template #default="{ row }">
-            <span v-if="row.error" class="error-text">{{ row.error }}</span>
-            <span v-else>--</span>
-          </template>
-        </el-table-column>
-
-        <el-table-column label="操作" width="200" fixed="right">
+        <el-table-column label="操作" width="130" fixed="right">
           <template #default="{ row }">
             <el-button
               v-if="row.status === 'waiting' || row.status === 'converting'"
@@ -390,11 +383,6 @@ const handleBatchRetry = async () => {
 h1 {
   margin-bottom: 20px;
   color: #303133;
-}
-
-.error-text {
-  color: #f56c6c;
-  font-size: 12px;
 }
 
 .task-toolbar {
