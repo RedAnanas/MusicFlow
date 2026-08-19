@@ -57,6 +57,27 @@ const codecOptions = [
   { label: 'PCM (WAV)', value: 'pcm_s16le' },
 ]
 
+const metadataPolicyLabels: Record<Profile['metadataPolicy'], string> = {
+  keep: '保留',
+  overwrite: '覆盖',
+  strip: '不写入',
+}
+
+const coverPolicyLabels: Record<Profile['coverPolicy'], string> = {
+  keep: '保留',
+  embed: '嵌入',
+  keep_and_embed: '保留并嵌入',
+  strip: '不处理',
+}
+
+const getMetadataPolicyLabel = (policy: Profile['metadataPolicy']) => {
+  return metadataPolicyLabels[policy] || policy
+}
+
+const getCoverPolicyLabel = (policy: Profile['coverPolicy']) => {
+  return coverPolicyLabels[policy] || policy
+}
+
 onMounted(() => {
   store.fetchProfiles()
 })
@@ -149,9 +170,9 @@ const handleDelete = async (id: string) => {
     <!-- Profile 列表 -->
     <el-card v-loading="store.loading">
       <el-table :data="store.profiles" style="width: 100%">
-        <el-table-column prop="name" label="名称" min-width="200" />
+        <el-table-column prop="name" label="名称" min-width="160" />
 
-        <el-table-column prop="outputFormat" label="输出格式" width="120">
+        <el-table-column prop="outputFormat" label="输出格式" width="100">
           <template #default="{ row }">
             <el-tag>{{ row.outputFormat?.toUpperCase() }}</el-tag>
           </template>
@@ -171,13 +192,31 @@ const handleDelete = async (id: string) => {
           </template>
         </el-table-column>
 
-        <el-table-column prop="metadataPolicy" label="元数据策略" width="120">
+        <el-table-column prop="channels" label="声道数" width="110">
           <template #default="{ row }">
-            {{ row.metadataPolicy === 'keep' ? '保留' : row.metadataPolicy === 'overwrite' ? '覆盖' : '不写入' }}
+            {{ row.channels ? row.channels + ' 声道' : '保持源文件' }}
           </template>
         </el-table-column>
 
-        <el-table-column label="操作" width="150" fixed="right">
+        <el-table-column prop="bitDepth" label="位深" width="110">
+          <template #default="{ row }">
+            {{ row.bitDepth ? row.bitDepth + ' bit' : '保持源文件' }}
+          </template>
+        </el-table-column>
+
+        <el-table-column prop="metadataPolicy" label="元数据策略" width="120">
+          <template #default="{ row }">
+            {{ getMetadataPolicyLabel(row.metadataPolicy) }}
+          </template>
+        </el-table-column>
+
+        <el-table-column prop="coverPolicy" label="封面策略" width="130">
+          <template #default="{ row }">
+            {{ getCoverPolicyLabel(row.coverPolicy) }}
+          </template>
+        </el-table-column>
+
+        <el-table-column label="操作" width="130" fixed="right">
           <template #default="{ row }">
             <el-button type="primary" link size="small" @click="handleEdit(row)">
               编辑
