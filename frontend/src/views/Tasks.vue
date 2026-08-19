@@ -417,4 +417,8 @@ h1 {
 :deep(.el-table .el-scrollbar__bar.is-vertical) {
   display: none;
 }
+
+:deep(.el-table .el-scrollbar__wrap) {
+  overflow-y: hidden;
+}
 </style>
