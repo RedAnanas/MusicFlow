@@ -1,9 +1,16 @@
 <script setup lang="ts">
-import { onMounted, ref, computed } from 'vue'
+import { onMounted, ref, computed, watch } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAppStore } from '../stores/app'
+import type { Task } from '../types'
 
 const store = useAppStore()
 const activeTab = ref('all')
+const currentPage = ref(1)
+const pageSize = ref(20)
+const selectedTasks = ref<Task[]>([])
+const actionLoading = ref(false)
+const taskApiBase = 'http://localhost:8082/api/tasks'
 
 const statusFilters = [
   { label: '全部', value: 'all' },
@@ -24,6 +31,50 @@ const filteredTasks = computed(() => {
   }
   return store.tasks.filter(task => task.status === activeTab.value)
 })
+
+const paginatedTasks = computed(() => {
+  const start = (currentPage.value - 1) * pageSize.value
+  return filteredTasks.value.slice(start, start + pageSize.value)
+})
+
+watch(activeTab, () => {
+  currentPage.value = 1
+  selectedTasks.value = []
+})
+
+watch(currentPage, () => {
+  selectedTasks.value = []
+})
+
+watch(() => filteredTasks.value.length, (total) => {
+  const lastPage = Math.max(1, Math.ceil(total / pageSize.value))
+  if (currentPage.value > lastPage) {
+    currentPage.value = lastPage
+  }
+})
+
+const handleSizeChange = () => {
+  currentPage.value = 1
+  selectedTasks.value = []
+}
+
+const handleSelectionChange = (selection: Task[]) => {
+  selectedTasks.value = selection
+}
+
+const ensureRequestSucceeded = async (response: Response) => {
+  if (response.ok) return
+  const result = await response.json().catch(() => null)
+  throw new Error(result?.detail || `请求失败（HTTP ${response.status}）`)
+}
+
+const getErrorMessage = (error: unknown, fallback: string) => {
+  return error instanceof Error ? error.message : fallback
+}
+
+const isConfirmationCancelled = (error: unknown) => {
+  return error === 'cancel' || error === 'close'
+}
 
 const getStatusType = (status: string) => {
   const types: Record<string, string> = {
@@ -61,27 +112,111 @@ const formatDuration = (startTime?: string, endTime?: string) => {
 
 const handleCancel = async (taskId: string) => {
   try {
-    const response = await fetch(`http://localhost:8082/api/tasks/${taskId}/cancel`, {
+    const response = await fetch(`${taskApiBase}/${taskId}/cancel`, {
       method: 'POST'
     })
-    if (response.ok) {
-      store.fetchTasks()
-    }
+    await ensureRequestSucceeded(response)
+    ElMessage.success('任务已取消')
+    await store.fetchTasks()
   } catch (error) {
     console.error('Cancel failed:', error)
+    ElMessage.error(getErrorMessage(error, '取消任务失败'))
   }
 }
 
 const handleRetry = async (taskId: string) => {
   try {
-    const response = await fetch(`http://localhost:8082/api/tasks/${taskId}/retry`, {
+    const response = await fetch(`${taskApiBase}/${taskId}/retry`, {
       method: 'POST'
     })
-    if (response.ok) {
-      store.fetchTasks()
-    }
+    await ensureRequestSucceeded(response)
+    ElMessage.success('重试任务已提交')
+    await store.fetchTasks()
   } catch (error) {
     console.error('Retry failed:', error)
+    ElMessage.error(getErrorMessage(error, '重试任务失败'))
+  }
+}
+
+const handleDelete = async (task: Task) => {
+  const isActive = task.status === 'waiting' || task.status === 'converting'
+  const message = isActive
+    ? '删除记录不会停止正在执行或排队的转换，确定继续吗？'
+    : '确定删除这条任务记录吗？删除后无法恢复。'
+
+  try {
+    await ElMessageBox.confirm(message, '删除任务记录', {
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+      type: 'warning',
+    })
+    const response = await fetch(`${taskApiBase}/${task.id}`, {
+      method: 'DELETE',
+    })
+    await ensureRequestSucceeded(response)
+    ElMessage.success('任务记录已删除')
+    await store.fetchTasks()
+  } catch (error) {
+    if (isConfirmationCancelled(error)) return
+    console.error('Delete failed:', error)
+    ElMessage.error(getErrorMessage(error, '删除任务记录失败'))
+  }
+}
+
+const handleBatchDelete = async () => {
+  if (!selectedTasks.value.length) return
+
+  const includesActiveTask = selectedTasks.value.some(task =>
+    task.status === 'waiting' || task.status === 'converting'
+  )
+  const message = includesActiveTask
+    ? `已选择 ${selectedTasks.value.length} 条记录，其中包含执行中或排队任务；删除记录不会停止转换，确定继续吗？`
+    : `确定删除选中的 ${selectedTasks.value.length} 条任务记录吗？删除后无法恢复。`
+
+  try {
+    await ElMessageBox.confirm(message, '批量删除任务记录', {
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+      type: 'warning',
+    })
+    actionLoading.value = true
+    const response = await fetch(`${taskApiBase}/batch-delete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ task_ids: selectedTasks.value.map(task => task.id) }),
+    })
+    await ensureRequestSucceeded(response)
+    ElMessage.success(`已删除 ${selectedTasks.value.length} 条任务记录`)
+    selectedTasks.value = []
+    await store.fetchTasks()
+  } catch (error) {
+    if (isConfirmationCancelled(error)) return
+    console.error('Batch delete failed:', error)
+    ElMessage.error(getErrorMessage(error, '批量删除任务记录失败'))
+  } finally {
+    actionLoading.value = false
+  }
+}
+
+const handleBatchRetry = async () => {
+  if (!selectedTasks.value.length) return
+
+  actionLoading.value = true
+  try {
+    const response = await fetch(`${taskApiBase}/batch-retry`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ task_ids: selectedTasks.value.map(task => task.id) }),
+    })
+    await ensureRequestSucceeded(response)
+    ElMessage.success(`已提交 ${selectedTasks.value.length} 个重试任务`)
+    selectedTasks.value = []
+    await store.fetchTasks()
+  } catch (error) {
+    console.error('Batch retry failed:', error)
+    ElMessage.error(getErrorMessage(error, '批量重试失败'))
+  } finally {
+    actionLoading.value = false
   }
 }
 </script>
@@ -101,11 +236,43 @@ const handleRetry = async (taskId: string) => {
         />
       </el-tabs>
 
+      <div class="task-toolbar">
+        <el-button
+          type="danger"
+          :disabled="selectedTasks.length === 0"
+          :loading="actionLoading"
+          @click="handleBatchDelete"
+        >
+          批量删除
+        </el-button>
+        <el-button
+          v-if="activeTab === 'failed'"
+          type="warning"
+          :disabled="selectedTasks.length === 0"
+          :loading="actionLoading"
+          @click="handleBatchRetry"
+        >
+          批量重试
+        </el-button>
+        <span v-if="selectedTasks.length" class="selection-count">
+          已选择 {{ selectedTasks.length }} 条
+        </span>
+      </div>
+
       <el-table
-        :data="filteredTasks"
+        :data="paginatedTasks"
         style="width: 100%"
         v-loading="store.loading"
+        @selection-change="handleSelectionChange"
       >
+        <el-table-column type="selection" width="55" />
+
+        <el-table-column label="序号" width="70" align="center">
+          <template #default="{ $index }">
+            {{ (currentPage - 1) * pageSize + $index + 1 }}
+          </template>
+        </el-table-column>
+
         <el-table-column prop="source_file" label="源文件" min-width="200">
           <template #default="{ row }">
             {{ row.source_file?.split('/').pop()?.split('\\\\').pop() }}
@@ -153,7 +320,7 @@ const handleRetry = async (taskId: string) => {
           </template>
         </el-table-column>
 
-        <el-table-column label="操作" width="150" fixed="right">
+        <el-table-column label="操作" width="200" fixed="right">
           <template #default="{ row }">
             <el-button
               v-if="row.status === 'waiting' || row.status === 'converting'"
@@ -173,9 +340,27 @@ const handleRetry = async (taskId: string) => {
             >
               重试
             </el-button>
+            <el-button
+              type="danger"
+              link
+              size="small"
+              @click="handleDelete(row)"
+            >
+              删除
+            </el-button>
           </template>
         </el-table-column>
       </el-table>
+
+      <el-pagination
+        v-model:current-page="currentPage"
+        v-model:page-size="pageSize"
+        class="pagination"
+        :page-sizes="[20, 50, 100]"
+        :total="filteredTasks.length"
+        layout="total, sizes, prev, pager, next, jumper"
+        @size-change="handleSizeChange"
+      />
     </el-card>
   </div>
 </template>
@@ -193,5 +378,22 @@ h1 {
 .error-text {
   color: #f56c6c;
   font-size: 12px;
+}
+
+.task-toolbar {
+  display: flex;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.selection-count {
+  margin-left: 12px;
+  color: #606266;
+  font-size: 14px;
+}
+
+.pagination {
+  justify-content: flex-end;
+  margin-top: 20px;
 }
 </style>
