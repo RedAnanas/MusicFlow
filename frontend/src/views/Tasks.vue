@@ -110,6 +110,17 @@ const formatDuration = (startTime?: string, endTime?: string) => {
   return `${mins}分${secs}秒`
 }
 
+const formatDateTime = (time?: string) => {
+  if (!time) return '--'
+  const date = new Date(time)
+  if (Number.isNaN(date.getTime())) return '--'
+  const pad = (value: number) => String(value).padStart(2, '0')
+  return [
+    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`,
+    `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`,
+  ].join(' ')
+}
+
 const handleCancel = async (taskId: string) => {
   try {
     const response = await fetch(`${taskApiBase}/${taskId}/cancel`, {
@@ -285,7 +296,13 @@ const handleBatchRetry = async () => {
           </template>
         </el-table-column>
 
-        <el-table-column prop="profile_id" label="Profile" width="150" />
+        <el-table-column prop="profile_id" label="转换配置" width="150" />
+
+        <el-table-column label="创建时间" width="180">
+          <template #default="{ row }">
+            {{ formatDateTime(row.start_time) }}
+          </template>
+        </el-table-column>
 
         <el-table-column prop="status" label="状态" width="100">
           <template #default="{ row }">
@@ -395,5 +412,9 @@ h1 {
 .pagination {
   justify-content: flex-end;
   margin-top: 20px;
+}
+
+:deep(.el-table .el-scrollbar__bar.is-vertical) {
+  display: none;
 }
 </style>
