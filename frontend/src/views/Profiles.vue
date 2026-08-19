@@ -172,14 +172,6 @@ const handleDelete = async (id: string) => {
       <el-table :data="store.profiles" style="width: 100%">
         <el-table-column prop="name" label="名称" min-width="160" />
 
-        <el-table-column prop="enabled" label="启用状态" width="90">
-          <template #default="{ row }">
-            <el-tag :type="row.enabled ? 'success' : 'info'">
-              {{ row.enabled ? '启用' : '停用' }}
-            </el-tag>
-          </template>
-        </el-table-column>
-
         <el-table-column prop="outputFormat" label="输出格式" width="100">
           <template #default="{ row }">
             <el-tag>{{ row.outputFormat?.toUpperCase() }}</el-tag>

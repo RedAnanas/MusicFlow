@@ -10,6 +10,7 @@ const currentPage = ref(1)
 const pageSize = ref(20)
 const selectedTasks = ref<Task[]>([])
 const actionLoading = ref(false)
+const profilesLoaded = ref(false)
 const taskApiBase = 'http://localhost:8082/api/tasks'
 
 const statusFilters = [
@@ -23,7 +24,9 @@ const statusFilters = [
 
 onMounted(() => {
   store.fetchTasks()
-  store.fetchProfiles()
+  store.fetchProfiles().finally(() => {
+    profilesLoaded.value = true
+  })
 })
 
 const filteredTasks = computed(() => {
@@ -64,7 +67,10 @@ const handleSelectionChange = (selection: Task[]) => {
 }
 
 const getProfileName = (profileId?: string) => {
-  return store.profiles.find(profile => profile.id === profileId)?.name || profileId || '--'
+  if (!profileId) return '--'
+  const profile = store.profiles.find(item => item.id === profileId)
+  if (profile) return profile.name
+  return profilesLoaded.value ? '已删除' : '--'
 }
 
 const ensureRequestSucceeded = async (response: Response) => {
