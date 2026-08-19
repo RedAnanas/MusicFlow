@@ -34,6 +34,10 @@ class TaskCreate(BaseModel):
     profile_id: str
 
 
+class TaskBatchAction(BaseModel):
+    task_ids: List[str]
+
+
 class TaskResponse(BaseModel):
     id: str
     source_file: str
@@ -117,6 +121,12 @@ async def get_tasks(
     if status:
         tasks = [t for t in tasks if t.status == status]
 
+    # 最新记录始终优先返回，无时间记录排在最后
+    tasks.sort(
+        key=lambda task: task.start_time.timestamp() if task.start_time else float("-inf"),
+        reverse=True,
+    )
+
     # 限制返回数量
     return tasks[:limit]
 
@@ -128,6 +138,19 @@ async def get_task(task_id: str):
         raise HTTPException(status_code=404, detail="Task not found")
 
     return tasks_cache[task_id]
+
+
+@router.delete("/{task_id}")
+async def delete_task(task_id: str):
+    """删除任意状态的任务记录。"""
+    if task_id not in tasks_cache:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    del tasks_cache[task_id]
+    save_tasks()
+    logger.info(f"Deleted task record {task_id}")
+
+    return {"status": "success", "deleted": 1}
 
 
 async def enqueue_conversion_task(
@@ -228,6 +251,52 @@ async def create_task(task_create: TaskCreate):
     return task
 
 
+@router.post("/batch-delete")
+async def batch_delete_tasks(action: TaskBatchAction):
+    """批量删除任务记录。"""
+    task_ids = list(dict.fromkeys(action.task_ids))
+    missing_ids = [task_id for task_id in task_ids if task_id not in tasks_cache]
+    if missing_ids:
+        raise HTTPException(status_code=404, detail="Some tasks were not found")
+
+    for task_id in task_ids:
+        del tasks_cache[task_id]
+
+    if task_ids:
+        save_tasks()
+        logger.info(f"Deleted {len(task_ids)} task records")
+
+    return {"status": "success", "deleted": len(task_ids)}
+
+
+async def submit_retry(task: TaskResponse) -> TaskResponse:
+    """根据失败记录重新提交转换任务。"""
+    new_task = await enqueue_conversion_task(TaskCreate(
+        source_file=task.source_file,
+        output_file=task.output_file,
+        profile_id=task.profile_id,
+    ))
+    if new_task is None:
+        raise HTTPException(status_code=409, detail="Task already exists")
+    logger.info(f"Retrying task {task.id} as {new_task.id}")
+    return new_task
+
+
+@router.post("/batch-retry", response_model=List[TaskResponse])
+async def batch_retry_tasks(action: TaskBatchAction):
+    """批量重试失败任务。"""
+    task_ids = list(dict.fromkeys(action.task_ids))
+    missing_ids = [task_id for task_id in task_ids if task_id not in tasks_cache]
+    if missing_ids:
+        raise HTTPException(status_code=404, detail="Some tasks were not found")
+
+    tasks = [tasks_cache[task_id] for task_id in task_ids]
+    if any(task.status != TaskStatus.FAILED for task in tasks):
+        raise HTTPException(status_code=400, detail="Only failed tasks can be retried")
+
+    return [await submit_retry(task) for task in tasks]
+
+
 @router.post("/{task_id}/cancel")
 async def cancel_task(task_id: str):
     """取消任务"""
@@ -261,25 +330,7 @@ async def retry_task(task_id: str):
     if task.status != TaskStatus.FAILED:
         raise HTTPException(status_code=400, detail="Only failed tasks can be retried")
 
-    # 创建新任务
-    new_task_id = str(uuid.uuid4())
-    new_task = TaskResponse(
-        id=new_task_id,
-        source_file=task.source_file,
-        output_file=task.output_file,
-        profile_id=task.profile_id,
-        status=TaskStatus.WAITING,
-        start_time=datetime.now(),
-    )
-
-    tasks_cache[new_task_id] = new_task
-
-    logger.info(f"Retrying task {task_id} as {new_task_id}")
-
-    # 保存任务到文件
-    save_tasks()
-
-    return new_task
+    return await submit_retry(task)
 
 
 @router.get("/stats/summary")
