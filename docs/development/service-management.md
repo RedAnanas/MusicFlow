@@ -1,24 +1,23 @@
-# MusicFlow 项目管理脚本
+# MusicFlow WSL 项目管理
 
-Windows 开发环境统一使用 `scripts/musicflow.ps1` 管理前后端服务。
+MusicFlow 前后端仅在 WSL 中运行。首次使用时，执行以下命令创建隔离的 Python 环境并安装前后端依赖：
 
-```powershell
-# 启动
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\musicflow.ps1 start
-
-# 停止
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\musicflow.ps1 stop
-
-# 重启
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\musicflow.ps1 restart
-
-# 查看状态
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\musicflow.ps1 status
+```bash
+# MusicFlow 后端依赖目前要求 Python 3.12
+# 请确保 python3.12 与 python3.12-venv 已安装
+./scripts/setup-wsl.sh
 ```
 
-脚本只停止由它记录的进程，或经命令行校验确认属于 MusicFlow 且监听 3000/8082 端口的进程，不会结束系统中其他 Python 或 Node.js 服务。
+之后统一使用 `scripts/musicflow.sh`：
 
-运行日志保存在项目的 `logs/` 目录，进程状态保存在已忽略的 `temp/run/` 目录。
+```bash
+./scripts/musicflow.sh start
+./scripts/musicflow.sh stop
+./scripts/musicflow.sh restart
+./scripts/musicflow.sh status
+```
+
+脚本会自动加载 NVM 中的 Node.js，并且只会停止经命令行校验确认为 MusicFlow 的服务。运行日志保存在项目的 `logs/` 目录，进程状态保存在已忽略的 `temp/run/` 目录。WSL 中的 Docker 检查需要先在 Docker Desktop 的 **Settings → Resources → WSL Integration** 启用 Ubuntu。
 
 访问地址：
 

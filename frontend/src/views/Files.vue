@@ -217,7 +217,7 @@ const executeConvert = async () => {
 
   try {
     // 构建输出路径
-    const outputPath = `D:/Music/output/${currentFile.value.filename.replace('.flac', '.m4a')}`
+    const outputPath = `/mnt/d/Music/output/${currentFile.value.filename.replace('.flac', '.m4a')}`
 
     // 调用 API 创建转换任务
     const response = await fetch('http://localhost:8082/api/tasks/', {
@@ -481,7 +481,7 @@ const handleBatchConvert = () => {
           </el-form-item>
           <el-form-item label="输出路径">
             <span style="color: #666; font-size: 12px;">
-              D:/Music/output/{{ currentFile.filename.replace('.flac', '.m4a') }}
+              /mnt/d/Music/output/{{ currentFile.filename.replace('.flac', '.m4a') }}
             </span>
           </el-form-item>
         </el-form>

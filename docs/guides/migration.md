@@ -32,7 +32,7 @@
 
 ```bash
 # 进入项目父目录
-cd D:/Documents/AI
+cd /mnt/d/Documents/AI
 
 # 创建压缩包（保留所有文件和 .git）
 # 使用 tar 命令（Git Bash 中可用）

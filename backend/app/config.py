@@ -9,16 +9,16 @@ PROJECT_ROOT = BACKEND_DIR.parent
 
 class Settings(BaseSettings):
     # 基础路径
-    MUSIC_SOURCE_DIR: str = "D:/Music"
-    MUSIC_OUTPUT_DIR: str = "D:/Music/output"
-    MUSIC_ARCHIVE_DIR: str = "D:/Music/archive"
+    MUSIC_SOURCE_DIR: str = "/mnt/d/Music/source"
+    MUSIC_OUTPUT_DIR: str = "/mnt/d/Music/output"
+    MUSIC_ARCHIVE_DIR: str = "/mnt/d/Music/archive"
     CONFIG_DIR: str = str(PROJECT_ROOT / "config")
     LOGS_DIR: str = str(PROJECT_ROOT / "logs")
     TEMP_DIR: str = str(PROJECT_ROOT / "temp")
 
     # FFmpeg 路径
-    FFMPEG_PATH: str = "D:/download/ffmpeg-master-latest-win64-gpl/bin/ffmpeg.exe"
-    FFPROBE_PATH: str = "D:/download/ffmpeg-master-latest-win64-gpl/bin/ffprobe.exe"
+    FFMPEG_PATH: str = "ffmpeg"
+    FFPROBE_PATH: str = "ffprobe"
 
     # 服务器配置
     HOST: str = "0.0.0.0"

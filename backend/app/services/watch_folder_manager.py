@@ -86,6 +86,7 @@ class WatchFolderManager:
         self._schedule_next_scan(folder)
         if folder.enabled:
             self._start_watching(folder)
+            self._schedule_initial_scan(folder)
         self._record_event(folder.id, "configured", "监控目录已创建")
         logger.info(f"Created watch folder: {folder.name}")
         return folder
@@ -128,6 +129,7 @@ class WatchFolderManager:
         if folder.enabled:
             self._start_watching(folder)
             self._schedule_next_scan(folder)
+            self._schedule_initial_scan(folder)
         else:
             watcher_service.stop_watch(folder.input_dir)
         self.save_watch_folders()
@@ -285,6 +287,27 @@ class WatchFolderManager:
     def _schedule_next_scan(self, folder: WatchFolder):
         interval_seconds = max(folder.scan_interval_minutes, 1) * 60
         self.next_scan_at[folder.id] = time.monotonic() + interval_seconds
+
+    def _schedule_initial_scan(self, folder: WatchFolder):
+        """在新增或重新启用目录后补偿处理已有文件。"""
+        if not folder.auto_process or not self.loop or self.loop.is_closed():
+            return
+
+        async def process_existing_files():
+            try:
+                result = await self.process_watch_folder(folder.id, "initial")
+                self._ensure_runtime(folder.id)["last_error"] = None
+                self._record_event(
+                    folder.id,
+                    "initial",
+                    f"初始扫描创建 {result['created_tasks']} 个转换任务",
+                )
+            except Exception as exc:
+                self._ensure_runtime(folder.id)["last_error"] = str(exc)
+                self._record_event(folder.id, "error", f"初始扫描失败：{exc}")
+                logger.exception(f"Initial scan failed for {folder.name}")
+
+        self.loop.create_task(process_existing_files())
 
     def _next_scan_iso(self, folder_id: str) -> Optional[str]:
         due_at = self.next_scan_at.get(folder_id)

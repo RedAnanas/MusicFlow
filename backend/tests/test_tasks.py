@@ -48,6 +48,26 @@ def test_get_tasks_returns_newest_records_first():
     assert [task.id for task in result] == ["new", "middle", "old"]
 
 
+def test_get_tasks_marks_missing_import_file_as_received(monkeypatch):
+    """自动导入文件消失后，任务应标记为 Apple Music 已接收。"""
+    task = make_task("apple-music", tasks_api.TaskStatus.SUCCESS, datetime.now())
+    task.apple_music_status = "waiting"
+    task.apple_music_import_file = "/missing/歌曲.m4a"
+    tasks_api.tasks_cache[task.id] = task
+    saved = []
+
+    monkeypatch.setattr(tasks_api, "save_tasks", lambda: saved.append(True))
+    monkeypatch.setattr(
+        "app.services.apple_music_handoff.apple_music_handoff_service.is_received",
+        lambda _path: True,
+    )
+
+    result = asyncio.run(tasks_api.get_tasks(status=None, limit=100))
+
+    assert result[0].apple_music_status == "received"
+    assert saved == [True]
+
+
 @pytest.mark.parametrize("status", list(tasks_api.TaskStatus))
 def test_delete_task_allows_every_status(monkeypatch, status):
     """每一种任务状态都允许删除记录。"""

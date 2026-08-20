@@ -44,6 +44,8 @@ class ProfileCreate(BaseModel):
     filename_template: str = "{title}.{extension}"
     directory_template: str = "{album_artist}/{year} - {album}"
     output_dir: Optional[str] = None
+    apple_music_handoff_enabled: bool = False
+    apple_music_import_dir: Optional[str] = None
 
 
 class ProfileUpdate(BaseModel):
@@ -61,6 +63,8 @@ class ProfileUpdate(BaseModel):
     filename_template: Optional[str] = None
     directory_template: Optional[str] = None
     output_dir: Optional[str] = None
+    apple_music_handoff_enabled: Optional[bool] = None
+    apple_music_import_dir: Optional[str] = None
 
 
 class ProfileResponse(BaseModel):
@@ -79,6 +83,8 @@ class ProfileResponse(BaseModel):
     filename_template: str
     directory_template: str
     output_dir: Optional[str]
+    apple_music_handoff_enabled: bool
+    apple_music_import_dir: Optional[str]
 
 
 @router.get("/", response_model=List[ProfileResponse])
@@ -129,6 +135,8 @@ async def create_profile(profile_create: ProfileCreate):
             filename_template=profile_create.filename_template,
             directory_template=profile_create.directory_template,
             output_dir=profile_create.output_dir,
+            apple_music_handoff_enabled=profile_create.apple_music_handoff_enabled,
+            apple_music_import_dir=profile_create.apple_music_import_dir,
         )
 
         created_profile = profile_manager.create_profile(profile)

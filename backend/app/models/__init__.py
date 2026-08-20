@@ -92,6 +92,8 @@ class Profile(BaseModel):
     filename_template: str = "{title}.{extension}"
     directory_template: str = "{album_artist}/{year} - {album}"
     output_dir: Optional[str] = None
+    apple_music_handoff_enabled: bool = False
+    apple_music_import_dir: Optional[str] = None
     version: int = 1
 
 
@@ -117,3 +119,6 @@ class Task(BaseModel):
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
     error: Optional[str] = None
+    apple_music_status: Optional[str] = None
+    apple_music_import_file: Optional[str] = None
+    apple_music_error: Optional[str] = None
