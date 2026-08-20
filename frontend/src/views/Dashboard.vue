@@ -116,29 +116,6 @@ onMounted(async () => {
       </div>
     </el-card>
 
-    <!-- 快捷操作 -->
-    <el-card class="quick-actions-card">
-      <template #header>
-        <div class="card-header">
-          <span>快捷操作</span>
-        </div>
-      </template>
-
-      <el-space :size="20">
-        <el-button type="primary" @click="$router.push('/files')">
-          <el-icon><Document /></el-icon>
-          浏览音乐文件
-        </el-button>
-        <el-button type="success" @click="$router.push('/tasks')">
-          <el-icon><List /></el-icon>
-          查看转换任务
-        </el-button>
-        <el-button type="warning" @click="$router.push('/profiles')">
-          <el-icon><Setting /></el-icon>
-          管理转换配置
-        </el-button>
-      </el-space>
-    </el-card>
   </div>
 </template>
 
@@ -223,7 +200,4 @@ h1 {
   width: 100%;
 }
 
-.quick-actions-card {
-  margin-bottom: 20px;
-}
 </style>

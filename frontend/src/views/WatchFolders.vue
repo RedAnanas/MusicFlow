@@ -20,7 +20,6 @@ const newFolder = ref({
   profileIds: [] as string[],
   autoProcess: true,
   recursiveScan: true,
-  scanIntervalMinutes: 5,
   outputDir: 'D:/Music/output',
 })
 
@@ -30,7 +29,6 @@ const editFolder = ref({
   profileIds: [] as string[],
   autoProcess: true,
   recursiveScan: true,
-  scanIntervalMinutes: 5,
   outputDir: '',
 })
 
@@ -62,7 +60,6 @@ const handleCreate = async () => {
       profileIds: [],
       autoProcess: true,
       recursiveScan: true,
-      scanIntervalMinutes: 5,
       outputDir: 'D:/Music/output',
     }
   } catch (error) {
@@ -79,7 +76,6 @@ const handleEdit = (folder: WatchFolder) => {
     profileIds: folder.profileIds || [],
     autoProcess: folder.autoProcess,
     recursiveScan: folder.recursiveScan,
-    scanIntervalMinutes: folder.scanIntervalMinutes,
     outputDir: folder.outputDir || '',
   }
   showEditDialog.value = true
@@ -203,44 +199,39 @@ const handleEvents = async (folder: WatchFolder) => {
           </template>
         </el-table-column>
 
-        <el-table-column prop="scanIntervalMinutes" label="扫描间隔" width="100">
-          <template #default="{ row }">
-            {{ row.scanIntervalMinutes }} 分钟
-          </template>
-        </el-table-column>
-
         <el-table-column label="实时状态" min-width="180">
           <template #default="{ row }">
             <div class="watch-status">
-              <el-tag :type="row.watching ? 'success' : 'danger'" size="small">
-                {{ row.watching ? '监听中' : '未监听' }}
+              <el-tag :type="!row.enabled ? 'info' : row.watching ? 'success' : 'danger'" size="small">
+                {{ !row.enabled ? '已停用' : row.watching ? '监听中' : '未监听' }}
               </el-tag>
-              <span>下次：{{ formatTime(row.nextScanAt) }}</span>
               <span v-if="row.lastError" class="status-error">{{ row.lastError }}</span>
             </div>
           </template>
         </el-table-column>
 
-        <el-table-column label="操作" width="330" fixed="right">
+        <el-table-column label="操作" width="220" fixed="right">
           <template #default="{ row }">
-            <el-button type="success" link size="small" @click="handleTriggerConvert(row.id)">
-              立即转换
-            </el-button>
-            <el-button type="primary" link size="small" @click="handleScan(row.id)">
-              扫描
-            </el-button>
-            <el-button type="warning" link size="small" @click="handleEdit(row)">
-              编辑
-            </el-button>
-            <el-button type="info" link size="small" @click="handleEvents(row)">
-              事件
-            </el-button>
-            <el-button :type="row.enabled ? 'info' : 'success'" link size="small" @click="handleToggle(row)">
-              {{ row.enabled ? '停用' : '启用' }}
-            </el-button>
-            <el-button type="danger" link size="small" @click="handleDelete(row.id)">
-              删除
-            </el-button>
+            <div class="operation-buttons">
+              <el-button type="success" link size="small" @click="handleTriggerConvert(row.id)">
+                立即转换
+              </el-button>
+              <el-button type="primary" link size="small" @click="handleScan(row.id)">
+                扫描
+              </el-button>
+              <el-button type="warning" link size="small" @click="handleEdit(row)">
+                编辑
+              </el-button>
+              <el-button type="info" link size="small" @click="handleEvents(row)">
+                事件
+              </el-button>
+              <el-button :type="row.enabled ? 'info' : 'success'" link size="small" @click="handleToggle(row)">
+                {{ row.enabled ? '停用' : '启用' }}
+              </el-button>
+              <el-button type="danger" link size="small" @click="handleDelete(row.id)">
+                删除
+              </el-button>
+            </div>
           </template>
         </el-table-column>
       </el-table>
@@ -284,14 +275,6 @@ const handleEvents = async (folder: WatchFolder) => {
           <el-switch v-model="newFolder.recursiveScan" />
         </el-form-item>
 
-        <el-form-item label="扫描间隔">
-          <el-select v-model="newFolder.scanIntervalMinutes">
-            <el-option label="每 5 分钟" :value="5" />
-            <el-option label="每 15 分钟" :value="15" />
-            <el-option label="每 30 分钟" :value="30" />
-            <el-option label="每小时" :value="60" />
-          </el-select>
-        </el-form-item>
       </el-form>
 
       <template #footer>
@@ -338,14 +321,6 @@ const handleEvents = async (folder: WatchFolder) => {
           <el-switch v-model="editFolder.recursiveScan" />
         </el-form-item>
 
-        <el-form-item label="扫描间隔">
-          <el-select v-model="editFolder.scanIntervalMinutes">
-            <el-option label="每 5 分钟" :value="5" />
-            <el-option label="每 15 分钟" :value="15" />
-            <el-option label="每 30 分钟" :value="30" />
-            <el-option label="每小时" :value="60" />
-          </el-select>
-        </el-form-item>
       </el-form>
 
       <template #footer>
@@ -398,5 +373,16 @@ h1 {
 
 .status-error {
   color: #f56c6c;
+}
+
+.operation-buttons {
+  display: grid;
+  grid-template-columns: repeat(3, max-content);
+  gap: 4px 12px;
+  align-items: center;
+}
+
+.operation-buttons :deep(.el-button + .el-button) {
+  margin-left: 0;
 }
 </style>

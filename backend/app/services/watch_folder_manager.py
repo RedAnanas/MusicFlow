@@ -169,7 +169,7 @@ class WatchFolderManager:
         if not folder:
             return {}
         status = dict(self._ensure_runtime(folder_id))
-        status["watching"] = watcher_service.is_watching(folder.input_dir)
+        status["watching"] = folder.enabled and watcher_service.is_watching(folder.input_dir)
         status["enabled"] = folder.enabled
         status["next_scan_at"] = self._next_scan_iso(folder_id)
         return status

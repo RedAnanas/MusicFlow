@@ -11,7 +11,7 @@ import { RouterView } from 'vue-router'
         <p>NAS 音乐转换与整理工具</p>
       </div>
       <el-menu
-        default-active="/"
+        :default-active="$route.path"
         router
         class="aside-menu"
       >
@@ -117,11 +117,6 @@ html, body {
 .aside-menu .el-menu-item.is-active {
   color: #409eff !important;
   background-color: #0d2137 !important;
-}
-
-.aside-menu .el-menu-item:focus {
-  background-color: transparent !important;
-  color: #889aa4 !important;
 }
 
 .aside-menu .el-menu-item:active {

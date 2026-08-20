@@ -74,13 +74,18 @@ export const useAppStore = defineStore('app', () => {
   async function fetchFiles() {
     loading.value = true
     try {
-      const response = await axios.get('/api/files/')
+      const response = await axios.get('/api/files/', { params: { limit: 1000 } })
       files.value = response.data
     } catch (error) {
       console.error('Failed to fetch files:', error)
     } finally {
       loading.value = false
     }
+  }
+
+  async function deleteFile(id: string) {
+    await axios.delete(`/api/files/${id}`)
+    files.value = files.value.filter(file => file.id !== id)
   }
 
   // 任务操作
@@ -400,6 +405,7 @@ export const useAppStore = defineStore('app', () => {
     logs,
     loading,
     fetchFiles,
+    deleteFile,
     fetchTasks,
     fetchProfiles,
     createProfile,
