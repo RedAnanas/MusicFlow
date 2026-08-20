@@ -69,13 +69,13 @@ export interface Profile {
 
 export interface Task {
   id: string
-  sourceFile: string
-  outputFile: string
-  profileId: string
+  source_file: string
+  output_file: string
+  profile_id: string
   status: 'waiting' | 'converting' | 'success' | 'failed' | 'cancelled' | 'skipped'
   progress?: number
-  startTime?: string
-  endTime?: string
+  start_time?: string
+  end_time?: string
   error?: string
   apple_music_status?: 'waiting' | 'received' | 'failed'
   apple_music_import_file?: string
