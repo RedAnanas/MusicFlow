@@ -13,10 +13,16 @@ from app.services.profile_manager import profile_manager
 def restore_files_cache():
     """隔离每个测试使用的文件缓存。"""
     original_files = dict(files_api.files_cache)
+    original_file_list = list(files_api.file_list_cache)
+    original_loaded = files_api.file_list_loaded
     files_api.files_cache.clear()
+    files_api.file_list_cache = []
+    files_api.file_list_loaded = False
     yield
     files_api.files_cache.clear()
     files_api.files_cache.update(original_files)
+    files_api.file_list_cache = original_file_list
+    files_api.file_list_loaded = original_loaded
 
 
 def test_delete_file_removes_source_file(monkeypatch, tmp_path):
@@ -117,3 +123,24 @@ def test_batch_convert_returns_missing_file_errors(monkeypatch, tmp_path):
         "task_id": "file-1",
     }]
     assert result["errors"] == [{"file_id": "missing", "error": "File not found"}]
+
+
+def test_get_files_reuses_scan_result_until_refresh(monkeypatch):
+    """文件列表应复用扫描结果，仅在手动刷新时重新扫描。"""
+    scanned = [{"id": "file-1", "filename": "song.flac", "format": "flac", "artist": None, "album": None, "title": None}]
+    scan_calls = []
+
+    def scan_files():
+        scan_calls.append(True)
+        return scanned
+
+    monkeypatch.setattr(files_api, "_scan_files", scan_files)
+
+    first = asyncio.run(files_api.get_files(search=None, format=None, refresh=False, limit=100))
+    second = asyncio.run(files_api.get_files(search=None, format=None, refresh=False, limit=100))
+    refreshed = asyncio.run(files_api.get_files(search=None, format=None, refresh=True, limit=100))
+
+    assert first == scanned
+    assert second == scanned
+    assert refreshed == scanned
+    assert len(scan_calls) == 2

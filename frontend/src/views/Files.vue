@@ -274,7 +274,7 @@ const handleBatchConvert = () => {
           </el-select>
         </el-col>
         <el-col :span="12">
-          <el-button type="primary" @click="store.fetchFiles()">
+          <el-button type="primary" @click="store.fetchFiles(true)">
             <el-icon><Refresh /></el-icon>
             刷新
           </el-button>

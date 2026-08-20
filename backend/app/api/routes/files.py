@@ -13,6 +13,8 @@ logger = logging.getLogger(__name__)
 
 # 文件存储（内存缓存，实际应使用文件系统或JSON）
 files_cache: dict = {}
+file_list_cache: List[dict] = []
+file_list_loaded = False
 
 
 class FileResponse(BaseModel):
@@ -62,9 +64,40 @@ class MetadataUpdate(BaseModel):
 async def get_files(
     search: Optional[str] = Query(None, description="搜索关键词"),
     format: Optional[str] = Query(None, description="格式筛选"),
+    refresh: bool = Query(False, description="强制重新扫描音乐目录"),
     limit: int = Query(100, ge=1, le=1000, description="返回数量限制")
 ):
     """获取所有音乐文件"""
+    global file_list_cache, file_list_loaded
+
+    if refresh or not file_list_loaded:
+        file_list_cache = _scan_files()
+        file_list_loaded = True
+
+    files = list(file_list_cache)
+
+    # 应用搜索过滤
+    if search:
+        search_lower = search.lower()
+        files = [
+            file_data for file_data in files
+            if any([
+                search_lower in file_data["filename"].lower(),
+                search_lower in (file_data["artist"] or "").lower(),
+                search_lower in (file_data["album"] or "").lower(),
+                search_lower in (file_data["title"] or "").lower(),
+            ])
+        ]
+
+    # 应用格式过滤
+    if format:
+        files = [file_data for file_data in files if file_data["format"] == format.lower()]
+
+    return files[:limit]
+
+
+def _scan_files() -> List[dict]:
+    """扫描源目录并读取音频信息，仅在首次加载或手动刷新时执行。"""
     files = []
 
     # 扫描所有配置的源目录
@@ -112,28 +145,12 @@ async def get_files(
                 "genre": metadata.get("genre") if metadata else None,
             }
 
-            # 应用搜索过滤
-            if search:
-                search_lower = search.lower()
-                if not any([
-                    search_lower in file_data["filename"].lower(),
-                    search_lower in (file_data["artist"] or "").lower(),
-                    search_lower in (file_data["album"] or "").lower(),
-                    search_lower in (file_data["title"] or "").lower(),
-                ]):
-                    continue
-
-            # 应用格式过滤
-            if format and file_data["format"] != format.lower():
-                continue
-
             files.append(file_data)
 
             # 缓存文件信息
             files_cache[file_id] = file_data
 
-    # 限制返回数量
-    return files[:limit]
+    return files
 
 
 @router.get("/{file_id}", response_model=FileResponse)
@@ -170,6 +187,8 @@ async def delete_file(file_id: str):
         raise HTTPException(status_code=500, detail=f"文件删除失败：{exc}") from exc
 
     files_cache.pop(file_id, None)
+    global file_list_cache
+    file_list_cache = [file_data for file_data in file_list_cache if file_data["id"] != file_id]
     logger.info(f"Deleted music file: {file_path}")
     return {"status": "success", "deleted": file_id}
 
