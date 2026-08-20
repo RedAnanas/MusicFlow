@@ -45,7 +45,6 @@ export interface FileItem {
   track?: string
   year?: string
   genre?: string
-  status: 'pending' | 'converting' | 'completed' | 'failed'
 }
 
 export interface Profile {
