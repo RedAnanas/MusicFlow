@@ -477,8 +477,8 @@ const handleDelete = async (id: string) => {
       </template>
     </el-dialog>
 
-    <ProfileEditorDialog v-model="showCreateDialog" mode="create" :form="newProfile" :preview-file="previewFile" @submit="handleCreate" />
-    <ProfileEditorDialog v-model="showEditDialog" mode="edit" :form="editProfile" :preview-file="previewFile" @submit="handleUpdate" />
+    <ProfileEditorDialog v-model="showCreateDialog" mode="create" :form="newProfile" @submit="handleCreate" />
+    <ProfileEditorDialog v-model="showEditDialog" mode="edit" :form="editProfile" @submit="handleUpdate" />
   </div>
 </template>
 
