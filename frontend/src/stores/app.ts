@@ -54,6 +54,7 @@ function mapWatchFolder(data: WatchFolderApiResponse): WatchFolder {
 export const useAppStore = defineStore('app', () => {
   // 状态
   const files = ref<FileItem[]>([])
+  const filesLoaded = ref(false)
   const tasks = ref<Task[]>([])
   const profiles = ref<Profile[]>([])
   const watchFolders = ref<WatchFolder[]>([])
@@ -71,11 +72,13 @@ export const useAppStore = defineStore('app', () => {
   const loading = ref(false)
 
   // 文件操作
-  async function fetchFiles() {
+  async function fetchFiles(refresh: boolean = false) {
+    if (filesLoaded.value && !refresh) return
     loading.value = true
     try {
-      const response = await axios.get('/api/files/', { params: { limit: 1000 } })
+      const response = await axios.get('/api/files/', { params: { limit: 1000, refresh } })
       files.value = response.data
+      filesLoaded.value = true
     } catch (error) {
       console.error('Failed to fetch files:', error)
     } finally {

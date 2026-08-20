@@ -91,7 +91,7 @@ const handleCreate = async () => {
     console.log('Creating profile:', newProfile.value)
     await store.createProfile(newProfile.value)
     showCreateDialog.value = false
-    ElMessage.success('Profile 创建成功')
+    ElMessage.success('转换配置创建成功')
     // 重置表单
     newProfile.value = createDefaultProfileForm()
     // 重新加载列表
@@ -141,7 +141,7 @@ const handleUpdate = async () => {
     console.log('Updating profile:', selectedProfile.value.id, updateData)
     await store.updateProfile(selectedProfile.value.id, updateData)
     showEditDialog.value = false
-    ElMessage.success('Profile 更新成功')
+    ElMessage.success('转换配置更新成功')
     // 重新加载列表
     await store.fetchProfiles()
   } catch (error) {
@@ -152,7 +152,7 @@ const handleUpdate = async () => {
 
 const handleDelete = async (id: string) => {
   try {
-    await ElMessageBox.confirm('确定要删除这个 Profile 吗？', '确认', {
+    await ElMessageBox.confirm('确定要删除这个转换配置吗？', '确认', {
       type: 'warning',
     })
     await store.deleteProfile(id)
@@ -175,7 +175,7 @@ const handleDelete = async (id: string) => {
       </el-button>
     </div>
 
-    <!-- Profile 列表 -->
+    <!-- 转换配置列表 -->
     <el-card v-loading="store.loading">
       <el-table :data="store.profiles" style="width: 100%">
         <el-table-column prop="name" label="名称" min-width="160" />
@@ -247,15 +247,18 @@ const handleDelete = async (id: string) => {
     <!-- 创建/编辑对话框 -->
     <el-dialog
       v-model="showCreateDialog"
-      title="创建 Profile"
-      width="600px"
+      title="创建转换配置"
+      width="760px"
     >
-      <el-form :model="newProfile" label-width="120px">
-        <el-form-item label="名称">
+      <el-form :model="newProfile" label-position="top" class="profile-form">
+        <div class="form-section-title">基础参数</div>
+        <el-form-item class="form-item-full">
+          <template #label>名称<el-tooltip content="用于在转换任务中识别此配置。" placement="top"><el-icon class="field-help"><QuestionFilled /></el-icon></el-tooltip></template>
           <el-input v-model="newProfile.name" placeholder="例如：Apple Music AAC 256" />
         </el-form-item>
 
-        <el-form-item label="输出格式">
+        <el-form-item>
+          <template #label>输出格式<el-tooltip content="转换完成后生成文件的容器格式和扩展名。" placement="top"><el-icon class="field-help"><QuestionFilled /></el-icon></el-tooltip></template>
           <el-select v-model="newProfile.outputFormat">
             <el-option label="M4A" value="m4a" />
             <el-option label="MP3" value="mp3" />
@@ -267,7 +270,8 @@ const handleDelete = async (id: string) => {
           </el-select>
         </el-form-item>
 
-        <el-form-item label="编码器">
+        <el-form-item>
+          <template #label>编码器<el-tooltip content="决定音频如何编码，例如 AAC、ALAC 或 MP3。" placement="top"><el-icon class="field-help"><QuestionFilled /></el-icon></el-tooltip></template>
           <el-select v-model="newProfile.codec" filterable placeholder="选择编码器">
             <el-option
               v-for="option in codecOptions"
@@ -278,7 +282,8 @@ const handleDelete = async (id: string) => {
           </el-select>
         </el-form-item>
 
-        <el-form-item label="比特率">
+        <el-form-item>
+          <template #label>比特率<el-tooltip content="有损编码的每秒数据量；数值越高通常音质越好、文件越大。" placement="top"><el-icon class="field-help"><QuestionFilled /></el-icon></el-tooltip></template>
           <el-select v-model="newProfile.bitrate">
             <el-option
               v-for="option in bitrateOptions"
@@ -289,7 +294,8 @@ const handleDelete = async (id: string) => {
           </el-select>
         </el-form-item>
 
-        <el-form-item label="采样率">
+        <el-form-item>
+          <template #label>采样率<el-tooltip content="每秒采样次数；留空时保持源文件采样率。" placement="top"><el-icon class="field-help"><QuestionFilled /></el-icon></el-tooltip></template>
           <el-select v-model="newProfile.sampleRate" clearable placeholder="保持源文件">
             <el-option label="44100 Hz" :value="44100" />
             <el-option label="48000 Hz" :value="48000" />
@@ -297,7 +303,8 @@ const handleDelete = async (id: string) => {
           </el-select>
         </el-form-item>
 
-        <el-form-item label="元数据策略">
+        <el-form-item>
+          <template #label>元数据策略<el-tooltip content="控制歌曲标题、艺术家、专辑、歌词等标签的处理方式。" placement="top"><el-icon class="field-help"><QuestionFilled /></el-icon></el-tooltip></template>
           <el-select v-model="newProfile.metadataPolicy">
             <el-option label="保留" value="keep" />
             <el-option label="覆盖" value="overwrite" />
@@ -305,7 +312,8 @@ const handleDelete = async (id: string) => {
           </el-select>
         </el-form-item>
 
-        <el-form-item label="封面策略">
+        <el-form-item>
+          <template #label>封面策略<el-tooltip content="控制是否保留或写入专辑封面。" placement="top"><el-icon class="field-help"><QuestionFilled /></el-icon></el-tooltip></template>
           <el-select v-model="newProfile.coverPolicy">
             <el-option label="保留" value="keep" />
             <el-option label="嵌入" value="embed" />
@@ -314,24 +322,29 @@ const handleDelete = async (id: string) => {
           </el-select>
         </el-form-item>
 
-        <el-form-item label="文件名模板">
+        <div class="form-section-title form-item-full">标签与命名</div>
+        <el-form-item class="form-item-full">
+          <template #label>文件名模板<el-tooltip content="定义生成文件的名称；可使用 {title} 和 {extension} 等占位符。" placement="top"><el-icon class="field-help"><QuestionFilled /></el-icon></el-tooltip></template>
           <el-input v-model="newProfile.filenameTemplate" placeholder="{title}.{extension}" />
         </el-form-item>
 
-        <el-form-item label="目录模板">
+        <el-form-item class="form-item-full">
+          <template #label>目录模板<el-tooltip content="定义输出文件的目录层级；可使用艺术家、专辑和年份等占位符。" placement="top"><el-icon class="field-help"><QuestionFilled /></el-icon></el-tooltip></template>
           <el-input v-model="newProfile.directoryTemplate" placeholder="{album_artist}/{year} - {album}" />
         </el-form-item>
 
-        <el-form-item label="Apple Music 交接">
+        <div class="form-section-title form-item-full">Apple Music 交接</div>
+        <el-form-item class="form-item-full">
+          <template #label>Apple Music 交接<el-tooltip content="转换完成后，将成品复制到 Apple Music 的自动导入目录。" placement="top"><el-icon class="field-help"><QuestionFilled /></el-icon></el-tooltip></template>
           <el-switch v-model="newProfile.appleMusicHandoffEnabled" />
         </el-form-item>
 
-        <el-form-item v-if="newProfile.appleMusicHandoffEnabled" label="自动导入目录">
+        <el-form-item v-if="newProfile.appleMusicHandoffEnabled" class="form-item-full">
+          <template #label>自动导入目录<el-tooltip content="Apple Music 监控的 Automatically Add to Apple Music 目录。" placement="top"><el-icon class="field-help"><QuestionFilled /></el-icon></el-tooltip></template>
           <el-input
             v-model="newProfile.appleMusicImportDir"
             placeholder="/mnt/d/Music/output/M4A/AAC/Automatically Add to Apple Music"
           />
-          <div class="form-tip">输出目录应设置为独立的 Converted 目录，不能直接使用自动导入目录。</div>
         </el-form-item>
       </el-form>
 
@@ -343,15 +356,18 @@ const handleDelete = async (id: string) => {
 
     <el-dialog
       v-model="showEditDialog"
-      title="编辑 Profile"
-      width="600px"
+      title="编辑转换配置"
+      width="760px"
     >
-      <el-form :model="editProfile" label-width="120px">
-        <el-form-item label="名称">
+      <el-form :model="editProfile" label-position="top" class="profile-form">
+        <div class="form-section-title">基础参数</div>
+        <el-form-item class="form-item-full">
+          <template #label>名称<el-tooltip content="用于在转换任务中识别此配置。" placement="top"><el-icon class="field-help"><QuestionFilled /></el-icon></el-tooltip></template>
           <el-input v-model="editProfile.name" placeholder="例如：Apple Music AAC 256" />
         </el-form-item>
 
-        <el-form-item label="输出格式">
+        <el-form-item>
+          <template #label>输出格式<el-tooltip content="转换完成后生成文件的容器格式和扩展名。" placement="top"><el-icon class="field-help"><QuestionFilled /></el-icon></el-tooltip></template>
           <el-select v-model="editProfile.outputFormat">
             <el-option label="M4A" value="m4a" />
             <el-option label="MP3" value="mp3" />
@@ -363,7 +379,8 @@ const handleDelete = async (id: string) => {
           </el-select>
         </el-form-item>
 
-        <el-form-item label="编码器">
+        <el-form-item>
+          <template #label>编码器<el-tooltip content="决定音频如何编码，例如 AAC、ALAC 或 MP3。" placement="top"><el-icon class="field-help"><QuestionFilled /></el-icon></el-tooltip></template>
           <el-select v-model="editProfile.codec" filterable placeholder="选择编码器">
             <el-option
               v-for="option in codecOptions"
@@ -374,7 +391,8 @@ const handleDelete = async (id: string) => {
           </el-select>
         </el-form-item>
 
-        <el-form-item label="比特率">
+        <el-form-item>
+          <template #label>比特率<el-tooltip content="有损编码的每秒数据量；数值越高通常音质越好、文件越大。" placement="top"><el-icon class="field-help"><QuestionFilled /></el-icon></el-tooltip></template>
           <el-select v-model="editProfile.bitrate">
             <el-option
               v-for="option in bitrateOptions"
@@ -385,7 +403,8 @@ const handleDelete = async (id: string) => {
           </el-select>
         </el-form-item>
 
-        <el-form-item label="采样率">
+        <el-form-item>
+          <template #label>采样率<el-tooltip content="每秒采样次数；留空时保持源文件采样率。" placement="top"><el-icon class="field-help"><QuestionFilled /></el-icon></el-tooltip></template>
           <el-select v-model="editProfile.sampleRate" clearable placeholder="保持源文件">
             <el-option label="44100 Hz" :value="44100" />
             <el-option label="48000 Hz" :value="48000" />
@@ -393,7 +412,8 @@ const handleDelete = async (id: string) => {
           </el-select>
         </el-form-item>
 
-        <el-form-item label="元数据策略">
+        <el-form-item>
+          <template #label>元数据策略<el-tooltip content="控制歌曲标题、艺术家、专辑、歌词等标签的处理方式。" placement="top"><el-icon class="field-help"><QuestionFilled /></el-icon></el-tooltip></template>
           <el-select v-model="editProfile.metadataPolicy">
             <el-option label="保留" value="keep" />
             <el-option label="覆盖" value="overwrite" />
@@ -401,7 +421,8 @@ const handleDelete = async (id: string) => {
           </el-select>
         </el-form-item>
 
-        <el-form-item label="封面策略">
+        <el-form-item>
+          <template #label>封面策略<el-tooltip content="控制是否保留或写入专辑封面。" placement="top"><el-icon class="field-help"><QuestionFilled /></el-icon></el-tooltip></template>
           <el-select v-model="editProfile.coverPolicy">
             <el-option label="保留" value="keep" />
             <el-option label="嵌入" value="embed" />
@@ -410,24 +431,29 @@ const handleDelete = async (id: string) => {
           </el-select>
         </el-form-item>
 
-        <el-form-item label="文件名模板">
+        <div class="form-section-title form-item-full">标签与命名</div>
+        <el-form-item class="form-item-full">
+          <template #label>文件名模板<el-tooltip content="定义生成文件的名称；可使用 {title} 和 {extension} 等占位符。" placement="top"><el-icon class="field-help"><QuestionFilled /></el-icon></el-tooltip></template>
           <el-input v-model="editProfile.filenameTemplate" placeholder="{title}.{extension}" />
         </el-form-item>
 
-        <el-form-item label="目录模板">
+        <el-form-item class="form-item-full">
+          <template #label>目录模板<el-tooltip content="定义输出文件的目录层级；可使用艺术家、专辑和年份等占位符。" placement="top"><el-icon class="field-help"><QuestionFilled /></el-icon></el-tooltip></template>
           <el-input v-model="editProfile.directoryTemplate" placeholder="{album_artist}/{year} - {album}" />
         </el-form-item>
 
-        <el-form-item label="Apple Music 交接">
+        <div class="form-section-title form-item-full">Apple Music 交接</div>
+        <el-form-item class="form-item-full">
+          <template #label>Apple Music 交接<el-tooltip content="转换完成后，将成品复制到 Apple Music 的自动导入目录。" placement="top"><el-icon class="field-help"><QuestionFilled /></el-icon></el-tooltip></template>
           <el-switch v-model="editProfile.appleMusicHandoffEnabled" />
         </el-form-item>
 
-        <el-form-item v-if="editProfile.appleMusicHandoffEnabled" label="自动导入目录">
+        <el-form-item v-if="editProfile.appleMusicHandoffEnabled" class="form-item-full">
+          <template #label>自动导入目录<el-tooltip content="Apple Music 监控的 Automatically Add to Apple Music 目录。" placement="top"><el-icon class="field-help"><QuestionFilled /></el-icon></el-tooltip></template>
           <el-input
             v-model="editProfile.appleMusicImportDir"
             placeholder="/mnt/d/Music/output/M4A/AAC/Automatically Add to Apple Music"
           />
-          <div class="form-tip">输出目录应设置为独立的 Converted 目录，不能直接使用自动导入目录。</div>
         </el-form-item>
       </el-form>
 
@@ -461,5 +487,57 @@ h1 {
   color: #909399;
   font-size: 12px;
   line-height: 1.5;
+}
+
+.profile-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 20px;
+}
+
+.profile-form :deep(.el-form-item) {
+  min-width: 0;
+  margin-bottom: 18px;
+}
+
+.profile-form :deep(.el-form-item__label) {
+  width: auto !important;
+  height: auto;
+  padding: 0 0 8px;
+  color: #303133;
+  font-weight: 500;
+  line-height: 20px;
+}
+
+.profile-form :deep(.el-form-item__content) {
+  min-width: 0;
+}
+
+.form-item-full {
+  grid-column: 1 / -1;
+}
+
+.form-section-title {
+  grid-column: 1 / -1;
+  margin: 4px 0 14px;
+  padding-left: 10px;
+  color: #409eff;
+  border-left: 3px solid #409eff;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 20px;
+}
+
+.field-help {
+  margin-left: 4px;
+  color: #909399;
+  cursor: help;
+  vertical-align: -2px;
+}
+
+@media (max-width: 700px) {
+  .profile-form {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

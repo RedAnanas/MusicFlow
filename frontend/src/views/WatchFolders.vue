@@ -177,7 +177,7 @@ const handleEvents = async (folder: WatchFolder) => {
           </template>
         </el-table-column>
 
-        <el-table-column label="输出配置" width="150">
+        <el-table-column label="转换配置" width="150">
           <template #default="{ row }">
             {{ row.profileIds?.length }} 个配置
           </template>
@@ -241,23 +241,29 @@ const handleEvents = async (folder: WatchFolder) => {
     <el-dialog
       v-model="showCreateDialog"
       title="添加监控目录"
-      width="600px"
+      width="760px"
     >
-      <el-form :model="newFolder" label-width="120px">
-        <el-form-item label="名称">
+      <el-form :model="newFolder" label-position="top" class="watch-folder-form">
+        <div class="form-section-title">目录设置</div>
+        <el-form-item class="form-item-full">
+          <template #label>名称<el-tooltip content="用于识别这条监控规则。" placement="top"><el-icon class="field-help"><QuestionFilled /></el-icon></el-tooltip></template>
           <el-input v-model="newFolder.name" placeholder="例如：下载音乐" />
         </el-form-item>
 
-        <el-form-item label="输入目录">
+        <el-form-item class="form-item-full">
+          <template #label>输入目录<el-tooltip content="需要持续扫描和监听的音乐源目录，必须填写 WSL 绝对路径。" placement="top"><el-icon class="field-help"><QuestionFilled /></el-icon></el-tooltip></template>
           <el-input v-model="newFolder.inputDir" placeholder="/music/source" />
         </el-form-item>
 
-        <el-form-item label="输出目录">
+        <el-form-item class="form-item-full">
+          <template #label>输出目录<el-tooltip content="转换成品保存的位置；建议与 Apple Music 自动导入目录分开。" placement="top"><el-icon class="field-help"><QuestionFilled /></el-icon></el-tooltip></template>
           <el-input v-model="newFolder.outputDir" placeholder="/music/output" />
         </el-form-item>
 
-        <el-form-item label="输出配置">
-          <el-select v-model="newFolder.profileIds" multiple placeholder="选择 Profile">
+        <div class="form-section-title form-item-full">转换设置</div>
+        <el-form-item class="form-item-full">
+          <template #label>转换配置<el-tooltip content="选择此目录中的音乐需要使用的一个或多个转换配置。" placement="top"><el-icon class="field-help"><QuestionFilled /></el-icon></el-tooltip></template>
+          <el-select v-model="newFolder.profileIds" multiple placeholder="选择转换配置">
             <el-option
               v-for="profile in store.profiles"
               :key="profile.id"
@@ -267,11 +273,14 @@ const handleEvents = async (folder: WatchFolder) => {
           </el-select>
         </el-form-item>
 
-        <el-form-item label="自动处理">
+        <div class="form-section-title form-item-full">处理方式</div>
+        <el-form-item>
+          <template #label>自动处理<el-tooltip content="开启后，发现稳定的音频文件会自动创建转换任务。" placement="top"><el-icon class="field-help"><QuestionFilled /></el-icon></el-tooltip></template>
           <el-switch v-model="newFolder.autoProcess" />
         </el-form-item>
 
-        <el-form-item label="递归扫描">
+        <el-form-item>
+          <template #label>递归扫描<el-tooltip content="开启后，会同时扫描输入目录下的所有子目录。" placement="top"><el-icon class="field-help"><QuestionFilled /></el-icon></el-tooltip></template>
           <el-switch v-model="newFolder.recursiveScan" />
         </el-form-item>
 
@@ -287,23 +296,29 @@ const handleEvents = async (folder: WatchFolder) => {
     <el-dialog
       v-model="showEditDialog"
       title="编辑监控目录"
-      width="600px"
+      width="760px"
     >
-      <el-form :model="editFolder" label-width="120px">
-        <el-form-item label="名称">
+      <el-form :model="editFolder" label-position="top" class="watch-folder-form">
+        <div class="form-section-title">目录设置</div>
+        <el-form-item class="form-item-full">
+          <template #label>名称<el-tooltip content="用于识别这条监控规则。" placement="top"><el-icon class="field-help"><QuestionFilled /></el-icon></el-tooltip></template>
           <el-input v-model="editFolder.name" placeholder="例如：下载音乐" />
         </el-form-item>
 
-        <el-form-item label="输入目录">
+        <el-form-item class="form-item-full">
+          <template #label>输入目录<el-tooltip content="需要持续扫描和监听的音乐源目录，必须填写 WSL 绝对路径。" placement="top"><el-icon class="field-help"><QuestionFilled /></el-icon></el-tooltip></template>
           <el-input v-model="editFolder.inputDir" placeholder="/music/source" />
         </el-form-item>
 
-        <el-form-item label="输出目录">
+        <el-form-item class="form-item-full">
+          <template #label>输出目录<el-tooltip content="转换成品保存的位置；建议与 Apple Music 自动导入目录分开。" placement="top"><el-icon class="field-help"><QuestionFilled /></el-icon></el-tooltip></template>
           <el-input v-model="editFolder.outputDir" placeholder="留空则使用配置或全局默认目录" />
         </el-form-item>
 
-        <el-form-item label="输出配置">
-          <el-select v-model="editFolder.profileIds" multiple placeholder="选择 Profile">
+        <div class="form-section-title form-item-full">转换设置</div>
+        <el-form-item class="form-item-full">
+          <template #label>转换配置<el-tooltip content="选择此目录中的音乐需要使用的一个或多个转换配置。" placement="top"><el-icon class="field-help"><QuestionFilled /></el-icon></el-tooltip></template>
+          <el-select v-model="editFolder.profileIds" multiple placeholder="选择转换配置">
             <el-option
               v-for="profile in store.profiles"
               :key="profile.id"
@@ -313,11 +328,14 @@ const handleEvents = async (folder: WatchFolder) => {
           </el-select>
         </el-form-item>
 
-        <el-form-item label="自动处理">
+        <div class="form-section-title form-item-full">处理方式</div>
+        <el-form-item>
+          <template #label>自动处理<el-tooltip content="开启后，发现稳定的音频文件会自动创建转换任务。" placement="top"><el-icon class="field-help"><QuestionFilled /></el-icon></el-tooltip></template>
           <el-switch v-model="editFolder.autoProcess" />
         </el-form-item>
 
-        <el-form-item label="递归扫描">
+        <el-form-item>
+          <template #label>递归扫描<el-tooltip content="开启后，会同时扫描输入目录下的所有子目录。" placement="top"><el-icon class="field-help"><QuestionFilled /></el-icon></el-tooltip></template>
           <el-switch v-model="editFolder.recursiveScan" />
         </el-form-item>
 
@@ -384,5 +402,57 @@ h1 {
 
 .operation-buttons :deep(.el-button + .el-button) {
   margin-left: 0;
+}
+
+.watch-folder-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 20px;
+}
+
+.watch-folder-form :deep(.el-form-item) {
+  min-width: 0;
+  margin-bottom: 18px;
+}
+
+.watch-folder-form :deep(.el-form-item__label) {
+  width: auto !important;
+  height: auto;
+  padding: 0 0 8px;
+  color: #303133;
+  font-weight: 500;
+  line-height: 20px;
+}
+
+.watch-folder-form :deep(.el-form-item__content) {
+  min-width: 0;
+}
+
+.form-item-full {
+  grid-column: 1 / -1;
+}
+
+.form-section-title {
+  grid-column: 1 / -1;
+  margin: 4px 0 14px;
+  padding-left: 10px;
+  color: #409eff;
+  border-left: 3px solid #409eff;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 20px;
+}
+
+.field-help {
+  margin-left: 4px;
+  color: #909399;
+  cursor: help;
+  vertical-align: -2px;
+}
+
+@media (max-width: 700px) {
+  .watch-folder-form {
+    grid-template-columns: 1fr;
+  }
 }
 </style>
