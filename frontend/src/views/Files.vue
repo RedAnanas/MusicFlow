@@ -403,15 +403,19 @@ const handleBatchConvert = () => {
     <el-dialog
       v-model="showConvertDialog"
       :title="conversionFiles.length > 1 ? `批量转换（${conversionFiles.length} 个文件）` : '转换文件'"
-      width="500px"
+      width="680px"
     >
       <div v-if="currentFile">
-        <el-form label-width="120px">
-          <el-form-item label="源文件">
+        <el-form label-position="top" class="conversion-form">
+          <div class="conversion-section-title">转换内容</div>
+          <el-form-item class="conversion-item-full">
+            <template #label>源文件<el-tooltip content="单个转换显示文件名；批量转换显示已选文件数量。" placement="top"><el-icon class="conversion-field-help"><QuestionFilled /></el-icon></el-tooltip></template>
             <span v-if="conversionFiles.length === 1">{{ currentFile.filename }}</span>
             <span v-else>已选择 {{ conversionFiles.length }} 个文件</span>
           </el-form-item>
-          <el-form-item label="选择配置">
+          <div class="conversion-section-title">转换设置</div>
+          <el-form-item class="conversion-item-full">
+            <template #label>转换配置<el-tooltip content="决定输出格式、编码参数，以及是否交接给 Apple Music。" placement="top"><el-icon class="conversion-field-help"><QuestionFilled /></el-icon></el-tooltip></template>
             <el-select v-model="selectedProfile" style="width: 100%">
               <el-option
                 v-for="profile in store.profiles"
@@ -421,7 +425,8 @@ const handleBatchConvert = () => {
               />
             </el-select>
           </el-form-item>
-          <el-form-item label="输出路径">
+          <el-form-item class="conversion-item-full">
+            <template #label>输出路径<el-tooltip content="可选的 WSL 输出目录；留空则使用全局输出目录。" placement="top"><el-icon class="conversion-field-help"><QuestionFilled /></el-icon></el-tooltip></template>
             <el-input v-model="outputDir" placeholder="留空则使用全局输出目录" clearable />
             <div style="color: #666; font-size: 12px; margin-top: 4px;">可填写 WSL 绝对目录，例如 /mnt/d/Music/output/M4A/AAC/Converted</div>
           </el-form-item>
@@ -488,6 +493,48 @@ h1 {
 
 .file-detail {
   padding: 10px;
+}
+
+.conversion-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 20px;
+}
+
+.conversion-form :deep(.el-form-item) {
+  min-width: 0;
+  margin-bottom: 18px;
+}
+
+.conversion-form :deep(.el-form-item__label) {
+  width: auto !important;
+  height: auto;
+  padding: 0 0 8px;
+  color: #303133;
+  font-weight: 500;
+  line-height: 20px;
+}
+
+.conversion-item-full {
+  grid-column: 1 / -1;
+}
+
+.conversion-section-title {
+  grid-column: 1 / -1;
+  margin: 4px 0 14px;
+  padding-left: 10px;
+  color: #409eff;
+  border-left: 3px solid #409eff;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 20px;
+}
+
+.conversion-field-help {
+  margin-left: 4px;
+  color: #909399;
+  cursor: help;
+  vertical-align: -2px;
 }
 
 @media (max-width: 1000px) {
