@@ -7,7 +7,7 @@
 1. 从 `develop` 创建 `feature/<name>` 或 `fix/<name>` 分支。
 2. 只修改与目标直接相关的文件。
 3. 为缺陷或新行为补充测试。
-4. 执行 `.\scripts\check.ps1`。
+4. 执行 `./scripts/check.sh`。
 5. 经用户允许后提交并合并到 `develop`。
 6. 用户验证后，获得明确确认才能合并到 `main`。
 

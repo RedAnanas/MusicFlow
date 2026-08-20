@@ -20,7 +20,7 @@ const newFolder = ref({
   profileIds: [] as string[],
   autoProcess: true,
   recursiveScan: true,
-  outputDir: 'D:/Music/output',
+  outputDir: '/mnt/d/Music/output',
 })
 
 const editFolder = ref({
@@ -60,7 +60,7 @@ const handleCreate = async () => {
       profileIds: [],
       autoProcess: true,
       recursiveScan: true,
-      outputDir: 'D:/Music/output',
+      outputDir: '/mnt/d/Music/output',
     }
   } catch (error) {
     console.error('>>> handleCreate error:', error)

@@ -17,7 +17,7 @@ fix/<name>           缺陷修复，从 develop 创建
 2. 从 `develop` 创建目标明确的功能或修复分支。
 3. 定义可验证的成功标准。
 4. 实施最小改动，并补充对应测试。
-5. 执行 `.\scripts\check.ps1`。
+5. 在 WSL 中执行 `./scripts/check.sh`。
 6. 检查差异，确保没有运行数据和无关改动。
 7. 自动重新部署本地项目，确认前后端 HTTP 状态正常。
 8. 向用户提供访问地址和验证要点，等待用户手动验证。
@@ -46,8 +46,8 @@ fix/<name>           缺陷修复，从 develop 创建
 
 统一检查命令：
 
-```powershell
-.\scripts\check.ps1
+```bash
+./scripts/check.sh
 ```
 
 ## 运行数据管理

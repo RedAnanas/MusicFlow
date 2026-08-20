@@ -5,8 +5,8 @@
 ### 1️⃣ 在 Windows 上打包项目
 
 ```bash
-# 使用 Git Bash 或 PowerShell
-cd D:/Documents/AI
+# 在 WSL 中执行
+cd /mnt/d/Documents/AI
 
 # 创建压缩包
 tar -czvf MusicFlow.tar.gz MusicFlow/

@@ -122,6 +122,8 @@ export const useAppStore = defineStore('app', () => {
         filenameTemplate: p.filename_template,
         directoryTemplate: p.directory_template,
         outputDir: p.output_dir,
+        appleMusicHandoffEnabled: p.apple_music_handoff_enabled,
+        appleMusicImportDir: p.apple_music_import_dir,
         version: p.version,
       }))
     } catch (error) {
@@ -145,6 +147,8 @@ export const useAppStore = defineStore('app', () => {
         cover_policy: profile.coverPolicy,
         filename_template: profile.filenameTemplate,
         directory_template: profile.directoryTemplate,
+        apple_music_handoff_enabled: profile.appleMusicHandoffEnabled ?? false,
+        apple_music_import_dir: profile.appleMusicImportDir || null,
       }
 
       console.log('Creating profile with data:', apiData)
@@ -166,6 +170,8 @@ export const useAppStore = defineStore('app', () => {
         filenameTemplate: response.data.filename_template,
         directoryTemplate: response.data.directory_template,
         outputDir: response.data.output_dir,
+        appleMusicHandoffEnabled: response.data.apple_music_handoff_enabled,
+        appleMusicImportDir: response.data.apple_music_import_dir,
         version: response.data.version,
       }
 
@@ -190,6 +196,12 @@ export const useAppStore = defineStore('app', () => {
       if (profile.coverPolicy) apiData.cover_policy = profile.coverPolicy
       if (profile.filenameTemplate) apiData.filename_template = profile.filenameTemplate
       if (profile.directoryTemplate) apiData.directory_template = profile.directoryTemplate
+      if (profile.appleMusicHandoffEnabled !== undefined) {
+        apiData.apple_music_handoff_enabled = profile.appleMusicHandoffEnabled
+      }
+      if (profile.appleMusicImportDir !== undefined) {
+        apiData.apple_music_import_dir = profile.appleMusicImportDir || null
+      }
 
       console.log('Store: Updating profile', id, apiData)
       const response = await axios.put(`/api/profiles/${id}`, apiData)
@@ -211,6 +223,8 @@ export const useAppStore = defineStore('app', () => {
         filenameTemplate: response.data.filename_template,
         directoryTemplate: response.data.directory_template,
         outputDir: response.data.output_dir,
+        appleMusicHandoffEnabled: response.data.apple_music_handoff_enabled,
+        appleMusicImportDir: response.data.apple_music_import_dir,
         version: response.data.version,
       }
 

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref, computed, watch } from 'vue'
+import { onMounted, onUnmounted, ref, computed, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAppStore } from '../stores/app'
 import TablePagination from '../components/TablePagination.vue'
@@ -13,6 +13,7 @@ const selectedTasks = ref<Task[]>([])
 const actionLoading = ref(false)
 const profilesLoaded = ref(false)
 const taskApiBase = 'http://localhost:8082/api/tasks'
+let refreshTimer: ReturnType<typeof setInterval> | null = null
 
 const statusFilters = [
   { label: '全部', value: 'all' },
@@ -25,9 +26,14 @@ const statusFilters = [
 
 onMounted(() => {
   store.fetchTasks()
+  refreshTimer = setInterval(() => store.fetchTasks(), 5000)
   store.fetchProfiles().finally(() => {
     profilesLoaded.value = true
   })
+})
+
+onUnmounted(() => {
+  if (refreshTimer) clearInterval(refreshTimer)
 })
 
 const filteredTasks = computed(() => {
@@ -110,6 +116,24 @@ const getStatusLabel = (status: string) => {
     skipped: '已跳过',
   }
   return labels[status] || status
+}
+
+const getAppleMusicStatusType = (status?: string) => {
+  const types: Record<string, string> = {
+    waiting: 'warning',
+    received: 'success',
+    failed: 'danger',
+  }
+  return status ? types[status] || 'info' : 'info'
+}
+
+const getAppleMusicStatusLabel = (status?: string) => {
+  const labels: Record<string, string> = {
+    waiting: '等待接收',
+    received: '已接收',
+    failed: '交接失败',
+  }
+  return status ? labels[status] || status : '--'
 }
 
 const formatDuration = (startTime?: string, endTime?: string) => {
@@ -298,13 +322,13 @@ const handleBatchRetry = async () => {
 
         <el-table-column prop="source_file" label="源文件" min-width="200">
           <template #default="{ row }">
-            {{ row.source_file?.split('/').pop()?.split('\\\\').pop() }}
+            {{ row.source_file?.split('/').pop() }}
           </template>
         </el-table-column>
 
         <el-table-column prop="output_file" label="输出文件" min-width="200">
           <template #default="{ row }">
-            {{ row.output_file?.split('/').pop()?.split('\\\\').pop() }}
+            {{ row.output_file?.split('/').pop() }}
           </template>
         </el-table-column>
 
@@ -324,6 +348,19 @@ const handleBatchRetry = async () => {
           <template #default="{ row }">
             <el-tag :type="getStatusType(row.status)" size="small">
               {{ getStatusLabel(row.status) }}
+            </el-tag>
+          </template>
+        </el-table-column>
+
+        <el-table-column label="Apple Music" width="120">
+          <template #default="{ row }">
+            <el-tooltip v-if="row.apple_music_error" :content="row.apple_music_error" placement="top">
+              <el-tag :type="getAppleMusicStatusType(row.apple_music_status)" size="small">
+                {{ getAppleMusicStatusLabel(row.apple_music_status) }}
+              </el-tag>
+            </el-tooltip>
+            <el-tag v-else :type="getAppleMusicStatusType(row.apple_music_status)" size="small">
+              {{ getAppleMusicStatusLabel(row.apple_music_status) }}
             </el-tag>
           </template>
         </el-table-column>

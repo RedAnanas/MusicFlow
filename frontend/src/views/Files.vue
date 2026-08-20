@@ -2,6 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useAppStore } from '../stores/app'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import axios from 'axios'
 import TablePagination from '../components/TablePagination.vue'
 import type { FileItem } from '../types'
 
@@ -15,22 +16,17 @@ const store = useAppStore()
 const selectedFiles = ref<FileItem[]>([])
 const searchQuery = ref('')
 const formatFilter = ref('')
-const statusFilter = ref('')
 const selectedFolder = ref('')
 const currentPage = ref(1)
 const pageSize = ref(20)
 const showDetailDialog = ref(false)
 const showConvertDialog = ref(false)
 const currentFile = ref<FileItem | null>(null)
+const conversionFiles = ref<FileItem[]>([])
 const selectedProfile = ref('apple-music-aac-256')
+const outputDir = ref('')
 
 const formats = ['mp3', 'flac', 'm4a', 'aac', 'alac', 'wav', 'ogg', 'opus']
-const statuses = [
-  { label: '待处理', value: 'pending' },
-  { label: '转换中', value: 'converting' },
-  { label: '已完成', value: 'completed' },
-  { label: '失败', value: 'failed' },
-]
 const folderTreeProps = {
   children: 'children',
   label: 'label',
@@ -124,12 +120,11 @@ const filteredFiles = computed(() => {
     const matchesKeyword = !keyword || [file.filename, file.artist, file.album, file.title]
       .some(value => (value || '').toLowerCase().includes(keyword))
     const matchesFormat = !formatFilter.value || file.format === formatFilter.value
-    const matchesStatus = !statusFilter.value || file.status === statusFilter.value
     const fileDirectory = getDirectoryPath(file.path)
     const matchesFolder = !selectedDirectory ||
       fileDirectory === selectedDirectory ||
       fileDirectory.startsWith(directoryPrefix)
-    return matchesKeyword && matchesFormat && matchesStatus && matchesFolder
+    return matchesKeyword && matchesFormat && matchesFolder
   })
 })
 
@@ -138,7 +133,7 @@ const paginatedFiles = computed(() => {
   return filteredFiles.value.slice(start, start + pageSize.value)
 })
 
-watch([searchQuery, formatFilter, statusFilter, selectedFolder], () => {
+watch([searchQuery, formatFilter, selectedFolder], () => {
   currentPage.value = 1
   selectedFiles.value = []
 })
@@ -179,26 +174,6 @@ const formatSize = (bytes: number) => {
   return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB'
 }
 
-const getStatusType = (status: string) => {
-  const types: Record<string, string> = {
-    pending: 'warning',
-    converting: '',
-    completed: 'success',
-    failed: 'danger',
-  }
-  return types[status] || 'info'
-}
-
-const getStatusLabel = (status: string) => {
-  const labels: Record<string, string> = {
-    pending: '待处理',
-    converting: '转换中',
-    completed: '已完成',
-    failed: '失败',
-  }
-  return labels[status] || status
-}
-
 const handleView = (file: FileItem) => {
   currentFile.value = file
   showDetailDialog.value = true
@@ -206,6 +181,8 @@ const handleView = (file: FileItem) => {
 
 const handleConvert = (file: FileItem) => {
   currentFile.value = file
+  conversionFiles.value = [file]
+  outputDir.value = ''
   showConvertDialog.value = true
 }
 
@@ -216,46 +193,25 @@ const executeConvert = async () => {
   }
 
   try {
-    // 构建输出路径
-    const outputPath = `D:/Music/output/${currentFile.value.filename.replace('.flac', '.m4a')}`
-
-    // 调用 API 创建转换任务
-    const response = await fetch('http://localhost:8082/api/tasks/', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        source_file: currentFile.value.path,
-        output_file: outputPath,
-        profile_id: selectedProfile.value
-      })
+    const response = await axios.post('/api/files/batch-convert', {
+      file_ids: conversionFiles.value.map(file => file.id),
+      profile_id: selectedProfile.value,
+      output_dir: outputDir.value.trim() || null,
     })
 
-    if (response.ok) {
-      ElMessage.success('转换任务已创建')
-
-      // 触发转换引擎执行
-      try {
-        const convertResponse = await fetch(`http://localhost:8082/api/files/${currentFile.value.id}/convert`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify([selectedProfile.value])
-        })
-
-        if (convertResponse.ok) {
-          ElMessage.success('转换已启动')
-        }
-      } catch (err) {
-        console.log('Convert trigger response:', err)
-      }
-
-      showConvertDialog.value = false
-      // 刷新任务列表
-      store.fetchTasks()
+    const created = response.data.converted.filter((item: { status: string }) => item.status === 'queued').length
+    if (created) {
+      ElMessage.success(`已创建 ${created} 个转换任务`)
     } else {
-      ElMessage.error('创建转换任务失败')
+      ElMessage.info('未创建新任务，目标文件或活动任务已存在')
     }
+    if (response.data.errors.length) {
+      ElMessage.warning(`${response.data.errors.length} 个文件创建任务失败`)
+    }
+      showConvertDialog.value = false
+      await store.fetchTasks()
   } catch (error) {
-    ElMessage.error('网络错误')
+    ElMessage.error('创建转换任务失败')
   }
 }
 
@@ -285,7 +241,10 @@ const handleBatchConvert = () => {
     ElMessage.warning('请先选择文件')
     return
   }
-  ElMessage.info(`已选择 ${selectedFiles.value.length} 个文件（批量转换功能待实现）`)
+  currentFile.value = selectedFiles.value[0]
+  conversionFiles.value = [...selectedFiles.value]
+  outputDir.value = ''
+  showConvertDialog.value = true
 }
 </script>
 
@@ -314,17 +273,7 @@ const handleBatchConvert = () => {
             />
           </el-select>
         </el-col>
-        <el-col :span="4">
-          <el-select v-model="statusFilter" placeholder="状态" clearable>
-            <el-option
-              v-for="status in statuses"
-              :key="status.value"
-              :label="status.label"
-              :value="status.value"
-            />
-          </el-select>
-        </el-col>
-        <el-col :span="8">
+        <el-col :span="12">
           <el-button type="primary" @click="store.fetchFiles()">
             <el-icon><Refresh /></el-icon>
             刷新
@@ -397,14 +346,6 @@ const handleBatchConvert = () => {
 
             <el-table-column prop="album" label="专辑" width="150" />
 
-            <el-table-column prop="status" label="状态" width="100">
-              <template #default="{ row }">
-                <el-tag :type="getStatusType(row.status)" size="small">
-                  {{ getStatusLabel(row.status) }}
-                </el-tag>
-              </template>
-            </el-table-column>
-
             <el-table-column label="操作" width="150" fixed="right">
               <template #default="{ row }">
                 <el-button type="primary" link size="small" @click="handleView(row)">查看</el-button>
@@ -461,13 +402,14 @@ const handleBatchConvert = () => {
     <!-- 转换对话框 -->
     <el-dialog
       v-model="showConvertDialog"
-      title="转换文件"
+      :title="conversionFiles.length > 1 ? `批量转换（${conversionFiles.length} 个文件）` : '转换文件'"
       width="500px"
     >
       <div v-if="currentFile">
         <el-form label-width="120px">
           <el-form-item label="源文件">
-            <span>{{ currentFile.filename }}</span>
+            <span v-if="conversionFiles.length === 1">{{ currentFile.filename }}</span>
+            <span v-else>已选择 {{ conversionFiles.length }} 个文件</span>
           </el-form-item>
           <el-form-item label="选择配置">
             <el-select v-model="selectedProfile" style="width: 100%">
@@ -480,9 +422,8 @@ const handleBatchConvert = () => {
             </el-select>
           </el-form-item>
           <el-form-item label="输出路径">
-            <span style="color: #666; font-size: 12px;">
-              D:/Music/output/{{ currentFile.filename.replace('.flac', '.m4a') }}
-            </span>
+            <el-input v-model="outputDir" placeholder="留空则使用全局输出目录" clearable />
+            <div style="color: #666; font-size: 12px; margin-top: 4px;">可填写 WSL 绝对目录，例如 /mnt/d/Music/output/M4A/AAC/Converted</div>
           </el-form-item>
         </el-form>
       </div>

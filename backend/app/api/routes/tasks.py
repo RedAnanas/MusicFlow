@@ -48,6 +48,24 @@ class TaskResponse(BaseModel):
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
     error: Optional[str] = None
+    apple_music_status: Optional[str] = None
+    apple_music_import_file: Optional[str] = None
+    apple_music_error: Optional[str] = None
+
+
+def refresh_apple_music_statuses():
+    """刷新已交接任务的本地接收状态，不检查 Apple 云端上传状态。"""
+    from app.services.apple_music_handoff import apple_music_handoff_service
+
+    changed = False
+    for task in tasks_cache.values():
+        if task.apple_music_status != "waiting" or not task.apple_music_import_file:
+            continue
+        if apple_music_handoff_service.is_received(task.apple_music_import_file):
+            task.apple_music_status = "received"
+            changed = True
+    if changed:
+        save_tasks()
 
 
 def load_tasks():
@@ -55,7 +73,7 @@ def load_tasks():
     global tasks_cache
     try:
         if TASKS_FILE.exists():
-            with open(TASKS_FILE, 'r', encoding='utf-8') as f:
+            with open(TASKS_FILE, 'r', encoding='utf-8-sig') as f:
                 data = json.load(f)
                 for task_id, task_dict in data.items():
                     # 转换时间字符串为 datetime 对象
@@ -95,7 +113,8 @@ def save_tasks():
 
 
 # 进度回调函数 - 更新 tasks_cache 中的任务状态
-def update_task_progress(task_id: str, progress: float, status: str = None):
+def update_task_progress(task_id: str, progress: float, status: str = None, apple_music_status: str = None,
+                         apple_music_import_file: str = None, apple_music_error: str = None):
     """更新任务进度"""
     if task_id in tasks_cache:
         task = tasks_cache[task_id]
@@ -104,6 +123,10 @@ def update_task_progress(task_id: str, progress: float, status: str = None):
             task.status = TaskStatus(status)
         if status in ['success', 'failed', 'cancelled']:
             task.end_time = datetime.now()
+        if apple_music_status is not None:
+            task.apple_music_status = apple_music_status
+            task.apple_music_import_file = apple_music_import_file
+            task.apple_music_error = apple_music_error
         logger.info(f"Task {task_id} progress: {progress}%, status: {status}")
         # 保存任务到文件
         save_tasks()
@@ -115,6 +138,7 @@ async def get_tasks(
     limit: int = Query(100, ge=1, le=1000, description="返回数量限制")
 ):
     """获取所有任务"""
+    refresh_apple_music_statuses()
     tasks = list(tasks_cache.values())
 
     # 状态筛选
@@ -219,7 +243,10 @@ async def enqueue_conversion_task(
                 progress_callback=lambda t: update_task_progress(
                     t.id,
                     t.progress or 0,
-                    t.status.value if t.status else None
+                    t.status.value if t.status else None,
+                    t.apple_music_status,
+                    t.apple_music_import_file,
+                    t.apple_music_error,
                 )
             )
             if not submitted:

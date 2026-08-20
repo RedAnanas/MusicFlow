@@ -33,28 +33,24 @@ MusicFlow/
 
 环境要求：Python 3.12+、Node.js 18+、FFmpeg/FFprobe。
 
-```powershell
-pip install -r backend/requirements-dev.txt
-Copy-Item backend/.env.example backend/.env
-Set-Location frontend
-npm install
-Set-Location ..
+```bash
+./scripts/setup-wsl.sh
 ```
 
-按本机环境修改 `backend/.env`，然后统一通过项目脚本管理服务：
+按本机环境修改 `backend/.env`，目录使用 WSL 形式，例如 `/mnt/d/Music/source`。然后统一通过项目脚本管理服务：
 
-```powershell
+```bash
 # 启动
-.\scripts\musicflow.ps1 start
+./scripts/musicflow.sh start
 
 # 状态
-.\scripts\musicflow.ps1 status
+./scripts/musicflow.sh status
 
 # 重启
-.\scripts\musicflow.ps1 restart
+./scripts/musicflow.sh restart
 
 # 停止
-.\scripts\musicflow.ps1 stop
+./scripts/musicflow.sh stop
 ```
 
 - 前端：http://127.0.0.1:3000
@@ -65,8 +61,8 @@ Set-Location ..
 
 提交前必须执行：
 
-```powershell
-.\scripts\check.ps1
+```bash
+./scripts/check.sh
 ```
 
 该脚本依次执行后端测试、Python 编译检查、前端生产构建、Compose 配置检查和 Git 空白错误检查。GitHub Actions 会在推送和拉取请求中执行同等质量门禁。
@@ -75,10 +71,10 @@ Set-Location ..
 
 默认使用项目内的 `data/` 作为音乐目录；也可通过环境变量映射真实路径：
 
-```powershell
-$env:MUSIC_SOURCE_PATH = 'D:\Music\source'
-$env:MUSIC_OUTPUT_PATH = 'D:\Music\output'
-$env:MUSIC_ARCHIVE_PATH = 'D:\Music\archive'
+```bash
+export MUSIC_SOURCE_PATH=/mnt/d/Music/source
+export MUSIC_OUTPUT_PATH=/mnt/d/Music/output
+export MUSIC_ARCHIVE_PATH=/mnt/d/Music/archive
 docker compose up -d --build
 ```
 

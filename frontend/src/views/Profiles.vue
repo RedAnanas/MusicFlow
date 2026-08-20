@@ -19,6 +19,8 @@ interface ProfileForm {
   coverPolicy: Profile['coverPolicy']
   filenameTemplate: string
   directoryTemplate: string
+  appleMusicHandoffEnabled: boolean
+  appleMusicImportDir: string
 }
 
 const createDefaultProfileForm = (): ProfileForm => ({
@@ -31,6 +33,8 @@ const createDefaultProfileForm = (): ProfileForm => ({
   coverPolicy: 'embed',
   filenameTemplate: '{title}.{extension}',
   directoryTemplate: '{album_artist}/{year} - {album}',
+  appleMusicHandoffEnabled: false,
+  appleMusicImportDir: '',
 })
 
 const newProfile = ref<ProfileForm>(createDefaultProfileForm())
@@ -110,6 +114,8 @@ const handleEdit = (profile: Profile) => {
     coverPolicy: profile.coverPolicy,
     filenameTemplate: profile.filenameTemplate,
     directoryTemplate: profile.directoryTemplate,
+    appleMusicHandoffEnabled: profile.appleMusicHandoffEnabled,
+    appleMusicImportDir: profile.appleMusicImportDir || '',
   }
   showEditDialog.value = true
 }
@@ -128,6 +134,8 @@ const handleUpdate = async () => {
       coverPolicy: editProfile.value.coverPolicy,
       filenameTemplate: editProfile.value.filenameTemplate,
       directoryTemplate: editProfile.value.directoryTemplate,
+      appleMusicHandoffEnabled: editProfile.value.appleMusicHandoffEnabled,
+      appleMusicImportDir: editProfile.value.appleMusicImportDir,
     }
 
     console.log('Updating profile:', selectedProfile.value.id, updateData)
@@ -213,6 +221,13 @@ const handleDelete = async (id: string) => {
         <el-table-column prop="coverPolicy" label="封面策略" width="130">
           <template #default="{ row }">
             {{ getCoverPolicyLabel(row.coverPolicy) }}
+          </template>
+        </el-table-column>
+
+        <el-table-column label="Apple Music" width="130">
+          <template #default="{ row }">
+            <el-tag v-if="row.appleMusicHandoffEnabled" type="success" size="small">自动交接</el-tag>
+            <span v-else>未启用</span>
           </template>
         </el-table-column>
 
@@ -306,6 +321,18 @@ const handleDelete = async (id: string) => {
         <el-form-item label="目录模板">
           <el-input v-model="newProfile.directoryTemplate" placeholder="{album_artist}/{year} - {album}" />
         </el-form-item>
+
+        <el-form-item label="Apple Music 交接">
+          <el-switch v-model="newProfile.appleMusicHandoffEnabled" />
+        </el-form-item>
+
+        <el-form-item v-if="newProfile.appleMusicHandoffEnabled" label="自动导入目录">
+          <el-input
+            v-model="newProfile.appleMusicImportDir"
+            placeholder="/mnt/d/Music/output/M4A/AAC/Automatically Add to Apple Music"
+          />
+          <div class="form-tip">输出目录应设置为独立的 Converted 目录，不能直接使用自动导入目录。</div>
+        </el-form-item>
       </el-form>
 
       <template #footer>
@@ -390,6 +417,18 @@ const handleDelete = async (id: string) => {
         <el-form-item label="目录模板">
           <el-input v-model="editProfile.directoryTemplate" placeholder="{album_artist}/{year} - {album}" />
         </el-form-item>
+
+        <el-form-item label="Apple Music 交接">
+          <el-switch v-model="editProfile.appleMusicHandoffEnabled" />
+        </el-form-item>
+
+        <el-form-item v-if="editProfile.appleMusicHandoffEnabled" label="自动导入目录">
+          <el-input
+            v-model="editProfile.appleMusicImportDir"
+            placeholder="/mnt/d/Music/output/M4A/AAC/Automatically Add to Apple Music"
+          />
+          <div class="form-tip">输出目录应设置为独立的 Converted 目录，不能直接使用自动导入目录。</div>
+        </el-form-item>
       </el-form>
 
       <template #footer>
@@ -415,5 +454,12 @@ const handleDelete = async (id: string) => {
 h1 {
   margin: 0;
   color: #303133;
+}
+
+.form-tip {
+  margin-top: 6px;
+  color: #909399;
+  font-size: 12px;
+  line-height: 1.5;
 }
 </style>

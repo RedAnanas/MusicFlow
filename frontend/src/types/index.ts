@@ -45,7 +45,6 @@ export interface FileItem {
   track?: string
   year?: string
   genre?: string
-  status: 'pending' | 'converting' | 'completed' | 'failed'
 }
 
 export interface Profile {
@@ -63,6 +62,8 @@ export interface Profile {
   filenameTemplate: string
   directoryTemplate: string
   outputDir?: string
+  appleMusicHandoffEnabled: boolean
+  appleMusicImportDir?: string
   version: number
 }
 
@@ -76,6 +77,9 @@ export interface Task {
   startTime?: string
   endTime?: string
   error?: string
+  apple_music_status?: 'waiting' | 'received' | 'failed'
+  apple_music_import_file?: string
+  apple_music_error?: string
 }
 
 export interface WatchFolder {

@@ -7,6 +7,7 @@ from datetime import datetime
 from app.models import Task, TaskStatus, Profile
 from app.core import ffprobe_service, ffmpeg_service, metadata_service
 from app.services.config_manager import config_manager
+from app.services.apple_music_handoff import apple_music_handoff_service
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -227,6 +228,24 @@ class ConversionEngine:
                     logger.warning(f"No metadata found in source file: {task.source_file}")
             else:
                 logger.info(f"Metadata policy is '{profile.metadata_policy.value}', skipping metadata copy")
+
+            if profile.apple_music_handoff_enabled:
+                if not profile.apple_music_import_dir:
+                    task.apple_music_status = "failed"
+                    task.apple_music_error = "未配置 Apple Music 自动导入目录"
+                    logger.warning(task.apple_music_error)
+                else:
+                    try:
+                        task.apple_music_import_file = apple_music_handoff_service.handoff(
+                            task.output_file,
+                            profile.apple_music_import_dir,
+                        )
+                        task.apple_music_status = "waiting"
+                        logger.info(f"已交接给 Apple Music：{task.apple_music_import_file}")
+                    except Exception as exc:
+                        task.apple_music_status = "failed"
+                        task.apple_music_error = str(exc)
+                        logger.error(f"Apple Music 交接失败：{exc}")
 
             # 任务完成
             task.status = TaskStatus.SUCCESS

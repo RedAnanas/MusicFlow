@@ -361,7 +361,7 @@ def read_metadata(self, file_path: str) -> Optional[Dict]:
 
 ```bash
 # 查看后端日志
-tail -100 D:/Documents/AI/MusicFlow/backend/logs/app.log
+tail -100 /mnt/d/Documents/AI/MusicFlow/logs/app.log
 ```
 
 ---

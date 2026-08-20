@@ -32,7 +32,15 @@ class FileResponse(BaseModel):
     track: Optional[str] = None
     year: Optional[str] = None
     genre: Optional[str] = None
-    status: str = 'pending'
+
+
+class FileConvertRequest(BaseModel):
+    profile_id: str
+    output_dir: Optional[str] = None
+
+
+class FileBatchConvertRequest(FileConvertRequest):
+    file_ids: List[str]
 
 
 class MetadataUpdate(BaseModel):
@@ -54,7 +62,6 @@ class MetadataUpdate(BaseModel):
 async def get_files(
     search: Optional[str] = Query(None, description="搜索关键词"),
     format: Optional[str] = Query(None, description="格式筛选"),
-    status: Optional[str] = Query(None, description="状态筛选"),
     limit: int = Query(100, ge=1, le=1000, description="返回数量限制")
 ):
     """获取所有音乐文件"""
@@ -103,7 +110,6 @@ async def get_files(
                 "track": metadata.get("track") if metadata else None,
                 "year": metadata.get("date") if metadata else None,
                 "genre": metadata.get("genre") if metadata else None,
-                "status": "pending",
             }
 
             # 应用搜索过滤
@@ -119,10 +125,6 @@ async def get_files(
 
             # 应用格式过滤
             if format and file_data["format"] != format.lower():
-                continue
-
-            # 应用状态过滤
-            if status and file_data["status"] != status:
                 continue
 
             files.append(file_data)
@@ -204,48 +206,68 @@ async def update_file_metadata(file_id: str, metadata_update: MetadataUpdate):
     return {"status": "success", "message": "Metadata updated"}
 
 
-@router.post("/{file_id}/convert")
-async def convert_file(file_id: str, profile_ids: List[str]):
-    """转换单个文件"""
+async def queue_file_conversion(file_id: str, request: FileConvertRequest):
+    """按配置创建单个转换任务。"""
     if file_id not in files_cache:
         raise HTTPException(status_code=404, detail="File not found")
 
     file_data = files_cache[file_id]
+    source_path = Path(file_data["path"])
+    if not source_path.is_file():
+        raise HTTPException(status_code=404, detail="文件不存在")
 
-    # TODO: 实现实际的转换逻辑
-    logger.info(f"Converting file {file_data['filename']} with profiles {profile_ids}")
+    from app.api.routes.tasks import TaskCreate, enqueue_conversion_task
+    from app.services.profile_manager import profile_manager
 
-    return {
-        "status": "success",
-        "message": f"Conversion started for {file_data['filename']}",
-        "task_ids": ["task-placeholder"]
-    }
+    profile = profile_manager.get_profile(request.profile_id)
+    if not profile or not profile.enabled:
+        raise HTTPException(status_code=400, detail="转换配置不可用")
 
+    output_root = Path(request.output_dir or settings.MUSIC_OUTPUT_DIR)
+    if not output_root.is_absolute():
+        raise HTTPException(status_code=400, detail="输出路径必须为绝对路径")
+    try:
+        output_root.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail=f"无法创建输出目录：{exc}") from exc
+
+    output_file = output_root / source_path.name
+    output_file = output_file.with_suffix(f".{profile.output_format.value}")
+    task = await enqueue_conversion_task(
+        TaskCreate(
+            source_file=str(source_path),
+            output_file=str(output_file),
+            profile_id=profile.id,
+        ),
+        skip_existing=True,
+    )
+    if task is None:
+        return {"status": "skipped", "output_file": str(output_file), "task_id": None}
+    return {"status": "queued", "output_file": str(output_file), "task_id": task.id}
+
+
+@router.post("/{file_id}/convert")
+async def convert_file(file_id: str, request: FileConvertRequest):
+    """转换单个文件。"""
+    result = await queue_file_conversion(file_id, request)
+    return {"status": "success", "converted": [result]}
 
 @router.post("/batch-convert")
-async def batch_convert_files(file_ids: List[str], profile_ids: List[str]):
-    """批量转换文件"""
+async def batch_convert_files(request: FileBatchConvertRequest):
+    """批量创建转换任务。"""
     converted_files = []
     errors = []
 
-    for file_id in file_ids:
-        if file_id not in files_cache:
-            errors.append({"file_id": file_id, "error": "File not found"})
-            continue
-
-        file_data = files_cache[file_id]
-        converted_files.append({
-            "file_id": file_id,
-            "filename": file_data["filename"],
-            "status": "queued"
-        })
-
-    # TODO: 实现实际的批量转换逻辑
-    logger.info(f"Batch converting {len(converted_files)} files with profiles {profile_ids}")
+    for file_id in request.file_ids:
+        try:
+            result = await queue_file_conversion(file_id, request)
+            converted_files.append({"file_id": file_id, **result})
+        except HTTPException as exc:
+            errors.append({"file_id": file_id, "error": exc.detail})
 
     return {
         "status": "success",
-        "message": f"Batch conversion started for {len(converted_files)} files",
+        "message": f"已创建 {sum(item['status'] == 'queued' for item in converted_files)} 个转换任务",
         "converted": converted_files,
         "errors": errors
     }
