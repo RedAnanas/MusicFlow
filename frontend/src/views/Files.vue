@@ -25,6 +25,7 @@ const currentFile = ref<FileItem | null>(null)
 const conversionFiles = ref<FileItem[]>([])
 const selectedProfile = ref('apple-music-aac-256')
 const outputDir = ref('')
+const coverErrors = ref(new Set<string>())
 
 const formats = ['mp3', 'flac', 'm4a', 'aac', 'alac', 'wav', 'ogg', 'opus']
 const folderTreeProps = {
@@ -147,6 +148,10 @@ watch(() => filteredFiles.value.length, total => {
   if (currentPage.value > lastPage) currentPage.value = lastPage
 })
 
+watch(paginatedFiles, files => {
+  if (!currentFile.value && files.length) currentFile.value = files[0]
+}, { immediate: true })
+
 const handleSelectionChange = (selection: FileItem[]) => {
   selectedFiles.value = selection
 }
@@ -172,6 +177,13 @@ const formatSize = (bytes: number) => {
   if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
   if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
   return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB'
+}
+
+const getCoverUrl = (file: FileItem) => `/api/files/${file.id}/cover`
+
+const markCoverError = (fileId: string) => {
+  coverErrors.value.add(fileId)
+  coverErrors.value = new Set(coverErrors.value)
 }
 
 const handleView = (file: FileItem) => {
@@ -249,12 +261,18 @@ const handleBatchConvert = () => {
 </script>
 
 <template>
-  <div class="files-page">
-    <h1>音乐文件</h1>
+  <div class="files-page product-page">
+    <div class="page-header">
+      <div class="page-title-block">
+        <h1>音乐库</h1>
+        <p>浏览 NAS 中的音乐文件，筛选内容并创建转换任务。</p>
+      </div>
+      <div class="library-summary"><strong>{{ filteredFiles.length }}</strong><span>首音乐</span></div>
+    </div>
 
     <!-- 搜索和筛选 -->
     <el-card class="filter-card">
-      <el-row :gutter="20">
+      <el-row :gutter="16" align="middle">
         <el-col :span="8">
           <el-input
             v-model="searchQuery"
@@ -274,12 +292,12 @@ const handleBatchConvert = () => {
           </el-select>
         </el-col>
         <el-col :span="12">
-          <el-button type="primary" @click="store.fetchFiles(true)">
+          <el-button plain @click="store.fetchFiles(true)">
             <el-icon><Refresh /></el-icon>
             刷新
           </el-button>
           <el-button
-            type="success"
+            type="primary"
             :disabled="selectedFiles.length === 0"
             @click="handleBatchConvert"
           >
@@ -316,37 +334,40 @@ const handleBatchConvert = () => {
           >
             <el-table-column type="selection" width="55" />
 
-            <el-table-column label="序号" width="60" align="center">
-              <template #default="{ $index }">
-                {{ (currentPage - 1) * pageSize + $index + 1 }}
+            <el-table-column label="文件信息" min-width="230">
+              <template #default="{ row }">
+                <button class="track-cell" type="button" @click="handleView(row)">
+                  <span class="cover-thumb">
+                    <img v-if="!coverErrors.has(row.id)" :src="getCoverUrl(row)" :alt="`${row.album || row.filename} 封面`" loading="lazy" @error="markCoverError(row.id)" />
+                    <el-icon v-else><Headset /></el-icon>
+                  </span>
+                  <span class="track-copy">
+                    <strong>{{ row.title || row.filename }}</strong>
+                    <small>{{ row.artist || '未知艺术家' }} · {{ row.album || '未知专辑' }}</small>
+                  </span>
+                </button>
               </template>
             </el-table-column>
 
-            <el-table-column prop="filename" label="文件名" min-width="200" />
-
-            <el-table-column prop="format" label="格式" width="100">
+            <el-table-column prop="format" label="格式" width="72">
               <template #default="{ row }">
                 <el-tag size="small">{{ row.format?.toUpperCase() }}</el-tag>
               </template>
             </el-table-column>
 
-            <el-table-column prop="size" label="大小" width="100">
+            <el-table-column prop="size" label="大小" width="78">
               <template #default="{ row }">
                 {{ formatSize(row.size) }}
               </template>
             </el-table-column>
 
-            <el-table-column prop="duration" label="时长" width="100">
+            <el-table-column prop="duration" label="时长" width="72">
               <template #default="{ row }">
                 {{ formatDuration(row.duration) }}
               </template>
             </el-table-column>
 
-            <el-table-column prop="artist" label="艺术家" width="150" />
-
-            <el-table-column prop="album" label="专辑" width="150" />
-
-            <el-table-column label="操作" width="150" fixed="right">
+            <el-table-column label="操作" width="140" fixed="right">
               <template #default="{ row }">
                 <el-button type="primary" link size="small" @click="handleView(row)">查看</el-button>
                 <el-button type="warning" link size="small" @click="handleConvert(row)">转换</el-button>
@@ -362,6 +383,35 @@ const handleBatchConvert = () => {
             @size-change="handleSizeChange"
           />
         </div>
+
+        <aside class="file-inspector" :class="{ 'is-empty': !currentFile }">
+          <template v-if="currentFile">
+            <div class="inspector-heading"><span>当前文件</span><el-button link type="primary" @click="currentFile = null">清除</el-button></div>
+            <div class="cover-large">
+              <img v-if="!coverErrors.has(currentFile.id)" :src="getCoverUrl(currentFile)" :alt="`${currentFile.album || currentFile.filename} 封面`" @error="markCoverError(currentFile.id)" />
+              <el-icon v-else><Headset /></el-icon>
+            </div>
+            <h2>{{ currentFile.title || currentFile.filename }}</h2>
+            <p>{{ currentFile.artist || '未知艺术家' }}</p>
+            <p>{{ currentFile.album || '未知专辑' }}</p>
+            <dl class="file-facts">
+              <div><dt>格式</dt><dd>{{ currentFile.format.toUpperCase() }}</dd></div>
+              <div><dt>时长</dt><dd>{{ formatDuration(currentFile.duration) }}</dd></div>
+              <div><dt>大小</dt><dd>{{ formatSize(currentFile.size) }}</dd></div>
+              <div><dt>采样率</dt><dd>{{ currentFile.sampleRate ? `${currentFile.sampleRate} Hz` : '--' }}</dd></div>
+              <div><dt>位深</dt><dd>{{ currentFile.bitDepth ? `${currentFile.bitDepth} bit` : '--' }}</dd></div>
+              <div><dt>年份</dt><dd>{{ currentFile.year || '--' }}</dd></div>
+            </dl>
+            <div class="metadata-health">
+              <span>元数据完整度</span><strong>{{ [currentFile.title, currentFile.artist, currentFile.album, currentFile.year, currentFile.genre].filter(Boolean).length * 20 }}%</strong>
+              <el-progress :percentage="[currentFile.title, currentFile.artist, currentFile.album, currentFile.year, currentFile.genre].filter(Boolean).length * 20" :show-text="false" :stroke-width="6" />
+            </div>
+            <div class="inspector-actions"><el-button plain @click="showDetailDialog = true">查看详情</el-button><el-button type="primary" @click="handleConvert(currentFile)">添加到转换</el-button></div>
+          </template>
+          <template v-else>
+            <el-icon><Headset /></el-icon><strong>选择一首音乐</strong><span>查看封面、音频参数和元数据完整度。</span>
+          </template>
+        </aside>
       </div>
     </el-card>
 
@@ -442,16 +492,28 @@ const handleBatchConvert = () => {
 
 <style scoped>
 .files-page {
-  padding: 0;
+  padding-bottom: 32px;
 }
 
-h1 {
-  margin-bottom: 20px;
-  color: #303133;
+.library-summary {
+  display: flex;
+  gap: 7px;
+  align-items: baseline;
+  color: #748179;
+  font-size: 13px;
+}
+
+.library-summary strong {
+  color: #0c9c68;
+  font-size: 26px;
 }
 
 .filter-card {
-  margin-bottom: 20px;
+  margin-bottom: 16px;
+}
+
+.filter-card :deep(.el-card__body) {
+  padding: 18px 20px;
 }
 
 .files-card {
@@ -461,26 +523,66 @@ h1 {
 .files-layout {
   display: flex;
   align-items: flex-start;
-  gap: 16px;
+  gap: 0;
 }
 
 .folder-panel {
-  flex: 0 0 220px;
+  flex: 0 0 190px;
   max-height: calc(100vh - 260px);
-  padding-right: 12px;
+  padding: 20px 16px 20px 20px;
   overflow: auto;
-  border-right: 1px solid #ebeef5;
+  border-right: 1px solid #e1e7e2;
 }
 
 .folder-title {
-  margin-bottom: 10px;
-  color: #303133;
+  margin-bottom: 14px;
+  color: #26342c;
   font-weight: 600;
 }
 
 .files-table-panel {
   flex: 1;
   min-width: 0;
+}
+
+.track-cell { display: flex; width: 100%; gap: 11px; align-items: center; padding: 0; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
+.cover-thumb, .cover-large { display: grid; flex: 0 0 auto; place-items: center; overflow: hidden; background: #e5f1eb; color: #168d63; }
+.cover-thumb { width: 42px; height: 42px; border-radius: 6px; }
+.cover-thumb img, .cover-large img { width: 100%; height: 100%; object-fit: cover; }
+.track-copy { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.track-copy strong, .track-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.track-copy strong { color: #24322b; font-size: 14px; font-weight: 600; }
+.track-copy small { color: #829087; font-size: 12px; }
+.file-inspector { flex: 0 0 230px; min-height: 600px; padding: 18px; border-left: 1px solid #e1e7e2; }
+.file-inspector.is-empty { display: flex; flex-direction: column; gap: 8px; align-items: center; justify-content: center; color: #8a978f; text-align: center; }
+.file-inspector.is-empty > .el-icon { color: #58b991; font-size: 34px; }
+.file-inspector.is-empty strong { color: #46534c; }
+.file-inspector.is-empty span { max-width: 180px; font-size: 12px; line-height: 1.6; }
+.inspector-heading { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; color: #304039; font-size: 13px; font-weight: 600; }
+.cover-large { width: 100%; aspect-ratio: 1; margin-bottom: 16px; border-radius: 9px; font-size: 54px; }
+.file-inspector h2 { margin: 0 0 5px; overflow: hidden; color: #1f2d26; font-size: 18px; text-overflow: ellipsis; white-space: nowrap; }
+.file-inspector > p { margin: 2px 0; overflow: hidden; color: #75827a; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.file-facts { margin: 16px 0; padding: 12px 0; border-top: 1px solid #e4e9e5; border-bottom: 1px solid #e4e9e5; }
+.file-facts div { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; font-size: 12px; }
+.file-facts dt { color: #86928b; }.file-facts dd { color: #3d4b43; }
+.metadata-health { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; color: #7b8981; font-size: 12px; }
+.metadata-health strong { color: #0c9c68; }.metadata-health .el-progress { grid-column: 1 / -1; }.metadata-health :deep(.el-progress-bar__inner) { background: #0c9c68; }
+.inspector-actions { display: grid; grid-template-columns: auto 1fr; gap: 8px; margin-top: 18px; }.inspector-actions .el-button { margin: 0; }
+
+:deep(.folder-panel .el-tree) {
+  background: transparent;
+  color: #56645c;
+}
+
+:deep(.folder-panel .el-tree-node__content) {
+  height: 36px;
+  border-radius: 7px;
+}
+
+:deep(.folder-panel .el-tree-node__content:hover),
+:deep(.folder-panel .is-current > .el-tree-node__content) {
+  background: #e8f4ed;
+  color: #0c8f61;
 }
 
 :deep(.files-table .el-scrollbar__bar.is-vertical) {
@@ -523,8 +625,8 @@ h1 {
   grid-column: 1 / -1;
   margin: 4px 0 14px;
   padding-left: 10px;
-  color: #409eff;
-  border-left: 3px solid #409eff;
+  color: #0c9c68;
+  border-left: 3px solid #0c9c68;
   font-size: 15px;
   font-weight: 600;
   line-height: 20px;
@@ -550,5 +652,7 @@ h1 {
     border-right: none;
     border-bottom: 1px solid #ebeef5;
   }
+
+  .file-inspector { display: none; }
 }
 </style>

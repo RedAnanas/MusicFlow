@@ -155,12 +155,15 @@ const handleEvents = async (folder: WatchFolder) => {
 </script>
 
 <template>
-  <div class="watch-folders-page">
+  <div class="watch-folders-page product-page">
     <div class="page-header">
-      <h1>监控目录</h1>
+      <div class="page-title-block">
+        <h1>监控目录</h1>
+        <p>持续监听 NAS 文件夹，自动发现并按指定方案转换新音乐。</p>
+      </div>
       <el-button type="primary" @click="showCreateDialog = true">
         <el-icon><Plus /></el-icon>
-        添加目录
+        添加监控目录
       </el-button>
     </div>
 
@@ -365,19 +368,7 @@ const handleEvents = async (folder: WatchFolder) => {
 
 <style scoped>
 .watch-folders-page {
-  padding: 0;
-}
-
-.page-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 20px;
-}
-
-h1 {
-  margin: 0;
-  color: #303133;
+  padding-bottom: 32px;
 }
 
 .watch-status {
@@ -387,6 +378,10 @@ h1 {
   gap: 4px;
   font-size: 12px;
   color: #606266;
+}
+
+.watch-status :deep(.el-tag) {
+  font-weight: 600;
 }
 
 .status-error {
@@ -436,8 +431,8 @@ h1 {
   grid-column: 1 / -1;
   margin: 4px 0 14px;
   padding-left: 10px;
-  color: #409eff;
-  border-left: 3px solid #409eff;
+  color: #0c9c68;
+  border-left: 3px solid #0c9c68;
   font-size: 15px;
   font-weight: 600;
   line-height: 20px;
@@ -448,6 +443,15 @@ h1 {
   color: #909399;
   cursor: help;
   vertical-align: -2px;
+}
+
+:deep(.el-card__body) {
+  overflow: hidden;
+  border-radius: 12px;
+}
+
+:deep(.el-dialog) {
+  border-radius: 14px;
 }
 
 @media (max-width: 700px) {
