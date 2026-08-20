@@ -1,203 +1,39 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { useAppStore } from '../stores/app'
 
 const store = useAppStore()
-
-const stats = ref({
-  watchFolders: 0,
-  pending: 0,
-  converting: 0,
-  completed: 0,
-  failed: 0,
-  todayConverted: 0,
-})
-
-const currentTask = ref<{
-  filename: string
-  progress: number
-  codec: string
-  bitrate: string
-  eta: string
-} | null>(null)
-
-onMounted(async () => {
-  await Promise.all([
-    store.fetchFiles(),
-    store.fetchTasks(),
-    store.fetchWatchFolders(),
-  ])
-
-  // 计算统计数据
-  stats.value.watchFolders = store.watchFolders.length
-  stats.value.pending = store.tasks.filter(task => task.status === 'waiting').length
-  stats.value.converting = store.tasks.filter(task => task.status === 'converting').length
-  stats.value.completed = store.tasks.filter(task => task.status === 'success').length
-  stats.value.failed = store.tasks.filter(task => task.status === 'failed').length
-
-  // 获取当前转换任务
-  const activeTask = store.tasks.find(t => t.status === 'converting')
-  if (activeTask) {
-    currentTask.value = {
-      filename: activeTask.sourceFile.split('/').pop() || '',
-      progress: activeTask.progress || 0,
-      codec: 'AAC',
-      bitrate: '256kbps',
-      eta: '12秒',
-    }
-  }
-})
+const router = useRouter()
+const currentTask = computed(() => store.tasks.find(task => task.status === 'converting'))
+const waitingTasks = computed(() => store.tasks.filter(task => task.status === 'waiting').length)
+const completedTasks = computed(() => store.tasks.filter(task => task.status === 'success').length)
+const recentTasks = computed(() => store.tasks.filter(task => ['success', 'converting', 'waiting'].includes(task.status)).slice(0, 4))
+const fileName = (path?: string) => path?.split('/').pop() || '--'
+const taskStatus = (status: string) => ({ success: '已完成', converting: '转换中', waiting: '等待中' }[status] || status)
+const formatTime = (time?: string) => time ? new Date(time).toLocaleString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : '刚刚'
+onMounted(() => Promise.all([store.fetchFiles(), store.fetchTasks(), store.fetchProfiles(), store.fetchWatchFolders()]))
 </script>
 
 <template>
   <div class="dashboard">
-    <h1>仪表盘</h1>
-
-    <!-- 统计卡片 -->
-    <el-row :gutter="20" class="stats-row">
-      <el-col :span="4">
-        <el-card shadow="hover" class="stat-card">
-          <div class="stat-value">{{ stats.watchFolders }}</div>
-          <div class="stat-label">监控目录</div>
-        </el-card>
-      </el-col>
-      <el-col :span="4">
-        <el-card shadow="hover" class="stat-card pending">
-          <div class="stat-value">{{ stats.pending }}</div>
-          <div class="stat-label">待处理</div>
-        </el-card>
-      </el-col>
-      <el-col :span="4">
-        <el-card shadow="hover" class="stat-card converting">
-          <div class="stat-value">{{ stats.converting }}</div>
-          <div class="stat-label">转换中</div>
-        </el-card>
-      </el-col>
-      <el-col :span="4">
-        <el-card shadow="hover" class="stat-card completed">
-          <div class="stat-value">{{ stats.completed }}</div>
-          <div class="stat-label">已完成</div>
-        </el-card>
-      </el-col>
-      <el-col :span="4">
-        <el-card shadow="hover" class="stat-card failed">
-          <div class="stat-value">{{ stats.failed }}</div>
-          <div class="stat-label">失败</div>
-        </el-card>
-      </el-col>
-      <el-col :span="4">
-        <el-card shadow="hover" class="stat-card today">
-          <div class="stat-value">{{ stats.todayConverted }}</div>
-          <div class="stat-label">今日转换</div>
-        </el-card>
-      </el-col>
-    </el-row>
-
-    <!-- 当前任务 -->
-    <el-card v-if="currentTask" class="current-task-card">
-      <template #header>
-        <div class="card-header">
-          <span>当前任务</span>
-        </div>
-      </template>
-
-      <div class="current-task">
-        <div class="task-info">
-          <h3>{{ currentTask.filename }}</h3>
-          <p>{{ currentTask.codec }} {{ currentTask.bitrate }}</p>
-          <p>预计剩余 {{ currentTask.eta }}</p>
-        </div>
-        <el-progress
-          :percentage="currentTask.progress"
-          :status="currentTask.progress === 100 ? 'success' : ''"
-          :stroke-width="20"
-          class="task-progress"
-        />
-      </div>
-    </el-card>
-
+    <section class="dashboard-intro"><div><p class="eyebrow">音乐转换工作台</p><h1>准备转换</h1><p>选择来源文件夹，确认转换方案，然后开始整理您的音乐库。</p></div><el-button type="primary" size="large" @click="router.push('/files')"><el-icon><VideoPlay /></el-icon>开始转换</el-button></section>
+    <section class="setup-list">
+      <div class="setup-row"><div class="setup-icon"><el-icon><FolderOpened /></el-icon></div><div class="setup-content"><span>来源文件夹</span><strong>{{ store.settings.musicSourceDir }}</strong><small>{{ store.files.length }} 个文件 · 已连接 NAS</small></div><el-button plain @click="router.push('/files')">更改</el-button></div>
+      <div class="setup-row"><div class="setup-icon"><el-icon><Headset /></el-icon></div><div class="setup-content"><span>转换方案</span><strong>{{ store.profiles[0]?.name || '请先创建转换方案' }}</strong><small>{{ store.profiles[0]?.codec || 'AAC' }} · {{ store.profiles[0]?.bitrate ? `${store.profiles[0].bitrate / 1000} kbps` : '256 kbps' }} · 保留元数据</small></div><el-button plain @click="router.push('/profiles')">更改方案</el-button></div>
+    </section>
+    <section class="activity-heading"><div><h2>当前转换任务</h2><span class="live-dot">{{ currentTask ? '转换中' : '队列空闲' }}</span></div><div class="activity-summary">{{ waitingTasks }} 待处理 · {{ completedTasks }} 已完成</div></section>
+    <section v-if="currentTask" class="active-task"><div class="track-art"><el-icon><Headset /></el-icon></div><div class="active-file"><strong>{{ fileName(currentTask.source_file) }}</strong><span>{{ currentTask.source_file }}</span><small>{{ currentTask.profile_id }} · 正在处理</small></div><b class="progress-number">{{ currentTask.progress || 0 }}%</b><div class="progress-block"><el-progress :percentage="currentTask.progress || 0" :show-text="false" :stroke-width="10" /><span>正在转换 · 输出至 {{ currentTask.output_file || '默认输出目录' }}</span></div></section>
+    <section v-else class="empty-task"><el-icon><CircleCheck /></el-icon><div><strong>队列空闲</strong><span>从音乐库选择文件后，即可开始转换。</span></div></section>
+    <section class="recent-section"><div class="recent-heading"><h2>最近转换</h2><el-button link type="primary" @click="router.push('/tasks')">查看全部<el-icon><ArrowRight /></el-icon></el-button></div><div v-if="recentTasks.length" class="recent-table"><div class="recent-row recent-label"><span>文件名</span><span>来源</span><span>状态</span><span>时间</span></div><div v-for="task in recentTasks" :key="task.id" class="recent-row"><strong>{{ fileName(task.source_file) }}</strong><span>{{ task.source_file }}</span><el-tag :type="task.status === 'success' ? 'success' : task.status === 'converting' ? 'primary' : 'warning'" effect="plain">{{ taskStatus(task.status) }}</el-tag><span>{{ formatTime(task.end_time || task.start_time) }}</span></div></div><el-empty v-else description="暂无转换记录" :image-size="72" /></section>
   </div>
 </template>
 
 <style scoped>
-.dashboard {
-  padding: 0;
-}
-
-h1 {
-  margin-bottom: 20px;
-  color: #303133;
-}
-
-.stats-row {
-  margin-bottom: 20px;
-}
-
-.stat-card {
-  text-align: center;
-}
-
-.stat-value {
-  font-size: 32px;
-  font-weight: bold;
-  color: #409eff;
-  margin-bottom: 5px;
-}
-
-.stat-card.pending .stat-value {
-  color: #e6a23c;
-}
-
-.stat-card.converting .stat-value {
-  color: #409eff;
-}
-
-.stat-card.completed .stat-value {
-  color: #67c23a;
-}
-
-.stat-card.failed .stat-value {
-  color: #f56c6c;
-}
-
-.stat-card.today .stat-value {
-  color: #909399;
-}
-
-.stat-label {
-  font-size: 14px;
-  color: #909399;
-}
-
-.current-task-card {
-  margin-bottom: 20px;
-}
-
-.card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-weight: bold;
-}
-
-.current-task {
-  display: flex;
-  flex-direction: column;
-  gap: 15px;
-}
-
-.task-info h3 {
-  margin-bottom: 5px;
-  color: #303133;
-}
-
-.task-info p {
-  color: #909399;
-  font-size: 14px;
-}
-
-.task-progress {
-  width: 100%;
-}
-
+.dashboard { max-width: 1280px; margin: 0 auto; }.dashboard-intro { display: flex; justify-content: space-between; gap: 24px; align-items: flex-end; padding: 34px 0 28px; border-bottom: 1px solid #dfe4df; }.eyebrow { margin-bottom: 8px; color: #168d63; font-size: 13px; font-weight: 600; letter-spacing: .08em; }h1 { margin: 0 0 10px; color: #16241e; font-size: 38px; letter-spacing: -1.3px; }.dashboard-intro p:last-child { color: #68766e; font-size: 15px; }.dashboard-intro .el-button { height: 52px; padding: 0 28px; border: 0; background: #0c9c68; font-weight: 600; }
+.setup-list { margin-top: 4px; }.setup-row { display: flex; gap: 18px; align-items: center; min-height: 110px; padding: 18px 4px; border-bottom: 1px solid #dfe4df; }.setup-icon { display: grid; width: 54px; height: 54px; flex: 0 0 54px; place-items: center; border-radius: 50%; background: #e5f5ed; color: #0b9a66; font-size: 25px; }.setup-content { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 4px; }.setup-content span { color: #68766e; font-size: 13px; }.setup-content strong { overflow: hidden; color: #1e2b25; font-size: 17px; text-overflow: ellipsis; white-space: nowrap; }.setup-content small { color: #849088; font-size: 13px; }.setup-row .el-button { min-width: 92px; border-color: #bcc8c0; color: #324139; }
+.activity-heading, .recent-heading { display: flex; justify-content: space-between; align-items: center; margin-top: 32px; }.activity-heading > div:first-child { display: flex; gap: 12px; align-items: center; }h2 { margin: 0; color: #213028; font-size: 19px; }.live-dot { color: #138f60; font-size: 13px; }.live-dot::before { display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 50%; background: currentColor; content: ''; vertical-align: 1px; }.activity-summary { color: #7c8981; font-size: 13px; }
+.active-task { display: grid; grid-template-columns: 62px minmax(220px, 1.2fr) auto minmax(240px, 1fr); gap: 18px; align-items: center; margin-top: 16px; padding: 20px 0 24px; border-bottom: 1px solid #dfe4df; }.track-art { display: grid; width: 62px; height: 62px; place-items: center; border-radius: 10px; background: #123f34; color: #70e5ba; font-size: 29px; }.active-file { display: flex; min-width: 0; flex-direction: column; gap: 5px; }.active-file strong { color: #233129; font-size: 16px; }.active-file span { overflow: hidden; color: #738078; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }.active-file small, .progress-block span { color: #89958e; font-size: 12px; }.progress-number { color: #0b9d68; font-size: 25px; }.progress-block { display: flex; flex-direction: column; gap: 9px; }.progress-block :deep(.el-progress-bar__outer) { background: #e1e8e2; }.progress-block :deep(.el-progress-bar__inner) { background: #0ca46d; }.empty-task { display: flex; gap: 14px; align-items: center; margin-top: 16px; padding: 24px 0; border-bottom: 1px solid #dfe4df; color: #0c9c68; }.empty-task div { display: flex; flex-direction: column; gap: 4px; }.empty-task strong { color: #28362e; }.empty-task span { color: #829087; font-size: 13px; }
+.recent-section { padding-bottom: 30px; }.recent-heading { margin-bottom: 12px; }.recent-heading .el-button { gap: 4px; font-weight: 600; }.recent-table { border-top: 1px solid #dfe4df; }.recent-row { display: grid; grid-template-columns: 1.1fr 1.6fr .55fr .55fr; gap: 20px; align-items: center; min-height: 62px; border-bottom: 1px solid #e6ebe7; color: #617068; font-size: 13px; }.recent-row > span, .recent-row strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.recent-row strong { color: #26342c; font-size: 14px; }.recent-label { min-height: 42px; color: #829087; font-size: 12px; }
+@media (max-width: 760px) { .dashboard-intro { align-items: flex-start; flex-direction: column; }.dashboard-intro .el-button { width: 100%; }.active-task { grid-template-columns: 54px 1fr; }.track-art { width: 54px; height: 54px; }.progress-number, .progress-block { grid-column: 2; }.recent-row { grid-template-columns: 1fr .7fr; gap: 6px; padding: 12px 0; }.recent-row > :nth-child(2), .recent-label > :nth-child(2) { display: none; }.recent-row .el-tag { justify-self: start; } }
 </style>
