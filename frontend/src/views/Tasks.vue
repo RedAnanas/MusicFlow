@@ -2,6 +2,7 @@
 import { onMounted, ref, computed, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useAppStore } from '../stores/app'
+import TablePagination from '../components/TablePagination.vue'
 import type { Task } from '../types'
 
 const store = useAppStore()
@@ -377,13 +378,10 @@ const handleBatchRetry = async () => {
         </el-table-column>
       </el-table>
 
-      <el-pagination
+      <TablePagination
         v-model:current-page="currentPage"
         v-model:page-size="pageSize"
-        class="pagination"
-        :page-sizes="[20, 50, 100]"
         :total="filteredTasks.length"
-        layout="total, sizes, prev, pager, next, jumper"
         @size-change="handleSizeChange"
       />
     </el-card>
@@ -410,11 +408,6 @@ h1 {
   margin-left: 12px;
   color: #606266;
   font-size: 14px;
-}
-
-.pagination {
-  justify-content: flex-end;
-  margin-top: 20px;
 }
 
 :deep(.el-table .el-scrollbar__bar.is-vertical) {

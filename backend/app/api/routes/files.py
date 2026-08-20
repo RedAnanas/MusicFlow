@@ -4,6 +4,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 from typing import List, Optional
+from app.config import settings
 from app.core import ffprobe_service, metadata_service
 from app.services.config_manager import config_manager
 
@@ -57,8 +58,6 @@ async def get_files(
     limit: int = Query(100, ge=1, le=1000, description="返回数量限制")
 ):
     """获取所有音乐文件"""
-    from app.config import settings
-
     files = []
 
     # 扫描所有配置的源目录
@@ -144,6 +143,35 @@ async def get_file(file_id: str):
     raise HTTPException(status_code=404, detail="File not found")
 
 
+@router.delete("/{file_id}")
+async def delete_file(file_id: str):
+    """删除音乐源目录内的文件。"""
+    file_data = files_cache.get(file_id)
+    if not file_data:
+        raise HTTPException(status_code=404, detail="文件不存在")
+
+    source_root = Path(settings.MUSIC_SOURCE_DIR).resolve()
+    file_path = Path(file_data["path"]).resolve()
+    try:
+        file_path.relative_to(source_root)
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail="禁止删除音乐源目录之外的文件") from exc
+
+    if not file_path.is_file():
+        files_cache.pop(file_id, None)
+        raise HTTPException(status_code=404, detail="文件不存在")
+
+    try:
+        file_path.unlink()
+    except OSError as exc:
+        logger.error(f"Failed to delete file {file_path}: {exc}")
+        raise HTTPException(status_code=500, detail=f"文件删除失败：{exc}") from exc
+
+    files_cache.pop(file_id, None)
+    logger.info(f"Deleted music file: {file_path}")
+    return {"status": "success", "deleted": file_id}
+
+
 @router.get("/{file_id}/metadata")
 async def get_file_metadata(file_id: str):
     """获取文件元数据"""
@@ -221,4 +249,3 @@ async def batch_convert_files(file_ids: List[str], profile_ids: List[str]):
         "converted": converted_files,
         "errors": errors
     }
-

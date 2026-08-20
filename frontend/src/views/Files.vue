@@ -1,14 +1,24 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useAppStore } from '../stores/app'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import TablePagination from '../components/TablePagination.vue'
 import type { FileItem } from '../types'
+
+interface FolderTreeNode {
+  label: string
+  path: string
+  children?: FolderTreeNode[]
+}
 
 const store = useAppStore()
 const selectedFiles = ref<FileItem[]>([])
 const searchQuery = ref('')
 const formatFilter = ref('')
 const statusFilter = ref('')
+const selectedFolder = ref('')
+const currentPage = ref(1)
+const pageSize = ref(20)
 const showDetailDialog = ref(false)
 const showConvertDialog = ref(false)
 const currentFile = ref<FileItem | null>(null)
@@ -21,14 +31,138 @@ const statuses = [
   { label: '已完成', value: 'completed' },
   { label: '失败', value: 'failed' },
 ]
+const folderTreeProps = {
+  children: 'children',
+  label: 'label',
+}
 
 onMounted(() => {
   store.fetchFiles()
   store.fetchProfiles()
 })
 
+const normalizePath = (path: string) => {
+  const normalizedPath = path.replace(/\\/g, '/')
+  const trimmedPath = normalizedPath.replace(/\/+$/, '')
+  return trimmedPath || (normalizedPath.startsWith('/') ? '/' : '')
+}
+
+const getDirectoryPath = (path: string) => {
+  const normalizedPath = normalizePath(path)
+  const separatorIndex = normalizedPath.lastIndexOf('/')
+  if (separatorIndex < 0) return normalizedPath
+  return separatorIndex === 0 ? '/' : normalizedPath.slice(0, separatorIndex)
+}
+
+const getCommonDirectory = (directories: string[]) => {
+  const splitDirectories = directories.map(directory => normalizePath(directory).split('/'))
+  const shortestLength = Math.min(...splitDirectories.map(parts => parts.length))
+  let commonLength = 0
+
+  while (
+    commonLength < shortestLength &&
+    splitDirectories.every(parts => parts[commonLength] === splitDirectories[0][commonLength])
+  ) {
+    commonLength += 1
+  }
+
+  const commonDirectory = splitDirectories[0].slice(0, commonLength).join('/')
+  return commonDirectory || (directories[0].startsWith('/') ? '/' : '')
+}
+
+const folderTree = computed<FolderTreeNode[]>(() => {
+  const directories = [...new Set(store.files.map(file => getDirectoryPath(file.path)))]
+  const allFilesNode: FolderTreeNode = {
+    label: `全部文件（${store.files.length}）`,
+    path: '',
+    children: [],
+  }
+  if (!directories.length) return [allFilesNode]
+
+  const commonRoot = getCommonDirectory(directories)
+  const rootLabel = commonRoot.split('/').filter(Boolean).pop() || commonRoot || '根目录'
+  const rootNode: FolderTreeNode = {
+    label: rootLabel,
+    path: commonRoot,
+    children: [],
+  }
+
+  for (const directory of directories) {
+    const relativePath = directory.slice(commonRoot.length).replace(/^\/+/, '')
+    if (!relativePath) continue
+
+    let parentPath = commonRoot
+    let childNodes = rootNode.children!
+    for (const segment of relativePath.split('/').filter(Boolean)) {
+      const nodePath = parentPath === '/'
+        ? `/${segment}`
+        : parentPath
+          ? `${parentPath}/${segment}`
+          : segment
+      let childNode = childNodes.find(node => node.path === nodePath)
+      if (!childNode) {
+        childNode = { label: segment, path: nodePath, children: [] }
+        childNodes.push(childNode)
+      }
+      parentPath = nodePath
+      childNodes = childNode.children!
+    }
+  }
+
+  allFilesNode.children = [rootNode]
+  return [allFilesNode]
+})
+
+const filteredFiles = computed(() => {
+  const keyword = searchQuery.value.trim().toLowerCase()
+  const selectedDirectory = normalizePath(selectedFolder.value)
+  const directoryPrefix = selectedDirectory.endsWith('/')
+    ? selectedDirectory
+    : `${selectedDirectory}/`
+
+  return store.files.filter(file => {
+    const matchesKeyword = !keyword || [file.filename, file.artist, file.album, file.title]
+      .some(value => (value || '').toLowerCase().includes(keyword))
+    const matchesFormat = !formatFilter.value || file.format === formatFilter.value
+    const matchesStatus = !statusFilter.value || file.status === statusFilter.value
+    const fileDirectory = getDirectoryPath(file.path)
+    const matchesFolder = !selectedDirectory ||
+      fileDirectory === selectedDirectory ||
+      fileDirectory.startsWith(directoryPrefix)
+    return matchesKeyword && matchesFormat && matchesStatus && matchesFolder
+  })
+})
+
+const paginatedFiles = computed(() => {
+  const start = (currentPage.value - 1) * pageSize.value
+  return filteredFiles.value.slice(start, start + pageSize.value)
+})
+
+watch([searchQuery, formatFilter, statusFilter, selectedFolder], () => {
+  currentPage.value = 1
+  selectedFiles.value = []
+})
+
+watch(currentPage, () => {
+  selectedFiles.value = []
+})
+
+watch(() => filteredFiles.value.length, total => {
+  const lastPage = Math.max(1, Math.ceil(total / pageSize.value))
+  if (currentPage.value > lastPage) currentPage.value = lastPage
+})
+
 const handleSelectionChange = (selection: FileItem[]) => {
   selectedFiles.value = selection
+}
+
+const handleFolderSelect = (folder: FolderTreeNode) => {
+  selectedFolder.value = folder.path
+}
+
+const handleSizeChange = () => {
+  currentPage.value = 1
+  selectedFiles.value = []
 }
 
 const formatDuration = (seconds?: number) => {
@@ -128,17 +262,21 @@ const executeConvert = async () => {
 const handleDelete = async (file: FileItem) => {
   try {
     await ElMessageBox.confirm(
-      `确定要删除文件 "${file.filename}" 吗？`,
+      `确定要从磁盘永久删除文件“${file.filename}”吗？删除后无法恢复。`,
       '确认删除',
       {
-        confirmButtonText: '确定',
+        confirmButtonText: '删除',
         cancelButtonText: '取消',
         type: 'warning',
       }
     )
-    ElMessage.success('文件已删除（实际删除功能待实现）')
-  } catch {
-    // 用户取消
+    await store.deleteFile(file.id)
+    selectedFiles.value = selectedFiles.value.filter(item => item.id !== file.id)
+    ElMessage.success('文件已删除')
+  } catch (error) {
+    if (error === 'cancel' || error === 'close') return
+    console.error('Delete file failed:', error)
+    ElMessage.error('文件删除失败')
   }
 }
 
@@ -161,7 +299,7 @@ const handleBatchConvert = () => {
         <el-col :span="8">
           <el-input
             v-model="searchQuery"
-            placeholder="搜索文件名、Artist、Album、Title"
+            placeholder="搜索文件名、艺术家、专辑、标题"
             clearable
             prefix-icon="Search"
           />
@@ -205,66 +343,85 @@ const handleBatchConvert = () => {
 
     <!-- 文件列表 -->
     <el-card class="files-card">
-      <el-table
-        :data="store.files"
-        style="width: 100%"
-        @selection-change="handleSelectionChange"
-        v-loading="store.loading"
-      >
-        <el-table-column type="selection" width="55" />
+      <div class="files-layout">
+        <aside class="folder-panel">
+          <div class="folder-title">文件夹</div>
+          <el-tree
+            :data="folderTree"
+            :props="folderTreeProps"
+            node-key="path"
+            default-expand-all
+            highlight-current
+            empty-text="暂无文件夹"
+            @node-click="handleFolderSelect"
+          />
+        </aside>
 
-        <el-table-column prop="filename" label="文件名" min-width="200" />
+        <div class="files-table-panel">
+          <el-table
+            class="files-table"
+            :data="paginatedFiles"
+            style="width: 100%"
+            @selection-change="handleSelectionChange"
+            v-loading="store.loading"
+          >
+            <el-table-column type="selection" width="55" />
 
-        <el-table-column prop="format" label="格式" width="100">
-          <template #default="{ row }">
-            <el-tag size="small">{{ row.format?.toUpperCase() }}</el-tag>
-          </template>
-        </el-table-column>
+            <el-table-column label="序号" width="60" align="center">
+              <template #default="{ $index }">
+                {{ (currentPage - 1) * pageSize + $index + 1 }}
+              </template>
+            </el-table-column>
 
-        <el-table-column prop="size" label="大小" width="100">
-          <template #default="{ row }">
-            {{ formatSize(row.size) }}
-          </template>
-        </el-table-column>
+            <el-table-column prop="filename" label="文件名" min-width="200" />
 
-        <el-table-column prop="duration" label="时长" width="100">
-          <template #default="{ row }">
-            {{ formatDuration(row.duration) }}
-          </template>
-        </el-table-column>
+            <el-table-column prop="format" label="格式" width="100">
+              <template #default="{ row }">
+                <el-tag size="small">{{ row.format?.toUpperCase() }}</el-tag>
+              </template>
+            </el-table-column>
 
-        <el-table-column prop="sampleRate" label="采样率" width="100">
-          <template #default="{ row }">
-            {{ row.sampleRate ? row.sampleRate + ' Hz' : '--' }}
-          </template>
-        </el-table-column>
+            <el-table-column prop="size" label="大小" width="100">
+              <template #default="{ row }">
+                {{ formatSize(row.size) }}
+              </template>
+            </el-table-column>
 
-        <el-table-column prop="bitrate" label="比特率" width="100">
-          <template #default="{ row }">
-            {{ row.bitrate ? (row.bitrate / 1000).toFixed(0) + ' kbps' : '--' }}
-          </template>
-        </el-table-column>
+            <el-table-column prop="duration" label="时长" width="100">
+              <template #default="{ row }">
+                {{ formatDuration(row.duration) }}
+              </template>
+            </el-table-column>
 
-        <el-table-column prop="artist" label="Artist" width="150" />
+            <el-table-column prop="artist" label="艺术家" width="150" />
 
-        <el-table-column prop="album" label="Album" width="150" />
+            <el-table-column prop="album" label="专辑" width="150" />
 
-        <el-table-column prop="status" label="状态" width="100">
-          <template #default="{ row }">
-            <el-tag :type="getStatusType(row.status)" size="small">
-              {{ getStatusLabel(row.status) }}
-            </el-tag>
-          </template>
-        </el-table-column>
+            <el-table-column prop="status" label="状态" width="100">
+              <template #default="{ row }">
+                <el-tag :type="getStatusType(row.status)" size="small">
+                  {{ getStatusLabel(row.status) }}
+                </el-tag>
+              </template>
+            </el-table-column>
 
-        <el-table-column label="操作" width="150" fixed="right">
-          <template #default="{ row }">
-            <el-button type="primary" link size="small" @click="handleView(row)">查看</el-button>
-            <el-button type="warning" link size="small" @click="handleConvert(row)">转换</el-button>
-            <el-button type="danger" link size="small" @click="handleDelete(row)">删除</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
+            <el-table-column label="操作" width="150" fixed="right">
+              <template #default="{ row }">
+                <el-button type="primary" link size="small" @click="handleView(row)">查看</el-button>
+                <el-button type="warning" link size="small" @click="handleConvert(row)">转换</el-button>
+                <el-button type="danger" link size="small" @click="handleDelete(row)">删除</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+
+          <TablePagination
+            v-model:current-page="currentPage"
+            v-model:page-size="pageSize"
+            :total="filteredFiles.length"
+            @size-change="handleSizeChange"
+          />
+        </div>
+      </div>
     </el-card>
 
     <!-- 文件详情对话框 -->
@@ -355,7 +512,55 @@ h1 {
   margin-bottom: 20px;
 }
 
+.files-layout {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.folder-panel {
+  flex: 0 0 220px;
+  max-height: calc(100vh - 260px);
+  padding-right: 12px;
+  overflow: auto;
+  border-right: 1px solid #ebeef5;
+}
+
+.folder-title {
+  margin-bottom: 10px;
+  color: #303133;
+  font-weight: 600;
+}
+
+.files-table-panel {
+  flex: 1;
+  min-width: 0;
+}
+
+:deep(.files-table .el-scrollbar__bar.is-vertical) {
+  display: none;
+}
+
+:deep(.files-table .el-scrollbar__wrap) {
+  overflow-y: hidden;
+}
+
 .file-detail {
   padding: 10px;
+}
+
+@media (max-width: 1000px) {
+  .files-layout {
+    flex-direction: column;
+  }
+
+  .folder-panel {
+    width: 100%;
+    max-height: 220px;
+    padding-right: 0;
+    padding-bottom: 12px;
+    border-right: none;
+    border-bottom: 1px solid #ebeef5;
+  }
 }
 </style>
