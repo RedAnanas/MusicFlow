@@ -30,10 +30,10 @@ onMounted(async () => {
 
   // 计算统计数据
   stats.value.watchFolders = store.watchFolders.length
-  stats.value.pending = store.files.filter(f => f.status === 'pending').length
-  stats.value.converting = store.files.filter(f => f.status === 'converting').length
-  stats.value.completed = store.files.filter(f => f.status === 'completed').length
-  stats.value.failed = store.files.filter(f => f.status === 'failed').length
+  stats.value.pending = store.tasks.filter(task => task.status === 'waiting').length
+  stats.value.converting = store.tasks.filter(task => task.status === 'converting').length
+  stats.value.completed = store.tasks.filter(task => task.status === 'success').length
+  stats.value.failed = store.tasks.filter(task => task.status === 'failed').length
 
   // 获取当前转换任务
   const activeTask = store.tasks.find(t => t.status === 'converting')
