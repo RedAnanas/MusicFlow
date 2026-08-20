@@ -25,6 +25,8 @@ const currentFile = ref<FileItem | null>(null)
 const conversionFiles = ref<FileItem[]>([])
 const selectedProfile = ref('apple-music-aac-256')
 const outputDir = ref('')
+const coverErrors = ref(new Set<string>())
+const showAdvancedConversion = ref<string[]>([])
 
 const formats = ['mp3', 'flac', 'm4a', 'aac', 'alac', 'wav', 'ogg', 'opus']
 const folderTreeProps = {
@@ -32,10 +34,37 @@ const folderTreeProps = {
   label: 'label',
 }
 
+const conversionProfile = computed(() => store.profiles.find(profile => profile.id === selectedProfile.value))
+const conversionTotalSize = computed(() => conversionFiles.value.reduce((total, file) => total + file.size, 0))
+const conversionTotalDuration = computed(() => conversionFiles.value.reduce((total, file) => total + (file.duration || 0), 0))
+const conversionOutputDir = computed(() => outputDir.value.trim() || conversionProfile.value?.outputDir || store.settings.musicOutputDir)
+const conversionPreviewPaths = computed(() => conversionFiles.value.slice(0, 5).map(file => {
+  const profile = conversionProfile.value
+  const title = file.title || file.filename.replace(/\.[^.]+$/, '')
+  const name = (profile?.filenameTemplate || '{title}.{extension}').replace('{title}', title).replace('{extension}', profile?.outputFormat || 'm4a')
+  return `${conversionOutputDir.value}/${name}`
+}))
+
+const removeConversionFile = (id: string) => {
+  conversionFiles.value = conversionFiles.value.filter(file => file.id !== id)
+  currentFile.value = conversionFiles.value[0] || null
+  if (!conversionFiles.value.length) showConvertDialog.value = false
+}
+
 onMounted(() => {
   store.fetchFiles()
   store.fetchProfiles()
 })
+
+watch(
+  () => store.profiles,
+  profiles => {
+    if (profiles.length && !profiles.some(profile => profile.id === selectedProfile.value)) {
+      selectedProfile.value = profiles[0].id
+    }
+  },
+  { immediate: true, deep: true },
+)
 
 const normalizePath = (path: string) => {
   const normalizedPath = path.replace(/\\/g, '/')
@@ -147,6 +176,10 @@ watch(() => filteredFiles.value.length, total => {
   if (currentPage.value > lastPage) currentPage.value = lastPage
 })
 
+watch(paginatedFiles, files => {
+  if (!currentFile.value && files.length) currentFile.value = files[0]
+}, { immediate: true })
+
 const handleSelectionChange = (selection: FileItem[]) => {
   selectedFiles.value = selection
 }
@@ -172,6 +205,13 @@ const formatSize = (bytes: number) => {
   if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
   if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
   return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB'
+}
+
+const getCoverUrl = (file: FileItem) => `/api/files/${file.id}/cover`
+
+const markCoverError = (fileId: string) => {
+  coverErrors.value.add(fileId)
+  coverErrors.value = new Set(coverErrors.value)
 }
 
 const handleView = (file: FileItem) => {
@@ -249,12 +289,18 @@ const handleBatchConvert = () => {
 </script>
 
 <template>
-  <div class="files-page">
-    <h1>音乐文件</h1>
+  <div class="files-page product-page">
+    <div class="page-header">
+      <div class="page-title-block">
+        <h1>音乐库</h1>
+        <p>浏览 NAS 中的音乐文件，筛选内容并创建转换任务。</p>
+      </div>
+      <div class="library-summary"><strong>{{ filteredFiles.length }}</strong><span>首音乐</span></div>
+    </div>
 
     <!-- 搜索和筛选 -->
     <el-card class="filter-card">
-      <el-row :gutter="20">
+      <el-row :gutter="16" align="middle">
         <el-col :span="8">
           <el-input
             v-model="searchQuery"
@@ -274,12 +320,12 @@ const handleBatchConvert = () => {
           </el-select>
         </el-col>
         <el-col :span="12">
-          <el-button type="primary" @click="store.fetchFiles(true)">
+          <el-button plain @click="store.fetchFiles(true)">
             <el-icon><Refresh /></el-icon>
             刷新
           </el-button>
           <el-button
-            type="success"
+            type="primary"
             :disabled="selectedFiles.length === 0"
             @click="handleBatchConvert"
           >
@@ -316,37 +362,40 @@ const handleBatchConvert = () => {
           >
             <el-table-column type="selection" width="55" />
 
-            <el-table-column label="序号" width="60" align="center">
-              <template #default="{ $index }">
-                {{ (currentPage - 1) * pageSize + $index + 1 }}
+            <el-table-column label="文件信息" min-width="230">
+              <template #default="{ row }">
+                <button class="track-cell" type="button" @click="handleView(row)">
+                  <span class="cover-thumb">
+                    <img v-if="!coverErrors.has(row.id)" :src="getCoverUrl(row)" :alt="`${row.album || row.filename} 封面`" loading="lazy" @error="markCoverError(row.id)" />
+                    <el-icon v-else><Headset /></el-icon>
+                  </span>
+                  <span class="track-copy">
+                    <strong>{{ row.title || row.filename }}</strong>
+                    <small>{{ row.artist || '未知艺术家' }} · {{ row.album || '未知专辑' }}</small>
+                  </span>
+                </button>
               </template>
             </el-table-column>
 
-            <el-table-column prop="filename" label="文件名" min-width="200" />
-
-            <el-table-column prop="format" label="格式" width="100">
+            <el-table-column prop="format" label="格式" width="72">
               <template #default="{ row }">
                 <el-tag size="small">{{ row.format?.toUpperCase() }}</el-tag>
               </template>
             </el-table-column>
 
-            <el-table-column prop="size" label="大小" width="100">
+            <el-table-column prop="size" label="大小" width="78">
               <template #default="{ row }">
                 {{ formatSize(row.size) }}
               </template>
             </el-table-column>
 
-            <el-table-column prop="duration" label="时长" width="100">
+            <el-table-column prop="duration" label="时长" width="72">
               <template #default="{ row }">
                 {{ formatDuration(row.duration) }}
               </template>
             </el-table-column>
 
-            <el-table-column prop="artist" label="艺术家" width="150" />
-
-            <el-table-column prop="album" label="专辑" width="150" />
-
-            <el-table-column label="操作" width="150" fixed="right">
+            <el-table-column label="操作" width="140" fixed="right">
               <template #default="{ row }">
                 <el-button type="primary" link size="small" @click="handleView(row)">查看</el-button>
                 <el-button type="warning" link size="small" @click="handleConvert(row)">转换</el-button>
@@ -362,6 +411,35 @@ const handleBatchConvert = () => {
             @size-change="handleSizeChange"
           />
         </div>
+
+        <aside class="file-inspector" :class="{ 'is-empty': !currentFile }">
+          <template v-if="currentFile">
+            <div class="inspector-heading"><span>当前文件</span><el-button link type="primary" @click="currentFile = null">清除</el-button></div>
+            <div class="cover-large">
+              <img v-if="!coverErrors.has(currentFile.id)" :src="getCoverUrl(currentFile)" :alt="`${currentFile.album || currentFile.filename} 封面`" @error="markCoverError(currentFile.id)" />
+              <el-icon v-else><Headset /></el-icon>
+            </div>
+            <h2>{{ currentFile.title || currentFile.filename }}</h2>
+            <p>{{ currentFile.artist || '未知艺术家' }}</p>
+            <p>{{ currentFile.album || '未知专辑' }}</p>
+            <dl class="file-facts">
+              <div><dt>格式</dt><dd>{{ currentFile.format.toUpperCase() }}</dd></div>
+              <div><dt>时长</dt><dd>{{ formatDuration(currentFile.duration) }}</dd></div>
+              <div><dt>大小</dt><dd>{{ formatSize(currentFile.size) }}</dd></div>
+              <div><dt>采样率</dt><dd>{{ currentFile.sampleRate ? `${currentFile.sampleRate} Hz` : '--' }}</dd></div>
+              <div><dt>位深</dt><dd>{{ currentFile.bitDepth ? `${currentFile.bitDepth} bit` : '--' }}</dd></div>
+              <div><dt>年份</dt><dd>{{ currentFile.year || '--' }}</dd></div>
+            </dl>
+            <div class="metadata-health">
+              <span>元数据完整度</span><strong>{{ [currentFile.title, currentFile.artist, currentFile.album, currentFile.year, currentFile.genre].filter(Boolean).length * 20 }}%</strong>
+              <el-progress :percentage="[currentFile.title, currentFile.artist, currentFile.album, currentFile.year, currentFile.genre].filter(Boolean).length * 20" :show-text="false" :stroke-width="6" />
+            </div>
+            <div class="inspector-actions"><el-button plain @click="showDetailDialog = true">查看详情</el-button><el-button type="primary" @click="handleConvert(currentFile)">添加到转换</el-button></div>
+          </template>
+          <template v-else>
+            <el-icon><Headset /></el-icon><strong>选择一首音乐</strong><span>查看封面、音频参数和元数据完整度。</span>
+          </template>
+        </aside>
       </div>
     </el-card>
 
@@ -402,56 +480,66 @@ const handleBatchConvert = () => {
     <!-- 转换对话框 -->
     <el-dialog
       v-model="showConvertDialog"
-      :title="conversionFiles.length > 1 ? `批量转换（${conversionFiles.length} 个文件）` : '转换文件'"
-      width="680px"
+      :title="conversionFiles.length > 1 ? '创建批量转换任务' : '创建转换任务'"
+      width="1140px"
+      class="workspace-dialog conversion-dialog"
+      destroy-on-close
     >
-      <div v-if="currentFile">
-        <el-form label-position="top" class="conversion-form">
-          <div class="conversion-section-title">转换内容</div>
-          <el-form-item class="conversion-item-full">
-            <template #label>源文件<el-tooltip content="单个转换显示文件名；批量转换显示已选文件数量。" placement="top"><el-icon class="conversion-field-help"><QuestionFilled /></el-icon></el-tooltip></template>
-            <span v-if="conversionFiles.length === 1">{{ currentFile.filename }}</span>
-            <span v-else>已选择 {{ conversionFiles.length }} 个文件</span>
-          </el-form-item>
-          <div class="conversion-section-title">转换设置</div>
-          <el-form-item class="conversion-item-full">
-            <template #label>转换配置<el-tooltip content="决定输出格式、编码参数，以及是否交接给 Apple Music。" placement="top"><el-icon class="conversion-field-help"><QuestionFilled /></el-icon></el-tooltip></template>
-            <el-select v-model="selectedProfile" style="width: 100%">
-              <el-option
-                v-for="profile in store.profiles"
-                :key="profile.id"
-                :label="profile.name"
-                :value="profile.id"
-              />
-            </el-select>
-          </el-form-item>
-          <el-form-item class="conversion-item-full">
-            <template #label>输出路径<el-tooltip content="可选的 WSL 输出目录；留空则使用全局输出目录。" placement="top"><el-icon class="conversion-field-help"><QuestionFilled /></el-icon></el-tooltip></template>
-            <el-input v-model="outputDir" placeholder="留空则使用全局输出目录" clearable />
-            <div style="color: #666; font-size: 12px; margin-top: 4px;">可填写 WSL 绝对目录，例如 /mnt/d/Music/output/M4A/AAC/Converted</div>
-          </el-form-item>
-        </el-form>
+      <div v-if="currentFile" class="conversion-workspace">
+        <section class="conversion-files-panel">
+          <div class="conversion-panel-heading"><div><strong>已选择文件</strong><span>{{ conversionFiles.length }} 首音乐</span></div><el-button v-if="conversionFiles.length > 1" link type="primary" @click="conversionFiles = []">清空</el-button></div>
+          <div class="conversion-file-list">
+            <div v-for="file in conversionFiles" :key="file.id" class="conversion-file-row">
+              <span class="conversion-cover"><img v-if="!coverErrors.has(file.id)" :src="getCoverUrl(file)" :alt="`${file.album || file.filename} 封面`" @error="markCoverError(file.id)" /><el-icon v-else><Headset /></el-icon></span>
+              <div><strong>{{ file.title || file.filename }}</strong><span>{{ file.artist || '未知艺术家' }} · {{ file.album || '未知专辑' }}</span><small>{{ file.format.toUpperCase() }} · {{ formatSize(file.size) }} · {{ formatDuration(file.duration) }}</small></div>
+              <el-button circle text aria-label="移除文件" @click="removeConversionFile(file.id)"><el-icon><Close /></el-icon></el-button>
+            </div>
+          </div>
+          <div class="selection-summary"><div><span>总大小</span><strong>{{ formatSize(conversionTotalSize) }}</strong></div><div><span>总时长</span><strong>{{ formatDuration(conversionTotalDuration) }}</strong></div></div>
+        </section>
+
+        <section class="conversion-settings-panel">
+          <div class="conversion-stepper"><span class="done"><i>1</i>选择内容</span><b></b><span class="active"><i>2</i>转换设置</span><b></b><span><i>3</i>确认提交</span></div>
+          <div class="settings-heading"><div><strong>转换设置</strong><span>确认输出方案与目录</span></div><el-tag v-if="conversionProfile" effect="plain">{{ conversionProfile.outputFormat.toUpperCase() }}</el-tag></div>
+          <el-form label-position="top" class="conversion-settings-form">
+            <el-form-item label="转换方案" required><el-select v-model="selectedProfile"><el-option v-for="profile in store.profiles" :key="profile.id" :label="profile.name" :value="profile.id"><span>{{ profile.name }}</span><small class="profile-option-meta">{{ profile.outputFormat.toUpperCase() }} · {{ profile.codec?.toUpperCase() }} · {{ profile.bitrate ? `${profile.bitrate} kbps` : '无损' }}</small></el-option></el-select></el-form-item>
+            <el-form-item label="输出目录"><el-input v-model="outputDir" clearable placeholder="留空则使用方案或全局输出目录" /><span class="output-path-state"><el-icon><CircleCheckFilled /></el-icon>{{ conversionOutputDir }}</span></el-form-item>
+          </el-form>
+          <div class="output-estimate"><div><el-icon><Document /></el-icon><span>文件数<strong>{{ conversionFiles.length }}</strong></span></div><div><el-icon><Files /></el-icon><span>源文件大小<strong>{{ formatSize(conversionTotalSize) }}</strong></span></div><div><el-icon><Timer /></el-icon><span>总时长<strong>{{ formatDuration(conversionTotalDuration) }}</strong></span></div><div><el-icon><Headset /></el-icon><span>输出格式<strong>{{ conversionProfile?.outputFormat.toUpperCase() || '--' }}</strong></span></div></div>
+          <div class="duplicate-warning"><el-icon><WarningFilled /></el-icon><span>如果目标文件或相同活动任务已存在，系统会安全跳过，不会覆盖现有文件。</span></div>
+          <div class="naming-preview"><div><strong>输出预览</strong><span>按当前方案生成的前 {{ Math.min(conversionFiles.length, 5) }} 个路径</span></div><code v-for="path in conversionPreviewPaths" :key="path">{{ path }}</code></div>
+          <el-collapse v-model="showAdvancedConversion" class="advanced-summary"><el-collapse-item name="advanced" title="方案参数"><div class="advanced-grid"><span>编码器<strong>{{ conversionProfile?.codec?.toUpperCase() || '--' }}</strong></span><span>比特率<strong>{{ conversionProfile?.bitrate ? `${conversionProfile.bitrate} kbps` : '无损' }}</strong></span><span>采样率<strong>{{ conversionProfile?.sampleRate ? `${conversionProfile.sampleRate} Hz` : '保持源文件' }}</strong></span><span>封面<strong>{{ conversionProfile?.coverPolicy || '--' }}</strong></span></div></el-collapse-item></el-collapse>
+        </section>
       </div>
-      <template #footer>
-        <el-button @click="showConvertDialog = false">取消</el-button>
-        <el-button type="primary" @click="executeConvert">开始转换</el-button>
-      </template>
+      <template #footer><div class="conversion-footer"><span>将创建 {{ conversionFiles.length }} 个转换任务</span><div><el-button @click="showConvertDialog = false">取消</el-button><el-button type="primary" :disabled="!conversionFiles.length || !selectedProfile" @click="executeConvert">创建 {{ conversionFiles.length }} 个转换任务</el-button></div></div></template>
     </el-dialog>
   </div>
 </template>
 
 <style scoped>
 .files-page {
-  padding: 0;
+  padding-bottom: 32px;
 }
 
-h1 {
-  margin-bottom: 20px;
-  color: #303133;
+.library-summary {
+  display: flex;
+  gap: 7px;
+  align-items: baseline;
+  color: #748179;
+  font-size: 13px;
+}
+
+.library-summary strong {
+  color: #0c9c68;
+  font-size: 26px;
 }
 
 .filter-card {
-  margin-bottom: 20px;
+  margin-bottom: 16px;
+}
+
+.filter-card :deep(.el-card__body) {
+  padding: 18px 20px;
 }
 
 .files-card {
@@ -461,26 +549,66 @@ h1 {
 .files-layout {
   display: flex;
   align-items: flex-start;
-  gap: 16px;
+  gap: 0;
 }
 
 .folder-panel {
-  flex: 0 0 220px;
+  flex: 0 0 190px;
   max-height: calc(100vh - 260px);
-  padding-right: 12px;
+  padding: 20px 16px 20px 20px;
   overflow: auto;
-  border-right: 1px solid #ebeef5;
+  border-right: 1px solid #e1e7e2;
 }
 
 .folder-title {
-  margin-bottom: 10px;
-  color: #303133;
+  margin-bottom: 14px;
+  color: #26342c;
   font-weight: 600;
 }
 
 .files-table-panel {
   flex: 1;
   min-width: 0;
+}
+
+.track-cell { display: flex; width: 100%; gap: 11px; align-items: center; padding: 0; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
+.cover-thumb, .cover-large { display: grid; flex: 0 0 auto; place-items: center; overflow: hidden; background: #e5f1eb; color: #168d63; }
+.cover-thumb { width: 42px; height: 42px; border-radius: 6px; }
+.cover-thumb img, .cover-large img { width: 100%; height: 100%; object-fit: cover; }
+.track-copy { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.track-copy strong, .track-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.track-copy strong { color: #24322b; font-size: 14px; font-weight: 600; }
+.track-copy small { color: #829087; font-size: 12px; }
+.file-inspector { flex: 0 0 230px; min-height: 600px; padding: 18px; border-left: 1px solid #e1e7e2; }
+.file-inspector.is-empty { display: flex; flex-direction: column; gap: 8px; align-items: center; justify-content: center; color: #8a978f; text-align: center; }
+.file-inspector.is-empty > .el-icon { color: #58b991; font-size: 34px; }
+.file-inspector.is-empty strong { color: #46534c; }
+.file-inspector.is-empty span { max-width: 180px; font-size: 12px; line-height: 1.6; }
+.inspector-heading { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; color: #304039; font-size: 13px; font-weight: 600; }
+.cover-large { width: 100%; aspect-ratio: 1; margin-bottom: 16px; border-radius: 9px; font-size: 54px; }
+.file-inspector h2 { margin: 0 0 5px; overflow: hidden; color: #1f2d26; font-size: 18px; text-overflow: ellipsis; white-space: nowrap; }
+.file-inspector > p { margin: 2px 0; overflow: hidden; color: #75827a; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.file-facts { margin: 16px 0; padding: 12px 0; border-top: 1px solid #e4e9e5; border-bottom: 1px solid #e4e9e5; }
+.file-facts div { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; font-size: 12px; }
+.file-facts dt { color: #86928b; }.file-facts dd { color: #3d4b43; }
+.metadata-health { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; color: #7b8981; font-size: 12px; }
+.metadata-health strong { color: #0c9c68; }.metadata-health .el-progress { grid-column: 1 / -1; }.metadata-health :deep(.el-progress-bar__inner) { background: #0c9c68; }
+.inspector-actions { display: grid; grid-template-columns: auto 1fr; gap: 8px; margin-top: 18px; }.inspector-actions .el-button { margin: 0; }
+
+:deep(.folder-panel .el-tree) {
+  background: transparent;
+  color: #56645c;
+}
+
+:deep(.folder-panel .el-tree-node__content) {
+  height: 36px;
+  border-radius: 7px;
+}
+
+:deep(.folder-panel .el-tree-node__content:hover),
+:deep(.folder-panel .is-current > .el-tree-node__content) {
+  background: #e8f4ed;
+  color: #0c8f61;
 }
 
 :deep(.files-table .el-scrollbar__bar.is-vertical) {
@@ -523,8 +651,8 @@ h1 {
   grid-column: 1 / -1;
   margin: 4px 0 14px;
   padding-left: 10px;
-  color: #409eff;
-  border-left: 3px solid #409eff;
+  color: #0c9c68;
+  border-left: 3px solid #0c9c68;
   font-size: 15px;
   font-weight: 600;
   line-height: 20px;
@@ -537,7 +665,18 @@ h1 {
   vertical-align: -2px;
 }
 
+.conversion-workspace { display: grid; grid-template-columns: 390px minmax(0, 1fr); min-height: 620px; margin: -20px; }
+.conversion-files-panel { display: flex; min-width: 0; flex-direction: column; background: #f8faf9; border-right: 1px solid #e4eae6; }
+.conversion-panel-heading { display: flex; align-items: center; justify-content: space-between; padding: 18px 20px; border-bottom: 1px solid #e4eae6; }.conversion-panel-heading > div { display: flex; flex-direction: column; gap: 4px; }.conversion-panel-heading strong { color: #28362f; font-size: 14px; }.conversion-panel-heading span { color: #8a9590; font-size: 10px; }
+.conversion-file-list { flex: 1; max-height: 505px; overflow: auto; }.conversion-file-row { display: flex; align-items: center; gap: 11px; padding: 12px 15px; border-bottom: 1px solid #e7ece9; }.conversion-cover { display: grid; width: 49px; height: 49px; flex: 0 0 49px; place-items: center; overflow: hidden; color: #0c9c68; background: #e2f0eb; border-radius: 8px; }.conversion-cover img { width: 100%; height: 100%; object-fit: cover; }.conversion-file-row > div { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 3px; }.conversion-file-row strong, .conversion-file-row span, .conversion-file-row small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.conversion-file-row strong { color: #2c3933; font-size: 11px; }.conversion-file-row span { color: #76837c; font-size: 10px; }.conversion-file-row small { color: #9aa39f; font-size: 9px; }.selection-summary { display: grid; grid-template-columns: 1fr 1fr; padding: 13px 18px; border-top: 1px solid #e4eae6; }.selection-summary div { display: flex; flex-direction: column; gap: 3px; }.selection-summary span { color: #8e9894; font-size: 9px; }.selection-summary strong { color: #35433c; font-size: 11px; }
+.conversion-settings-panel { min-width: 0; padding: 22px 26px; }.conversion-stepper { display: flex; align-items: center; margin-bottom: 24px; color: #a0a9a5; font-size: 10px; }.conversion-stepper span { display: flex; align-items: center; gap: 6px; white-space: nowrap; }.conversion-stepper i { display: grid; width: 22px; height: 22px; place-items: center; font-style: normal; border: 1px solid #d9e0dc; border-radius: 50%; }.conversion-stepper b { flex: 1; height: 1px; margin: 0 10px; background: #e2e7e4; }.conversion-stepper .done, .conversion-stepper .active { color: #087955; font-weight: 700; }.conversion-stepper .done i { color: #fff; background: #0c9c68; border-color: #0c9c68; }.conversion-stepper .active i { border-color: #0c9c68; }
+.settings-heading { display: flex; align-items: flex-start; justify-content: space-between; padding-bottom: 14px; border-bottom: 1px solid #e6ebe8; }.settings-heading > div { display: flex; flex-direction: column; gap: 4px; }.settings-heading strong { color: #28362f; font-size: 16px; }.settings-heading span { color: #909a95; font-size: 10px; }.conversion-settings-form { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; padding-top: 17px; }.conversion-settings-form :deep(.el-select) { width: 100%; }.profile-option-meta { float: right; margin-left: 30px; color: #98a19d; }.output-path-state { display: flex; align-items: center; gap: 5px; max-width: 100%; margin-top: 6px; overflow: hidden; color: #0c9c68; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.output-estimate { display: grid; grid-template-columns: repeat(4, 1fr); padding: 14px 0; border-top: 1px solid #e8ecea; border-bottom: 1px solid #e8ecea; }.output-estimate > div { display: flex; align-items: center; justify-content: center; gap: 7px; color: #0c9c68; border-right: 1px solid #e8ecea; }.output-estimate > div:last-child { border-right: 0; }.output-estimate span { display: flex; flex-direction: column; gap: 3px; color: #909a95; font-size: 9px; }.output-estimate strong { color: #35423c; font-size: 11px; }.duplicate-warning { display: flex; align-items: flex-start; gap: 8px; padding: 11px 13px; margin: 14px 0; color: #a36d18; background: #fff7e8; border: 1px solid #f2dfbb; border-radius: 8px; font-size: 10px; line-height: 1.5; }
+.naming-preview { padding: 13px; background: #f7f9f8; border-radius: 9px; }.naming-preview > div { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }.naming-preview strong { color: #405048; font-size: 11px; }.naming-preview span { color: #98a19d; font-size: 9px; }.naming-preview code { display: block; padding: 5px 7px; overflow: hidden; color: #5b6862; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }.naming-preview code + code { border-top: 1px solid #e5eae7; }.advanced-summary { margin-top: 11px; border: 0; }.advanced-summary :deep(.el-collapse-item__header) { height: 38px; padding: 0 10px; color: #64716b; background: #f7f9f8; border: 0; border-radius: 8px; font-size: 10px; }.advanced-summary :deep(.el-collapse-item__wrap) { border: 0; }.advanced-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; padding-top: 9px; }.advanced-grid span { display: flex; flex-direction: column; gap: 3px; color: #929c97; font-size: 9px; }.advanced-grid strong { color: #3d4b44; font-size: 10px; }.conversion-footer { display: flex; align-items: center; justify-content: space-between; }.conversion-footer > span { color: #7f8b85; font-size: 11px; }
+
 @media (max-width: 1000px) {
+  .conversion-workspace { grid-template-columns: 1fr; }
+  .conversion-files-panel { display: none; }
   .files-layout {
     flex-direction: column;
   }
@@ -550,5 +689,7 @@ h1 {
     border-right: none;
     border-bottom: 1px solid #ebeef5;
   }
+
+  .file-inspector { display: none; }
 }
 </style>

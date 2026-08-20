@@ -1,7 +1,7 @@
 import hashlib
 import logging
 from pathlib import Path
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Response
 from pydantic import BaseModel
 from typing import List, Optional
 from app.config import settings
@@ -160,6 +160,25 @@ async def get_file(file_id: str):
         return files_cache[file_id]
 
     raise HTTPException(status_code=404, detail="File not found")
+
+
+@router.get("/{file_id}/cover")
+async def get_file_cover(file_id: str):
+    """按需返回音频内嵌封面，避免文件列表携带大块二进制数据。"""
+    file_data = files_cache.get(file_id)
+    if not file_data:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    metadata = metadata_service.read_metadata(file_data["path"])
+    cover = metadata.get("cover") if metadata else None
+    if not cover or not cover.get("data"):
+        raise HTTPException(status_code=404, detail="Cover not found")
+
+    return Response(
+        content=bytes(cover["data"]),
+        media_type=cover.get("mime") or "image/jpeg",
+        headers={"Cache-Control": "private, max-age=3600"},
+    )
 
 
 @router.delete("/{file_id}")
