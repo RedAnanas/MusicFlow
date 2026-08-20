@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useAppStore } from '../stores/app'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { WatchFolder, WatchFolderEvent } from '../types'
+import WatchFolderEditorDialog from '../components/WatchFolderEditorDialog.vue'
 
 const store = useAppStore()
 const showCreateDialog = ref(false)
@@ -20,6 +21,7 @@ const newFolder = ref({
   profileIds: [] as string[],
   autoProcess: true,
   recursiveScan: true,
+  scanIntervalMinutes: 5,
   outputDir: '/mnt/d/Music/output',
 })
 
@@ -29,6 +31,7 @@ const editFolder = ref({
   profileIds: [] as string[],
   autoProcess: true,
   recursiveScan: true,
+  scanIntervalMinutes: 5,
   outputDir: '',
 })
 
@@ -40,6 +43,36 @@ onMounted(async () => {
 onUnmounted(() => {
   if (refreshTimer) clearInterval(refreshTimer)
 })
+
+const enabledCount = computed(() => store.watchFolders.filter(folder => folder.enabled).length)
+const watchingCount = computed(() => store.watchFolders.filter(folder => folder.watching).length)
+const errorCount = computed(() => store.watchFolders.filter(folder => folder.lastError).length)
+const selectedProfiles = computed(() => store.profiles.filter(profile => selectedFolder.value?.profileIds.includes(profile.id)))
+
+watch(
+  () => store.watchFolders,
+  folders => {
+    if (!folders.length) {
+      selectedFolder.value = null
+      return
+    }
+    selectedFolder.value = folders.find(folder => folder.id === selectedFolder.value?.id) || folders[0]
+  },
+  { immediate: true, deep: true },
+)
+
+watch(
+  () => selectedFolder.value?.id,
+  async id => {
+    watchEvents.value = []
+    if (!id) return
+    try {
+      watchEvents.value = await store.fetchWatchFolderEvents(id)
+    } catch {
+      // 详情区保留为空，不影响目录操作。
+    }
+  },
+)
 
 const formatTime = (value?: string) => {
   if (!value) return '-'
@@ -60,6 +93,7 @@ const handleCreate = async () => {
       profileIds: [],
       autoProcess: true,
       recursiveScan: true,
+      scanIntervalMinutes: 5,
       outputDir: '/mnt/d/Music/output',
     }
   } catch (error) {
@@ -76,6 +110,7 @@ const handleEdit = (folder: WatchFolder) => {
     profileIds: folder.profileIds || [],
     autoProcess: folder.autoProcess,
     recursiveScan: folder.recursiveScan,
+    scanIntervalMinutes: folder.scanIntervalMinutes,
     outputDir: folder.outputDir || '',
   }
   showEditDialog.value = true
@@ -167,81 +202,39 @@ const handleEvents = async (folder: WatchFolder) => {
       </el-button>
     </div>
 
-    <!-- 监控目录列表 -->
-    <el-card v-loading="store.loading">
-      <el-table :data="store.watchFolders" style="width: 100%">
-        <el-table-column prop="name" label="名称" min-width="150" />
+    <div class="watch-summary">
+      <div><span>监控目录</span><strong>{{ store.watchFolders.length }}</strong></div>
+      <div><span>已启用</span><strong>{{ enabledCount }}</strong></div>
+      <div><span>正在监听</span><strong class="success-value">{{ watchingCount }}</strong></div>
+      <div><span>异常目录</span><strong :class="{ 'danger-value': errorCount }">{{ errorCount }}</strong></div>
+    </div>
 
-        <el-table-column prop="inputDir" label="输入目录" min-width="200" />
+    <div class="watch-workspace" v-loading="store.loading">
+      <section class="watch-table-panel">
+        <div class="table-toolbar"><div><strong>目录列表</strong><span>状态每 5 秒自动更新</span></div><el-button @click="store.fetchWatchFolders()"><el-icon><Refresh /></el-icon>刷新</el-button></div>
+        <el-table :data="store.watchFolders" highlight-current-row height="540" @current-change="(row: WatchFolder) => selectedFolder = row">
+          <el-table-column label="状态" width="86"><template #default="{ row }"><span class="state-pill" :class="{ active: row.watching, disabled: !row.enabled, error: row.enabled && !row.watching }"><i></i>{{ !row.enabled ? '停用' : row.watching ? '监听中' : '异常' }}</span></template></el-table-column>
+          <el-table-column label="目录" min-width="230"><template #default="{ row }"><div class="folder-cell"><strong>{{ row.name }}</strong><code>{{ row.inputDir }}</code></div></template></el-table-column>
+          <el-table-column label="方案" width="118"><template #default="{ row }">{{ row.profileIds.length }} 个方案</template></el-table-column>
+          <el-table-column label="最近扫描" width="150"><template #default="{ row }"><div class="scan-cell"><span>{{ formatTime(row.lastScan) }}</span><small>{{ row.lastScanCount }} 个文件</small></div></template></el-table-column>
+          <el-table-column label="任务" width="76" align="right"><template #default="{ row }"><strong>{{ row.createdTasks }}</strong></template></el-table-column>
+        </el-table>
+      </section>
 
-        <el-table-column prop="outputDir" label="输出目录" min-width="200">
-          <template #default="{ row }">
-            {{ row.outputDir || '使用配置或全局默认目录' }}
-          </template>
-        </el-table-column>
-
-        <el-table-column label="转换配置" width="150">
-          <template #default="{ row }">
-            {{ row.profileIds?.length }} 个配置
-          </template>
-        </el-table-column>
-
-        <el-table-column prop="autoProcess" label="自动处理" width="100">
-          <template #default="{ row }">
-            <el-tag :type="row.autoProcess ? 'success' : 'info'" size="small">
-              {{ row.autoProcess ? '开启' : '关闭' }}
-            </el-tag>
-          </template>
-        </el-table-column>
-
-        <el-table-column prop="recursiveScan" label="递归扫描" width="100">
-          <template #default="{ row }">
-            <el-tag :type="row.recursiveScan ? 'success' : 'info'" size="small">
-              {{ row.recursiveScan ? '开启' : '关闭' }}
-            </el-tag>
-          </template>
-        </el-table-column>
-
-        <el-table-column label="实时状态" min-width="180">
-          <template #default="{ row }">
-            <div class="watch-status">
-              <el-tag :type="!row.enabled ? 'info' : row.watching ? 'success' : 'danger'" size="small">
-                {{ !row.enabled ? '已停用' : row.watching ? '监听中' : '未监听' }}
-              </el-tag>
-              <span v-if="row.lastError" class="status-error">{{ row.lastError }}</span>
-            </div>
-          </template>
-        </el-table-column>
-
-        <el-table-column label="操作" width="220" fixed="right">
-          <template #default="{ row }">
-            <div class="operation-buttons">
-              <el-button type="success" link size="small" @click="handleTriggerConvert(row.id)">
-                立即转换
-              </el-button>
-              <el-button type="primary" link size="small" @click="handleScan(row.id)">
-                扫描
-              </el-button>
-              <el-button type="warning" link size="small" @click="handleEdit(row)">
-                编辑
-              </el-button>
-              <el-button type="info" link size="small" @click="handleEvents(row)">
-                事件
-              </el-button>
-              <el-button :type="row.enabled ? 'info' : 'success'" link size="small" @click="handleToggle(row)">
-                {{ row.enabled ? '停用' : '启用' }}
-              </el-button>
-              <el-button type="danger" link size="small" @click="handleDelete(row.id)">
-                删除
-              </el-button>
-            </div>
-          </template>
-        </el-table-column>
-      </el-table>
-    </el-card>
+      <aside v-if="selectedFolder" class="watch-inspector">
+        <div class="folder-heading"><div class="folder-mark"><el-icon><FolderOpened /></el-icon></div><div><span class="eyebrow">监控详情</span><h2>{{ selectedFolder.name }}</h2></div></div>
+        <div class="health-banner" :class="{ error: selectedFolder.lastError, idle: !selectedFolder.watching }"><span class="health-icon"><el-icon><CircleCheck v-if="selectedFolder.watching && !selectedFolder.lastError" /><Warning v-else /></el-icon></span><div><strong>{{ selectedFolder.lastError ? '监控发生异常' : selectedFolder.watching ? '目录运行正常' : '目录当前未监听' }}</strong><small>{{ selectedFolder.lastError || selectedFolder.lastEvent || '等待新的文件事件' }}</small></div></div>
+        <section class="inspector-section"><h3>运行信息</h3><dl><div><dt>输入目录</dt><dd><code>{{ selectedFolder.inputDir }}</code></dd></div><div><dt>输出目录</dt><dd><code>{{ selectedFolder.outputDir || '使用默认目录' }}</code></dd></div><div><dt>下次扫描</dt><dd>{{ formatTime(selectedFolder.nextScanAt) }}</dd></div><div><dt>扫描方式</dt><dd>{{ selectedFolder.recursiveScan ? '递归扫描' : '仅当前目录' }} · {{ selectedFolder.autoProcess ? '自动处理' : '手动处理' }}</dd></div></dl></section>
+        <section class="inspector-section"><h3>转换方案</h3><div class="profile-chips"><el-tag v-for="profile in selectedProfiles" :key="profile.id" effect="plain">{{ profile.name }}</el-tag><span v-if="!selectedProfiles.length" class="empty-copy">尚未关联方案</span></div></section>
+        <section class="inspector-section events-section"><div class="section-heading"><h3>最近事件</h3><el-button link type="primary" @click="handleEvents(selectedFolder)">查看全部</el-button></div><div v-if="watchEvents.length" class="event-list"><div v-for="event in watchEvents.slice(0, 3)" :key="`${event.timestamp}-${event.message}`"><i></i><p><strong>{{ event.type }}</strong><span>{{ event.message }}</span><small>{{ formatTime(event.timestamp) }}</small></p></div></div><span v-else class="empty-copy">暂无监控事件</span></section>
+        <div class="inspector-buttons"><el-button type="primary" @click="handleTriggerConvert(selectedFolder.id)"><el-icon><VideoPlay /></el-icon>立即转换</el-button><el-button @click="handleScan(selectedFolder.id)"><el-icon><Search /></el-icon>扫描</el-button><el-button @click="handleEdit(selectedFolder)"><el-icon><Edit /></el-icon>编辑</el-button><el-button :type="selectedFolder.enabled ? 'warning' : 'success'" plain @click="handleToggle(selectedFolder)">{{ selectedFolder.enabled ? '停用' : '启用' }}</el-button></div>
+        <el-button class="delete-folder" type="danger" link @click="handleDelete(selectedFolder.id)"><el-icon><Delete /></el-icon>删除监控目录</el-button>
+      </aside>
+    </div>
 
     <!-- 创建对话框 -->
     <el-dialog
+      v-if="false"
       v-model="showCreateDialog"
       title="添加监控目录"
       width="760px"
@@ -297,6 +290,7 @@ const handleEvents = async (folder: WatchFolder) => {
 
     <!-- 编辑对话框 -->
     <el-dialog
+      v-if="false"
       v-model="showEditDialog"
       title="编辑监控目录"
       width="760px"
@@ -350,6 +344,9 @@ const handleEvents = async (folder: WatchFolder) => {
       </template>
     </el-dialog>
 
+    <WatchFolderEditorDialog v-model="showCreateDialog" mode="create" :form="newFolder" :profiles="store.profiles" :file-stable-seconds="store.settings.fileStableSeconds" @submit="handleCreate" />
+    <WatchFolderEditorDialog v-model="showEditDialog" mode="edit" :form="editFolder" :profiles="store.profiles" :folder="selectedFolder" :file-stable-seconds="store.settings.fileStableSeconds" @submit="handleUpdate" />
+
     <el-dialog
       v-model="showEventsDialog"
       :title="`${selectedFolderName} - 监控事件`"
@@ -370,6 +367,65 @@ const handleEvents = async (folder: WatchFolder) => {
 .watch-folders-page {
   padding-bottom: 32px;
 }
+
+.watch-summary { display: grid; grid-template-columns: repeat(4, 1fr); margin-bottom: 16px; overflow: hidden; background: #fff; border: 1px solid #e7ece9; border-radius: 14px; }
+.watch-summary > div { display: flex; align-items: center; justify-content: space-between; padding: 17px 22px; border-right: 1px solid #edf0ef; }
+.watch-summary > div:last-child { border-right: 0; }
+.watch-summary span { color: #7f8a86; font-size: 12px; }
+.watch-summary strong { color: #26332e; font-size: 23px; }
+.watch-summary .success-value { color: #0c9c68; }
+.watch-summary .danger-value { color: #e45656; }
+.watch-workspace { display: grid; grid-template-columns: minmax(0, 1fr) 360px; min-height: 620px; overflow: hidden; background: #fff; border: 1px solid #e7ece9; border-radius: 16px; box-shadow: 0 12px 36px rgba(18, 58, 45, .05); }
+.watch-table-panel { min-width: 0; border-right: 1px solid #e7ece9; }
+.table-toolbar { display: flex; align-items: center; justify-content: space-between; padding: 18px 20px; border-bottom: 1px solid #edf0ef; }
+.table-toolbar > div { display: flex; flex-direction: column; gap: 4px; }
+.table-toolbar strong { color: #26322e; font-size: 15px; }
+.table-toolbar span { color: #98a19e; font-size: 11px; }
+.state-pill { display: inline-flex; align-items: center; gap: 6px; color: #cf5b4f; font-size: 11px; font-weight: 700; }
+.state-pill i { width: 7px; height: 7px; background: #e06458; border-radius: 50%; }
+.state-pill.active { color: #087955; }
+.state-pill.active i { background: #0c9c68; box-shadow: 0 0 0 3px #e1f4ed; }
+.state-pill.disabled { color: #919b97; }
+.state-pill.disabled i { background: #aab2af; }
+.folder-cell, .scan-cell { display: flex; min-width: 0; flex-direction: column; gap: 5px; }
+.folder-cell strong { color: #2b3833; font-size: 13px; }
+.folder-cell code { overflow: hidden; color: #7e8a85; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.scan-cell span { color: #3e4a46; font-size: 11px; }
+.scan-cell small { color: #9aa39f; font-size: 10px; }
+.watch-inspector { min-width: 0; padding: 23px; background: #fbfcfc; }
+.folder-heading { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; }
+.folder-mark { display: grid; width: 44px; height: 44px; place-items: center; background: #e3f3ed; color: #0b8c62; border-radius: 11px; font-size: 21px; }
+.eyebrow { display: block; margin-bottom: 3px; color: #0c9c68; font-size: 10px; font-weight: 800; letter-spacing: .1em; }
+.folder-heading h2 { margin: 0; color: #23302b; font-size: 19px; }
+.health-banner { display: flex; align-items: flex-start; gap: 11px; padding: 14px; margin-bottom: 19px; background: #eaf7f2; border: 1px solid #cdebe0; border-radius: 11px; }
+.health-banner.error { background: #fff0ef; border-color: #f4d2cf; }
+.health-banner.idle { background: #f3f5f4; border-color: #e4e8e6; }
+.health-icon { display: grid; width: 28px; height: 28px; flex: 0 0 28px; place-items: center; color: #0c9c68; background: #fff; border-radius: 50%; }
+.health-banner.error .health-icon { color: #df584e; }
+.health-banner > div { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
+.health-banner strong { color: #2c3934; font-size: 12px; }
+.health-banner small { overflow: hidden; color: #77847f; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.inspector-section { padding: 15px 0; border-top: 1px solid #e7ebe9; }
+.inspector-section h3 { margin: 0 0 12px; color: #53605b; font-size: 11px; font-weight: 800; letter-spacing: .04em; }
+.inspector-section dl { margin: 0; }
+.inspector-section dl > div { display: flex; justify-content: space-between; gap: 14px; min-height: 29px; }
+.inspector-section dt { flex: 0 0 auto; color: #969f9b; font-size: 10px; }
+.inspector-section dd { min-width: 0; margin: 0; overflow: hidden; color: #3c4944; font-size: 11px; font-weight: 600; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
+.inspector-section code { font-size: 9px; }
+.profile-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.empty-copy { color: #9ba4a0; font-size: 11px; }
+.section-heading { display: flex; align-items: center; justify-content: space-between; }
+.section-heading h3 { margin-bottom: 0; }
+.event-list { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+.event-list > div { display: flex; gap: 9px; }
+.event-list i { width: 6px; height: 6px; margin-top: 5px; background: #0c9c68; border-radius: 50%; }
+.event-list p { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 2px; margin: 0; }
+.event-list strong, .event-list span, .event-list small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.event-list strong { color: #53605b; font-size: 10px; text-transform: uppercase; }
+.event-list span { color: #35423d; font-size: 11px; }
+.event-list small { color: #9ba49f; font-size: 9px; }
+.inspector-buttons { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; padding-top: 16px; border-top: 1px solid #e7ebe9; }
+.delete-folder { width: 100%; margin-top: 10px; }
 
 .watch-status {
   display: flex;
@@ -455,6 +511,9 @@ const handleEvents = async (folder: WatchFolder) => {
 }
 
 @media (max-width: 700px) {
+  .watch-summary { grid-template-columns: repeat(2, 1fr); }
+  .watch-workspace { grid-template-columns: 1fr; }
+  .watch-table-panel { border-right: 0; border-bottom: 1px solid #e7ece9; }
   .watch-folder-form {
     grid-template-columns: 1fr;
   }

@@ -26,6 +26,7 @@ const conversionFiles = ref<FileItem[]>([])
 const selectedProfile = ref('apple-music-aac-256')
 const outputDir = ref('')
 const coverErrors = ref(new Set<string>())
+const showAdvancedConversion = ref<string[]>([])
 
 const formats = ['mp3', 'flac', 'm4a', 'aac', 'alac', 'wav', 'ogg', 'opus']
 const folderTreeProps = {
@@ -33,10 +34,37 @@ const folderTreeProps = {
   label: 'label',
 }
 
+const conversionProfile = computed(() => store.profiles.find(profile => profile.id === selectedProfile.value))
+const conversionTotalSize = computed(() => conversionFiles.value.reduce((total, file) => total + file.size, 0))
+const conversionTotalDuration = computed(() => conversionFiles.value.reduce((total, file) => total + (file.duration || 0), 0))
+const conversionOutputDir = computed(() => outputDir.value.trim() || conversionProfile.value?.outputDir || store.settings.musicOutputDir)
+const conversionPreviewPaths = computed(() => conversionFiles.value.slice(0, 5).map(file => {
+  const profile = conversionProfile.value
+  const title = file.title || file.filename.replace(/\.[^.]+$/, '')
+  const name = (profile?.filenameTemplate || '{title}.{extension}').replace('{title}', title).replace('{extension}', profile?.outputFormat || 'm4a')
+  return `${conversionOutputDir.value}/${name}`
+}))
+
+const removeConversionFile = (id: string) => {
+  conversionFiles.value = conversionFiles.value.filter(file => file.id !== id)
+  currentFile.value = conversionFiles.value[0] || null
+  if (!conversionFiles.value.length) showConvertDialog.value = false
+}
+
 onMounted(() => {
   store.fetchFiles()
   store.fetchProfiles()
 })
+
+watch(
+  () => store.profiles,
+  profiles => {
+    if (profiles.length && !profiles.some(profile => profile.id === selectedProfile.value)) {
+      selectedProfile.value = profiles[0].id
+    }
+  },
+  { immediate: true, deep: true },
+)
 
 const normalizePath = (path: string) => {
   const normalizedPath = path.replace(/\\/g, '/')
@@ -452,40 +480,38 @@ const handleBatchConvert = () => {
     <!-- 转换对话框 -->
     <el-dialog
       v-model="showConvertDialog"
-      :title="conversionFiles.length > 1 ? `批量转换（${conversionFiles.length} 个文件）` : '转换文件'"
-      width="680px"
+      :title="conversionFiles.length > 1 ? '创建批量转换任务' : '创建转换任务'"
+      width="1140px"
+      class="workspace-dialog conversion-dialog"
+      destroy-on-close
     >
-      <div v-if="currentFile">
-        <el-form label-position="top" class="conversion-form">
-          <div class="conversion-section-title">转换内容</div>
-          <el-form-item class="conversion-item-full">
-            <template #label>源文件<el-tooltip content="单个转换显示文件名；批量转换显示已选文件数量。" placement="top"><el-icon class="conversion-field-help"><QuestionFilled /></el-icon></el-tooltip></template>
-            <span v-if="conversionFiles.length === 1">{{ currentFile.filename }}</span>
-            <span v-else>已选择 {{ conversionFiles.length }} 个文件</span>
-          </el-form-item>
-          <div class="conversion-section-title">转换设置</div>
-          <el-form-item class="conversion-item-full">
-            <template #label>转换配置<el-tooltip content="决定输出格式、编码参数，以及是否交接给 Apple Music。" placement="top"><el-icon class="conversion-field-help"><QuestionFilled /></el-icon></el-tooltip></template>
-            <el-select v-model="selectedProfile" style="width: 100%">
-              <el-option
-                v-for="profile in store.profiles"
-                :key="profile.id"
-                :label="profile.name"
-                :value="profile.id"
-              />
-            </el-select>
-          </el-form-item>
-          <el-form-item class="conversion-item-full">
-            <template #label>输出路径<el-tooltip content="可选的 WSL 输出目录；留空则使用全局输出目录。" placement="top"><el-icon class="conversion-field-help"><QuestionFilled /></el-icon></el-tooltip></template>
-            <el-input v-model="outputDir" placeholder="留空则使用全局输出目录" clearable />
-            <div style="color: #666; font-size: 12px; margin-top: 4px;">可填写 WSL 绝对目录，例如 /mnt/d/Music/output/M4A/AAC/Converted</div>
-          </el-form-item>
-        </el-form>
+      <div v-if="currentFile" class="conversion-workspace">
+        <section class="conversion-files-panel">
+          <div class="conversion-panel-heading"><div><strong>已选择文件</strong><span>{{ conversionFiles.length }} 首音乐</span></div><el-button v-if="conversionFiles.length > 1" link type="primary" @click="conversionFiles = []">清空</el-button></div>
+          <div class="conversion-file-list">
+            <div v-for="file in conversionFiles" :key="file.id" class="conversion-file-row">
+              <span class="conversion-cover"><img v-if="!coverErrors.has(file.id)" :src="getCoverUrl(file)" :alt="`${file.album || file.filename} 封面`" @error="markCoverError(file.id)" /><el-icon v-else><Headset /></el-icon></span>
+              <div><strong>{{ file.title || file.filename }}</strong><span>{{ file.artist || '未知艺术家' }} · {{ file.album || '未知专辑' }}</span><small>{{ file.format.toUpperCase() }} · {{ formatSize(file.size) }} · {{ formatDuration(file.duration) }}</small></div>
+              <el-button circle text aria-label="移除文件" @click="removeConversionFile(file.id)"><el-icon><Close /></el-icon></el-button>
+            </div>
+          </div>
+          <div class="selection-summary"><div><span>总大小</span><strong>{{ formatSize(conversionTotalSize) }}</strong></div><div><span>总时长</span><strong>{{ formatDuration(conversionTotalDuration) }}</strong></div></div>
+        </section>
+
+        <section class="conversion-settings-panel">
+          <div class="conversion-stepper"><span class="done"><i>1</i>选择内容</span><b></b><span class="active"><i>2</i>转换设置</span><b></b><span><i>3</i>确认提交</span></div>
+          <div class="settings-heading"><div><strong>转换设置</strong><span>确认输出方案与目录</span></div><el-tag v-if="conversionProfile" effect="plain">{{ conversionProfile.outputFormat.toUpperCase() }}</el-tag></div>
+          <el-form label-position="top" class="conversion-settings-form">
+            <el-form-item label="转换方案" required><el-select v-model="selectedProfile"><el-option v-for="profile in store.profiles" :key="profile.id" :label="profile.name" :value="profile.id"><span>{{ profile.name }}</span><small class="profile-option-meta">{{ profile.outputFormat.toUpperCase() }} · {{ profile.codec?.toUpperCase() }} · {{ profile.bitrate ? `${profile.bitrate} kbps` : '无损' }}</small></el-option></el-select></el-form-item>
+            <el-form-item label="输出目录"><el-input v-model="outputDir" clearable placeholder="留空则使用方案或全局输出目录" /><span class="output-path-state"><el-icon><CircleCheckFilled /></el-icon>{{ conversionOutputDir }}</span></el-form-item>
+          </el-form>
+          <div class="output-estimate"><div><el-icon><Document /></el-icon><span>文件数<strong>{{ conversionFiles.length }}</strong></span></div><div><el-icon><Files /></el-icon><span>源文件大小<strong>{{ formatSize(conversionTotalSize) }}</strong></span></div><div><el-icon><Timer /></el-icon><span>总时长<strong>{{ formatDuration(conversionTotalDuration) }}</strong></span></div><div><el-icon><Headset /></el-icon><span>输出格式<strong>{{ conversionProfile?.outputFormat.toUpperCase() || '--' }}</strong></span></div></div>
+          <div class="duplicate-warning"><el-icon><WarningFilled /></el-icon><span>如果目标文件或相同活动任务已存在，系统会安全跳过，不会覆盖现有文件。</span></div>
+          <div class="naming-preview"><div><strong>输出预览</strong><span>按当前方案生成的前 {{ Math.min(conversionFiles.length, 5) }} 个路径</span></div><code v-for="path in conversionPreviewPaths" :key="path">{{ path }}</code></div>
+          <el-collapse v-model="showAdvancedConversion" class="advanced-summary"><el-collapse-item name="advanced" title="方案参数"><div class="advanced-grid"><span>编码器<strong>{{ conversionProfile?.codec?.toUpperCase() || '--' }}</strong></span><span>比特率<strong>{{ conversionProfile?.bitrate ? `${conversionProfile.bitrate} kbps` : '无损' }}</strong></span><span>采样率<strong>{{ conversionProfile?.sampleRate ? `${conversionProfile.sampleRate} Hz` : '保持源文件' }}</strong></span><span>封面<strong>{{ conversionProfile?.coverPolicy || '--' }}</strong></span></div></el-collapse-item></el-collapse>
+        </section>
       </div>
-      <template #footer>
-        <el-button @click="showConvertDialog = false">取消</el-button>
-        <el-button type="primary" @click="executeConvert">开始转换</el-button>
-      </template>
+      <template #footer><div class="conversion-footer"><span>将创建 {{ conversionFiles.length }} 个转换任务</span><div><el-button @click="showConvertDialog = false">取消</el-button><el-button type="primary" :disabled="!conversionFiles.length || !selectedProfile" @click="executeConvert">创建 {{ conversionFiles.length }} 个转换任务</el-button></div></div></template>
     </el-dialog>
   </div>
 </template>
@@ -639,7 +665,18 @@ const handleBatchConvert = () => {
   vertical-align: -2px;
 }
 
+.conversion-workspace { display: grid; grid-template-columns: 390px minmax(0, 1fr); min-height: 620px; margin: -20px; }
+.conversion-files-panel { display: flex; min-width: 0; flex-direction: column; background: #f8faf9; border-right: 1px solid #e4eae6; }
+.conversion-panel-heading { display: flex; align-items: center; justify-content: space-between; padding: 18px 20px; border-bottom: 1px solid #e4eae6; }.conversion-panel-heading > div { display: flex; flex-direction: column; gap: 4px; }.conversion-panel-heading strong { color: #28362f; font-size: 14px; }.conversion-panel-heading span { color: #8a9590; font-size: 10px; }
+.conversion-file-list { flex: 1; max-height: 505px; overflow: auto; }.conversion-file-row { display: flex; align-items: center; gap: 11px; padding: 12px 15px; border-bottom: 1px solid #e7ece9; }.conversion-cover { display: grid; width: 49px; height: 49px; flex: 0 0 49px; place-items: center; overflow: hidden; color: #0c9c68; background: #e2f0eb; border-radius: 8px; }.conversion-cover img { width: 100%; height: 100%; object-fit: cover; }.conversion-file-row > div { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 3px; }.conversion-file-row strong, .conversion-file-row span, .conversion-file-row small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.conversion-file-row strong { color: #2c3933; font-size: 11px; }.conversion-file-row span { color: #76837c; font-size: 10px; }.conversion-file-row small { color: #9aa39f; font-size: 9px; }.selection-summary { display: grid; grid-template-columns: 1fr 1fr; padding: 13px 18px; border-top: 1px solid #e4eae6; }.selection-summary div { display: flex; flex-direction: column; gap: 3px; }.selection-summary span { color: #8e9894; font-size: 9px; }.selection-summary strong { color: #35433c; font-size: 11px; }
+.conversion-settings-panel { min-width: 0; padding: 22px 26px; }.conversion-stepper { display: flex; align-items: center; margin-bottom: 24px; color: #a0a9a5; font-size: 10px; }.conversion-stepper span { display: flex; align-items: center; gap: 6px; white-space: nowrap; }.conversion-stepper i { display: grid; width: 22px; height: 22px; place-items: center; font-style: normal; border: 1px solid #d9e0dc; border-radius: 50%; }.conversion-stepper b { flex: 1; height: 1px; margin: 0 10px; background: #e2e7e4; }.conversion-stepper .done, .conversion-stepper .active { color: #087955; font-weight: 700; }.conversion-stepper .done i { color: #fff; background: #0c9c68; border-color: #0c9c68; }.conversion-stepper .active i { border-color: #0c9c68; }
+.settings-heading { display: flex; align-items: flex-start; justify-content: space-between; padding-bottom: 14px; border-bottom: 1px solid #e6ebe8; }.settings-heading > div { display: flex; flex-direction: column; gap: 4px; }.settings-heading strong { color: #28362f; font-size: 16px; }.settings-heading span { color: #909a95; font-size: 10px; }.conversion-settings-form { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; padding-top: 17px; }.conversion-settings-form :deep(.el-select) { width: 100%; }.profile-option-meta { float: right; margin-left: 30px; color: #98a19d; }.output-path-state { display: flex; align-items: center; gap: 5px; max-width: 100%; margin-top: 6px; overflow: hidden; color: #0c9c68; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.output-estimate { display: grid; grid-template-columns: repeat(4, 1fr); padding: 14px 0; border-top: 1px solid #e8ecea; border-bottom: 1px solid #e8ecea; }.output-estimate > div { display: flex; align-items: center; justify-content: center; gap: 7px; color: #0c9c68; border-right: 1px solid #e8ecea; }.output-estimate > div:last-child { border-right: 0; }.output-estimate span { display: flex; flex-direction: column; gap: 3px; color: #909a95; font-size: 9px; }.output-estimate strong { color: #35423c; font-size: 11px; }.duplicate-warning { display: flex; align-items: flex-start; gap: 8px; padding: 11px 13px; margin: 14px 0; color: #a36d18; background: #fff7e8; border: 1px solid #f2dfbb; border-radius: 8px; font-size: 10px; line-height: 1.5; }
+.naming-preview { padding: 13px; background: #f7f9f8; border-radius: 9px; }.naming-preview > div { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }.naming-preview strong { color: #405048; font-size: 11px; }.naming-preview span { color: #98a19d; font-size: 9px; }.naming-preview code { display: block; padding: 5px 7px; overflow: hidden; color: #5b6862; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }.naming-preview code + code { border-top: 1px solid #e5eae7; }.advanced-summary { margin-top: 11px; border: 0; }.advanced-summary :deep(.el-collapse-item__header) { height: 38px; padding: 0 10px; color: #64716b; background: #f7f9f8; border: 0; border-radius: 8px; font-size: 10px; }.advanced-summary :deep(.el-collapse-item__wrap) { border: 0; }.advanced-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; padding-top: 9px; }.advanced-grid span { display: flex; flex-direction: column; gap: 3px; color: #929c97; font-size: 9px; }.advanced-grid strong { color: #3d4b44; font-size: 10px; }.conversion-footer { display: flex; align-items: center; justify-content: space-between; }.conversion-footer > span { color: #7f8b85; font-size: 11px; }
+
 @media (max-width: 1000px) {
+  .conversion-workspace { grid-template-columns: 1fr; }
+  .conversion-files-panel { display: none; }
   .files-layout {
     flex-direction: column;
   }
