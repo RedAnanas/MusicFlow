@@ -26,9 +26,12 @@ const formatTimestamp = (timestamp: string) => {
 </script>
 
 <template>
-  <div class="logs-page">
+  <div class="logs-page product-page">
     <div class="page-header">
-      <h1>日志</h1>
+      <div class="page-title-block">
+        <h1>日志</h1>
+        <p>查看系统运行记录，快速定位扫描、转换和交接异常。</p>
+      </div>
       <div class="header-actions">
         <el-select v-model="levelFilter" placeholder="日志级别" clearable style="width: 120px; margin-right: 10px">
           <el-option label="INFO" value="INFO" />
@@ -78,28 +81,33 @@ const formatTimestamp = (timestamp: string) => {
 
 <style scoped>
 .logs-page {
-  padding: 0;
-}
-
-.page-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 20px;
-}
-
-h1 {
-  margin: 0;
-  color: #303133;
+  padding-bottom: 32px;
 }
 
 .header-actions {
   display: flex;
+  gap: 10px;
   align-items: center;
+}
+
+.header-actions :deep(.el-select),
+.header-actions :deep(.el-input-number) {
+  margin-right: 0 !important;
 }
 
 .details-text {
   color: #909399;
   font-size: 12px;
+}
+
+:deep(.el-card__body) {
+  overflow: hidden;
+  border-radius: 12px;
+}
+
+@media (max-width: 820px) {
+  .header-actions {
+    flex-wrap: wrap;
+  }
 }
 </style>

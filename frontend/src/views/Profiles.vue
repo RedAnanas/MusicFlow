@@ -166,12 +166,15 @@ const handleDelete = async (id: string) => {
 </script>
 
 <template>
-  <div class="profiles-page">
+  <div class="profiles-page product-page">
     <div class="page-header">
-      <h1>转换配置</h1>
+      <div class="page-title-block">
+        <h1>转换方案</h1>
+        <p>管理输出格式、音质、元数据和 Apple Music 自动交接规则。</p>
+      </div>
       <el-button type="primary" @click="showCreateDialog = true">
         <el-icon><Plus /></el-icon>
-        创建配置
+        新建方案
       </el-button>
     </div>
 
@@ -467,19 +470,7 @@ const handleDelete = async (id: string) => {
 
 <style scoped>
 .profiles-page {
-  padding: 0;
-}
-
-.page-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 20px;
-}
-
-h1 {
-  margin: 0;
-  color: #303133;
+  padding-bottom: 32px;
 }
 
 .form-tip {
@@ -521,8 +512,8 @@ h1 {
   grid-column: 1 / -1;
   margin: 4px 0 14px;
   padding-left: 10px;
-  color: #409eff;
-  border-left: 3px solid #409eff;
+  color: #0c9c68;
+  border-left: 3px solid #0c9c68;
   font-size: 15px;
   font-weight: 600;
   line-height: 20px;
@@ -533,6 +524,15 @@ h1 {
   color: #909399;
   cursor: help;
   vertical-align: -2px;
+}
+
+:deep(.el-card__body) {
+  overflow: hidden;
+  border-radius: 12px;
+}
+
+:deep(.el-dialog) {
+  border-radius: 14px;
 }
 
 @media (max-width: 700px) {
