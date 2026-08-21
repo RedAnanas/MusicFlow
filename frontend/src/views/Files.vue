@@ -4,6 +4,7 @@ import { useAppStore } from '../stores/app'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import axios from 'axios'
 import TablePagination from '../components/TablePagination.vue'
+import ServerFileBrowser from '../components/ServerFileBrowser.vue'
 import type { FileItem } from '../types'
 
 interface FolderTreeNode {
@@ -27,6 +28,9 @@ const selectedProfile = ref('apple-music-aac-256')
 const outputDir = ref('')
 const coverErrors = ref(new Set<string>())
 const showAdvancedConversion = ref<string[]>([])
+const showFileBrowser = ref(false)
+const browserMode = ref<'files' | 'directory'>('files')
+const importing = ref(false)
 
 const formats = ['mp3', 'flac', 'm4a', 'aac', 'alac', 'wav', 'ogg', 'opus']
 const folderTreeProps = {
@@ -286,6 +290,26 @@ const handleBatchConvert = () => {
   outputDir.value = ''
   showConvertDialog.value = true
 }
+
+const openFileBrowser = (mode: 'files' | 'directory') => {
+  browserMode.value = mode
+  showFileBrowser.value = true
+}
+
+const handleImportPaths = async (paths: string[]) => {
+  importing.value = true
+  try {
+    const result = await store.importFiles(paths)
+    if (result.imported.length) ElMessage.success(`已加入 ${result.imported.length} 个音频文件`)
+    else ElMessage.info('所选位置没有发现新的支持格式音频')
+    if (result.errors.length) ElMessage.warning(`${result.errors.length} 个路径无法加入`)
+  } catch (error) {
+    const message = axios.isAxiosError(error) ? error.response?.data?.detail : null
+    ElMessage.error(message || '添加音乐失败')
+  } finally {
+    importing.value = false
+  }
+}
 </script>
 
 <template>
@@ -320,6 +344,14 @@ const handleBatchConvert = () => {
           </el-select>
         </el-col>
         <el-col :span="12">
+          <el-button :loading="importing" @click="openFileBrowser('files')">
+            <el-icon><DocumentAdd /></el-icon>
+            添加文件
+          </el-button>
+          <el-button :loading="importing" @click="openFileBrowser('directory')">
+            <el-icon><FolderAdd /></el-icon>
+            添加文件夹
+          </el-button>
           <el-button plain @click="store.fetchFiles(true)">
             <el-icon><Refresh /></el-icon>
             刷新
@@ -513,6 +545,12 @@ const handleBatchConvert = () => {
       </div>
       <template #footer><div class="conversion-footer"><span>将创建 {{ conversionFiles.length }} 个转换任务</span><div><el-button @click="showConvertDialog = false">取消</el-button><el-button type="primary" :disabled="!conversionFiles.length || !selectedProfile" @click="executeConvert">创建 {{ conversionFiles.length }} 个转换任务</el-button></div></div></template>
     </el-dialog>
+
+    <ServerFileBrowser
+      v-model="showFileBrowser"
+      :mode="browserMode"
+      @select="handleImportPaths"
+    />
   </div>
 </template>
 
