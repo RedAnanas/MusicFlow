@@ -45,6 +45,10 @@ class FileBatchConvertRequest(FileConvertRequest):
     file_ids: List[str]
 
 
+class FileImportRequest(BaseModel):
+    paths: List[str]
+
+
 class MetadataUpdate(BaseModel):
     title: Optional[str] = None
     artist: Optional[str] = None
@@ -99,58 +103,104 @@ async def get_files(
 def _scan_files() -> List[dict]:
     """扫描源目录并读取音频信息，仅在首次加载或手动刷新时执行。"""
     files = []
+    seen_ids = set()
 
     # 扫描所有配置的源目录
-    source_dirs = [settings.MUSIC_SOURCE_DIR]
+    source_dirs = [settings.MUSIC_SOURCE_DIR, *_load_library_sources()]
 
     for source_dir in source_dirs:
-        dir_path = Path(source_dir)
-        if not dir_path.exists():
-            continue
-
-        # 扫描音频文件
-        for file_path in dir_path.rglob("*"):
-            if not file_path.is_file():
-                continue
-
-            # 检查是否为支持的音频格式
-            ext = file_path.suffix.lower()[1:]
-            if ext not in settings.SUPPORTED_FORMATS:
-                continue
-
-            file_id = hashlib.md5(str(file_path).encode()).hexdigest()
-
-            # 获取音频信息
-            audio_info = ffprobe_service.get_audio_info(str(file_path))
-
-            # 获取元数据
-            metadata = metadata_service.read_metadata(str(file_path))
-
-            file_data = {
-                "id": file_id,
-                "path": str(file_path),
-                "filename": file_path.name,
-                "format": ext,
-                "size": file_path.stat().st_size,
-                "duration": audio_info.get("duration") if audio_info else None,
-                "sample_rate": audio_info.get("sample_rate") if audio_info else None,
-                "bit_depth": audio_info.get("bits_per_sample") if audio_info else None,
-                "bitrate": audio_info.get("bitrate") if audio_info else None,
-                "channels": audio_info.get("channels") if audio_info else None,
-                "artist": metadata.get("artist") if metadata else None,
-                "album": metadata.get("album") if metadata else None,
-                "title": metadata.get("title") if metadata else None,
-                "track": metadata.get("track") if metadata else None,
-                "year": metadata.get("date") if metadata else None,
-                "genre": metadata.get("genre") if metadata else None,
-            }
-
-            files.append(file_data)
-
-            # 缓存文件信息
-            files_cache[file_id] = file_data
+        for file_path in _iter_audio_files(Path(source_dir)):
+            file_data = _read_file(file_path)
+            if file_data and file_data["id"] not in seen_ids:
+                files.append(file_data)
+                seen_ids.add(file_data["id"])
+                files_cache[file_data["id"]] = file_data
 
     return files
+
+
+def _load_library_sources() -> List[str]:
+    data = config_manager.load("library_sources.json") or {}
+    return [str(path) for path in data.get("paths", [])]
+
+
+def _save_library_sources(paths: List[str]):
+    if not config_manager.save("library_sources.json", {"paths": paths}):
+        raise HTTPException(status_code=500, detail="保存音乐库来源失败")
+
+
+def _iter_audio_files(path: Path):
+    candidates = path.rglob("*") if path.is_dir() else [path]
+    for file_path in candidates:
+        try:
+            if file_path.is_file() and file_path.suffix.lower()[1:] in settings.SUPPORTED_FORMATS:
+                yield file_path
+        except OSError:
+            continue
+
+
+def _read_file(file_path: Path) -> Optional[dict]:
+    try:
+        ext = file_path.suffix.lower()[1:]
+        audio_info = ffprobe_service.get_audio_info(str(file_path))
+        metadata = metadata_service.read_metadata(str(file_path))
+        return {
+            "id": hashlib.md5(str(file_path).encode()).hexdigest(),
+            "path": str(file_path),
+            "filename": file_path.name,
+            "format": ext,
+            "size": file_path.stat().st_size,
+            "duration": audio_info.get("duration") if audio_info else None,
+            "sample_rate": audio_info.get("sample_rate") if audio_info else None,
+            "bit_depth": audio_info.get("bits_per_sample") if audio_info else None,
+            "bitrate": audio_info.get("bitrate") if audio_info else None,
+            "channels": audio_info.get("channels") if audio_info else None,
+            "artist": metadata.get("artist") if metadata else None,
+            "album": metadata.get("album") if metadata else None,
+            "title": metadata.get("title") if metadata else None,
+            "track": metadata.get("track") if metadata else None,
+            "year": metadata.get("date") if metadata else None,
+            "genre": metadata.get("genre") if metadata else None,
+        }
+    except (OSError, ValueError) as exc:
+        logger.warning(f"Cannot read audio file {file_path}: {exc}")
+        return None
+
+
+@router.post("/import")
+async def import_files(request: FileImportRequest):
+    """将服务器上的文件或目录加入音乐库，不复制源文件。"""
+    if not request.paths:
+        raise HTTPException(status_code=400, detail="至少选择一个文件或目录")
+
+    existing_sources = _load_library_sources()
+    imported = []
+    errors = []
+    for raw_path in request.paths:
+        path = Path(raw_path).expanduser()
+        if not path.is_absolute() or not path.exists():
+            errors.append({"path": raw_path, "error": "路径不存在或不是绝对路径"})
+            continue
+        if path.is_file() and path.suffix.lower()[1:] not in settings.SUPPORTED_FORMATS:
+            errors.append({"path": raw_path, "error": "不支持的音频格式"})
+            continue
+        normalized = str(path)
+        if normalized not in existing_sources:
+            existing_sources.append(normalized)
+        for file_path in _iter_audio_files(path):
+            file_data = _read_file(file_path)
+            if not file_data:
+                continue
+            files_cache[file_data["id"]] = file_data
+            imported.append(file_data)
+
+    _save_library_sources(existing_sources)
+    global file_list_cache, file_list_loaded
+    merged = {item["id"]: item for item in file_list_cache}
+    merged.update({item["id"]: item for item in imported})
+    file_list_cache = list(merged.values())
+    file_list_loaded = True
+    return {"imported": imported, "errors": errors}
 
 
 @router.get("/{file_id}", response_model=FileResponse)

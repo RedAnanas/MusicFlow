@@ -47,6 +47,13 @@ export interface FileItem {
   genre?: string
 }
 
+export interface FileSystemEntry {
+  name: string
+  path: string
+  is_directory: boolean
+  size?: number
+}
+
 export interface Profile {
   id: string
   name: string

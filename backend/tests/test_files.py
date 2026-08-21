@@ -144,3 +144,26 @@ def test_get_files_reuses_scan_result_until_refresh(monkeypatch):
     assert second == scanned
     assert refreshed == scanned
     assert len(scan_calls) == 2
+
+
+def test_import_files_adds_server_audio_and_persists_source(monkeypatch, tmp_path):
+    """导入服务器文件应加入音乐库并保存来源，不复制源文件。"""
+    source_file = tmp_path / "歌曲.flac"
+    source_file.write_bytes(b"audio")
+    saved = []
+    monkeypatch.setattr(files_api, "_load_library_sources", lambda: [])
+    monkeypatch.setattr(files_api, "_save_library_sources", lambda paths: saved.extend(paths))
+    monkeypatch.setattr(files_api, "_read_file", lambda path: {
+        "id": "file-1",
+        "path": str(path),
+        "filename": path.name,
+        "format": "flac",
+        "size": path.stat().st_size,
+    })
+
+    result = asyncio.run(files_api.import_files(files_api.FileImportRequest(paths=[str(source_file)])))
+
+    assert result["errors"] == []
+    assert result["imported"][0]["path"] == str(source_file)
+    assert saved == [str(source_file)]
+    assert source_file.read_bytes() == b"audio"

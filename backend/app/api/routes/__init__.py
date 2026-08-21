@@ -1,9 +1,10 @@
 from fastapi import APIRouter
-from app.api.routes import files, tasks, profiles, watch_folders, settings as settings_api, logs
+from app.api.routes import files, filesystem, tasks, profiles, watch_folders, settings as settings_api, logs
 
 router = APIRouter()
 
 router.include_router(files.router, prefix="/files", tags=["Files"])
+router.include_router(filesystem.router, prefix="/filesystem", tags=["Filesystem"])
 router.include_router(tasks.router, prefix="/tasks", tags=["Tasks"])
 router.include_router(profiles.router, prefix="/profiles", tags=["Profiles"])
 router.include_router(watch_folders.router, prefix="/watch-folders", tags=["Watch Folders"])
