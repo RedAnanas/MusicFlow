@@ -9,6 +9,7 @@ import type {
   WatchFolderEvent,
   Settings,
   LogEntry,
+  LibrarySource,
 } from '../types'
 
 interface WatchFolderApiResponse {
@@ -62,14 +63,15 @@ function mapFile(data: any): FileItem {
 export const useAppStore = defineStore('app', () => {
   // 状态
   const files = ref<FileItem[]>([])
+  const librarySources = ref<LibrarySource[]>([])
   const filesLoaded = ref(false)
   const tasks = ref<Task[]>([])
   const profiles = ref<Profile[]>([])
   const watchFolders = ref<WatchFolder[]>([])
   const settings = ref<Settings>({
-    musicSourceDir: '/music/source',
-    musicOutputDir: '/music/output',
-    musicArchiveDir: '/music/archive',
+    musicSourceDir: '',
+    musicOutputDir: '',
+    musicArchiveDir: '',
     maxConcurrentTasks: 2,
     ffmpegThreads: 2,
     fileStableSeconds: 30,
@@ -106,7 +108,20 @@ export const useAppStore = defineStore('app', () => {
     imported.forEach((file: FileItem) => merged.set(file.id, file))
     files.value = [...merged.values()]
     filesLoaded.value = true
+    await fetchLibrarySources()
     return { imported, errors: response.data.errors }
+  }
+
+  async function fetchLibrarySources() {
+    const response = await axios.get<LibrarySource[]>('/api/files/sources')
+    librarySources.value = response.data
+  }
+
+  async function removeLibrarySource(id: string) {
+    await axios.delete(`/api/files/sources/${id}`)
+    librarySources.value = librarySources.value.filter(source => source.id !== id)
+    filesLoaded.value = false
+    await fetchFiles(true)
   }
 
   // 任务操作
@@ -433,6 +448,7 @@ export const useAppStore = defineStore('app', () => {
 
   return {
     files,
+    librarySources,
     tasks,
     profiles,
     watchFolders,
@@ -441,6 +457,8 @@ export const useAppStore = defineStore('app', () => {
     loading,
     fetchFiles,
     importFiles,
+    fetchLibrarySources,
+    removeLibrarySource,
     deleteFile,
     fetchTasks,
     fetchProfiles,

@@ -20,7 +20,7 @@ class WatchFolderCreate(BaseModel):
     auto_process: bool = True
     recursive_scan: bool = True
     scan_interval_minutes: int = 5
-    output_dir: Optional[str] = None
+    output_dir: str
 
 
 class WatchFolderUpdate(BaseModel):
@@ -35,6 +35,7 @@ class WatchFolderUpdate(BaseModel):
 
 class WatchFolderResponse(WatchFolderCreate):
     id: str
+    output_dir: Optional[str] = None
     enabled: bool = True
     watching: bool = False
     last_scan: Optional[str] = None
@@ -55,14 +56,12 @@ def validate_input_directory(directory: str):
 
 def prepare_output_directory(directory: Optional[str]):
     if not directory:
-        return
-    try:
-        Path(directory).mkdir(parents=True, exist_ok=True)
-    except OSError as exc:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Cannot create output directory {directory}: {exc}",
-        ) from exc
+        raise HTTPException(status_code=400, detail="必须选择输出目录")
+    path = Path(directory)
+    if not path.exists():
+        raise HTTPException(status_code=400, detail=f"Directory does not exist: {directory}")
+    if not path.is_dir():
+        raise HTTPException(status_code=400, detail=f"Path is not a directory: {directory}")
 
 
 def build_response(folder: WatchFolder) -> WatchFolderResponse:

@@ -57,16 +57,16 @@ def test_creating_enabled_folder_processes_existing_files(monkeypatch):
     assert processed == [("new-folder", "initial")]
 
 
-def test_watcher_uses_polling_observer(monkeypatch):
-    """WSL 挂载的 Windows 目录应使用轮询监听。"""
-    created_with = []
+def test_watcher_uses_native_observer(monkeypatch):
+    """Windows 本地目录应使用原生文件事件监听。"""
+    created = []
 
-    class FakePollingObserver:
-        def __init__(self, timeout):
-            created_with.append(timeout)
+    class FakeObserver:
+        def __init__(self):
+            created.append(True)
 
-    monkeypatch.setattr(watcher, "PollingObserver", FakePollingObserver)
+    monkeypatch.setattr(watcher, "Observer", FakeObserver)
 
     watcher.WatcherService()
 
-    assert created_with == [1]
+    assert created == [True]

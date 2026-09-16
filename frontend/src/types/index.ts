@@ -54,6 +54,13 @@ export interface FileSystemEntry {
   size?: number
 }
 
+export interface LibrarySource {
+  id: string
+  path: string
+  is_directory: boolean
+  exists: boolean
+}
+
 export interface Profile {
   id: string
   name: string

@@ -9,9 +9,9 @@ PROJECT_ROOT = BACKEND_DIR.parent
 
 class Settings(BaseSettings):
     # 基础路径
-    MUSIC_SOURCE_DIR: str = "/mnt/d/Music/source"
-    MUSIC_OUTPUT_DIR: str = "/mnt/d/Music/output"
-    MUSIC_ARCHIVE_DIR: str = "/mnt/d/Music/archive"
+    MUSIC_SOURCE_DIR: str = ""
+    MUSIC_OUTPUT_DIR: str = ""
+    MUSIC_ARCHIVE_DIR: str = ""
     CONFIG_DIR: str = str(PROJECT_ROOT / "config")
     LOGS_DIR: str = str(PROJECT_ROOT / "logs")
     TEMP_DIR: str = str(PROJECT_ROOT / "temp")
@@ -55,4 +55,5 @@ def ensure_directories():
     ]
 
     for dir_path in directories:
-        Path(dir_path).mkdir(parents=True, exist_ok=True)
+        if dir_path:
+            Path(dir_path).mkdir(parents=True, exist_ok=True)

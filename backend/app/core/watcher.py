@@ -3,7 +3,7 @@ import threading
 from pathlib import Path
 from typing import Callable, Dict, Set
 from watchdog.events import FileSystemEventHandler
-from watchdog.observers.polling import PollingObserver
+from watchdog.observers import Observer
 
 logger = logging.getLogger(__name__)
 
@@ -103,8 +103,7 @@ class WatcherService:
     """Watchdog 监控服务"""
 
     def __init__(self, stable_seconds: int = 30):
-        # WSL 访问 /mnt/d 时无法稳定接收 Windows 文件事件，使用轮询保证新增文件可被发现。
-        self.observer = PollingObserver(timeout=1)
+        self.observer = Observer()
         self.stable_seconds = stable_seconds
         self.watched_paths: Dict[str, tuple[object, MusicFileHandler]] = {}
 

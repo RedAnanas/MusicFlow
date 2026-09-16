@@ -251,7 +251,10 @@ class WatchFolderManager:
         return created
 
     def _build_output_path(self, folder: WatchFolder, source_path: Path, profile) -> Path:
-        output_root = Path(folder.output_dir or profile.output_dir or settings.MUSIC_OUTPUT_DIR)
+        output_dir = folder.output_dir or profile.output_dir
+        if not output_dir:
+            raise ValueError("请先为监控目录选择输出目录")
+        output_root = Path(output_dir)
         try:
             relative_path = source_path.relative_to(Path(folder.input_dir))
         except ValueError:

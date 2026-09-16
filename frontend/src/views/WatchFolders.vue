@@ -22,7 +22,7 @@ const newFolder = ref({
   autoProcess: true,
   recursiveScan: true,
   scanIntervalMinutes: 5,
-  outputDir: '/mnt/d/Music/output',
+  outputDir: '',
 })
 
 const editFolder = ref({
@@ -94,7 +94,7 @@ const handleCreate = async () => {
       autoProcess: true,
       recursiveScan: true,
       scanIntervalMinutes: 5,
-      outputDir: '/mnt/d/Music/output',
+      outputDir: '',
     }
   } catch (error) {
     console.error('>>> handleCreate error:', error)
@@ -224,7 +224,7 @@ const handleEvents = async (folder: WatchFolder) => {
       <aside v-if="selectedFolder" class="watch-inspector">
         <div class="folder-heading"><div class="folder-mark"><el-icon><FolderOpened /></el-icon></div><div><span class="eyebrow">监控详情</span><h2>{{ selectedFolder.name }}</h2></div></div>
         <div class="health-banner" :class="{ error: selectedFolder.lastError, idle: !selectedFolder.watching }"><span class="health-icon"><el-icon><CircleCheck v-if="selectedFolder.watching && !selectedFolder.lastError" /><Warning v-else /></el-icon></span><div><strong>{{ selectedFolder.lastError ? '监控发生异常' : selectedFolder.watching ? '目录运行正常' : '目录当前未监听' }}</strong><small>{{ selectedFolder.lastError || selectedFolder.lastEvent || '等待新的文件事件' }}</small></div></div>
-        <section class="inspector-section"><h3>运行信息</h3><dl><div><dt>输入目录</dt><dd><code>{{ selectedFolder.inputDir }}</code></dd></div><div><dt>输出目录</dt><dd><code>{{ selectedFolder.outputDir || '使用默认目录' }}</code></dd></div><div><dt>下次扫描</dt><dd>{{ formatTime(selectedFolder.nextScanAt) }}</dd></div><div><dt>扫描方式</dt><dd>{{ selectedFolder.recursiveScan ? '递归扫描' : '仅当前目录' }} · {{ selectedFolder.autoProcess ? '自动处理' : '手动处理' }}</dd></div></dl></section>
+        <section class="inspector-section"><h3>运行信息</h3><dl><div><dt>输入目录</dt><dd><code>{{ selectedFolder.inputDir }}</code></dd></div><div><dt>输出目录</dt><dd><code>{{ selectedFolder.outputDir || '尚未设置' }}</code></dd></div><div><dt>下次扫描</dt><dd>{{ formatTime(selectedFolder.nextScanAt) }}</dd></div><div><dt>扫描方式</dt><dd>{{ selectedFolder.recursiveScan ? '递归扫描' : '仅当前目录' }} · {{ selectedFolder.autoProcess ? '自动处理' : '手动处理' }}</dd></div></dl></section>
         <section class="inspector-section"><h3>转换方案</h3><div class="profile-chips"><el-tag v-for="profile in selectedProfiles" :key="profile.id" effect="plain">{{ profile.name }}</el-tag><span v-if="!selectedProfiles.length" class="empty-copy">尚未关联方案</span></div></section>
         <section class="inspector-section events-section"><div class="section-heading"><h3>最近事件</h3><el-button link type="primary" @click="handleEvents(selectedFolder)">查看全部</el-button></div><div v-if="watchEvents.length" class="event-list"><div v-for="event in watchEvents.slice(0, 3)" :key="`${event.timestamp}-${event.message}`"><i></i><p><strong>{{ event.type }}</strong><span>{{ event.message }}</span><small>{{ formatTime(event.timestamp) }}</small></p></div></div><span v-else class="empty-copy">暂无监控事件</span></section>
         <div class="inspector-buttons"><el-button type="primary" @click="handleTriggerConvert(selectedFolder.id)"><el-icon><VideoPlay /></el-icon>立即转换</el-button><el-button @click="handleScan(selectedFolder.id)"><el-icon><Search /></el-icon>扫描</el-button><el-button @click="handleEdit(selectedFolder)"><el-icon><Edit /></el-icon>编辑</el-button><el-button :type="selectedFolder.enabled ? 'warning' : 'success'" plain @click="handleToggle(selectedFolder)">{{ selectedFolder.enabled ? '停用' : '启用' }}</el-button></div>
@@ -247,13 +247,13 @@ const handleEvents = async (folder: WatchFolder) => {
         </el-form-item>
 
         <el-form-item class="form-item-full">
-          <template #label>输入目录<el-tooltip content="需要持续扫描和监听的音乐源目录，必须填写 WSL 绝对路径。" placement="top"><el-icon class="field-help"><QuestionFilled /></el-icon></el-tooltip></template>
-          <el-input v-model="newFolder.inputDir" placeholder="/music/source" />
+          <template #label>输入目录<el-tooltip content="需要持续扫描和监听的音乐源目录，请选择 Windows 本地或网络目录。" placement="top"><el-icon class="field-help"><QuestionFilled /></el-icon></el-tooltip></template>
+          <el-input v-model="newFolder.inputDir" placeholder="D:\Music\source" />
         </el-form-item>
 
         <el-form-item class="form-item-full">
           <template #label>输出目录<el-tooltip content="转换成品保存的位置；建议与 Apple Music 自动导入目录分开。" placement="top"><el-icon class="field-help"><QuestionFilled /></el-icon></el-tooltip></template>
-          <el-input v-model="newFolder.outputDir" placeholder="/music/output" />
+          <el-input v-model="newFolder.outputDir" placeholder="D:\Music\output" />
         </el-form-item>
 
         <div class="form-section-title form-item-full">转换设置</div>
@@ -303,8 +303,8 @@ const handleEvents = async (folder: WatchFolder) => {
         </el-form-item>
 
         <el-form-item class="form-item-full">
-          <template #label>输入目录<el-tooltip content="需要持续扫描和监听的音乐源目录，必须填写 WSL 绝对路径。" placement="top"><el-icon class="field-help"><QuestionFilled /></el-icon></el-tooltip></template>
-          <el-input v-model="editFolder.inputDir" placeholder="/music/source" />
+          <template #label>输入目录<el-tooltip content="需要持续扫描和监听的音乐源目录，请选择 Windows 本地或网络目录。" placement="top"><el-icon class="field-help"><QuestionFilled /></el-icon></el-tooltip></template>
+          <el-input v-model="editFolder.inputDir" placeholder="D:\Music\source" />
         </el-form-item>
 
         <el-form-item class="form-item-full">

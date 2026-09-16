@@ -29,6 +29,7 @@ const outputDir = ref('')
 const coverErrors = ref(new Set<string>())
 const showAdvancedConversion = ref<string[]>([])
 const showFileBrowser = ref(false)
+const showOutputBrowser = ref(false)
 const browserMode = ref<'files' | 'directory'>('files')
 const importing = ref(false)
 
@@ -41,7 +42,7 @@ const folderTreeProps = {
 const conversionProfile = computed(() => store.profiles.find(profile => profile.id === selectedProfile.value))
 const conversionTotalSize = computed(() => conversionFiles.value.reduce((total, file) => total + file.size, 0))
 const conversionTotalDuration = computed(() => conversionFiles.value.reduce((total, file) => total + (file.duration || 0), 0))
-const conversionOutputDir = computed(() => outputDir.value.trim() || conversionProfile.value?.outputDir || store.settings.musicOutputDir)
+const conversionOutputDir = computed(() => outputDir.value.trim() || conversionProfile.value?.outputDir || '')
 const conversionPreviewPaths = computed(() => conversionFiles.value.slice(0, 5).map(file => {
   const profile = conversionProfile.value
   const title = file.title || file.filename.replace(/\.[^.]+$/, '')
@@ -58,6 +59,7 @@ const removeConversionFile = (id: string) => {
 onMounted(() => {
   store.fetchFiles()
   store.fetchProfiles()
+  store.fetchLibrarySources()
 })
 
 watch(
@@ -310,6 +312,25 @@ const handleImportPaths = async (paths: string[]) => {
     importing.value = false
   }
 }
+
+const handleRemoveSource = async (id: string, path: string) => {
+  try {
+    await ElMessageBox.confirm(
+      `确定停止读取“${path}”吗？磁盘上的文件和文件夹不会被删除。`,
+      '移除音乐库来源',
+      { confirmButtonText: '停止读取', cancelButtonText: '取消', type: 'warning' },
+    )
+    await store.removeLibrarySource(id)
+    ElMessage.success('已停止读取该位置，磁盘内容未删除')
+  } catch (error) {
+    if (error === 'cancel' || error === 'close') return
+    ElMessage.error('移除音乐库来源失败')
+  }
+}
+
+const selectOutputDirectory = (paths: string[]) => {
+  outputDir.value = paths[0] || ''
+}
 </script>
 
 <template>
@@ -372,7 +393,16 @@ const handleImportPaths = async (paths: string[]) => {
     <el-card class="files-card">
       <div class="files-layout">
         <aside class="folder-panel">
-          <div class="folder-title">文件夹</div>
+          <div class="folder-title">已添加来源</div>
+          <div class="library-sources">
+            <div v-for="source in store.librarySources" :key="source.id" class="library-source" :class="{ offline: !source.exists }">
+              <el-icon><FolderOpened v-if="source.is_directory" /><Document v-else /></el-icon>
+              <span :title="source.path">{{ source.path }}</span>
+              <el-button type="danger" link aria-label="停止读取" @click="handleRemoveSource(source.id, source.path)"><el-icon><Close /></el-icon></el-button>
+            </div>
+            <span v-if="!store.librarySources.length" class="source-empty">尚未添加文件或文件夹</span>
+          </div>
+          <div class="folder-title library-tree-title">库内文件夹</div>
           <el-tree
             :data="folderTree"
             :props="folderTreeProps"
@@ -535,7 +565,7 @@ const handleImportPaths = async (paths: string[]) => {
           <div class="settings-heading"><div><strong>转换设置</strong><span>确认输出方案与目录</span></div><el-tag v-if="conversionProfile" effect="plain">{{ conversionProfile.outputFormat.toUpperCase() }}</el-tag></div>
           <el-form label-position="top" class="conversion-settings-form">
             <el-form-item label="转换方案" required><el-select v-model="selectedProfile"><el-option v-for="profile in store.profiles" :key="profile.id" :label="profile.name" :value="profile.id"><span>{{ profile.name }}</span><small class="profile-option-meta">{{ profile.outputFormat.toUpperCase() }} · {{ profile.codec?.toUpperCase() }} · {{ profile.bitrate ? `${profile.bitrate} kbps` : '无损' }}</small></el-option></el-select></el-form-item>
-            <el-form-item label="输出目录"><el-input v-model="outputDir" clearable placeholder="留空则使用方案或全局输出目录" /><span class="output-path-state"><el-icon><CircleCheckFilled /></el-icon>{{ conversionOutputDir }}</span></el-form-item>
+            <el-form-item label="输出目录" required><el-input v-model="outputDir" readonly placeholder="请选择转换成品保存目录"><template #append><el-button @click="showOutputBrowser = true"><el-icon><FolderOpened /></el-icon>选择</el-button></template></el-input><span v-if="conversionOutputDir" class="output-path-state"><el-icon><CircleCheckFilled /></el-icon>{{ conversionOutputDir }}</span></el-form-item>
           </el-form>
           <div class="output-estimate"><div><el-icon><Document /></el-icon><span>文件数<strong>{{ conversionFiles.length }}</strong></span></div><div><el-icon><Files /></el-icon><span>源文件大小<strong>{{ formatSize(conversionTotalSize) }}</strong></span></div><div><el-icon><Timer /></el-icon><span>总时长<strong>{{ formatDuration(conversionTotalDuration) }}</strong></span></div><div><el-icon><Headset /></el-icon><span>输出格式<strong>{{ conversionProfile?.outputFormat.toUpperCase() || '--' }}</strong></span></div></div>
           <div class="duplicate-warning"><el-icon><WarningFilled /></el-icon><span>如果目标文件或相同活动任务已存在，系统会安全跳过，不会覆盖现有文件。</span></div>
@@ -543,7 +573,7 @@ const handleImportPaths = async (paths: string[]) => {
           <el-collapse v-model="showAdvancedConversion" class="advanced-summary"><el-collapse-item name="advanced" title="方案参数"><div class="advanced-grid"><span>编码器<strong>{{ conversionProfile?.codec?.toUpperCase() || '--' }}</strong></span><span>比特率<strong>{{ conversionProfile?.bitrate ? `${conversionProfile.bitrate} kbps` : '无损' }}</strong></span><span>采样率<strong>{{ conversionProfile?.sampleRate ? `${conversionProfile.sampleRate} Hz` : '保持源文件' }}</strong></span><span>封面<strong>{{ conversionProfile?.coverPolicy || '--' }}</strong></span></div></el-collapse-item></el-collapse>
         </section>
       </div>
-      <template #footer><div class="conversion-footer"><span>将创建 {{ conversionFiles.length }} 个转换任务</span><div><el-button @click="showConvertDialog = false">取消</el-button><el-button type="primary" :disabled="!conversionFiles.length || !selectedProfile" @click="executeConvert">创建 {{ conversionFiles.length }} 个转换任务</el-button></div></div></template>
+      <template #footer><div class="conversion-footer"><span>将创建 {{ conversionFiles.length }} 个转换任务</span><div><el-button @click="showConvertDialog = false">取消</el-button><el-button type="primary" :disabled="!conversionFiles.length || !selectedProfile || !conversionOutputDir" @click="executeConvert">创建 {{ conversionFiles.length }} 个转换任务</el-button></div></div></template>
     </el-dialog>
 
     <ServerFileBrowser
@@ -551,6 +581,7 @@ const handleImportPaths = async (paths: string[]) => {
       :mode="browserMode"
       @select="handleImportPaths"
     />
+    <ServerFileBrowser v-model="showOutputBrowser" mode="directory" @select="selectOutputDirectory" />
   </div>
 </template>
 
@@ -603,6 +634,14 @@ const handleImportPaths = async (paths: string[]) => {
   color: #26342c;
   font-weight: 600;
 }
+
+.library-sources { display: flex; flex-direction: column; gap: 5px; margin-bottom: 16px; }
+.library-source { display: grid; grid-template-columns: 18px minmax(0, 1fr) 22px; gap: 6px; align-items: center; padding: 7px 5px 7px 8px; color: #536159; background: #f4f7f5; border-radius: 7px; font-size: 10px; }
+.library-source > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.library-source > .el-icon { color: #0c9c68; }
+.library-source.offline { color: #a45f58; background: #fff2f1; }
+.source-empty { display: block; margin-bottom: 14px; color: #99a39e; font-size: 10px; line-height: 1.5; }
+.library-tree-title { padding-top: 12px; border-top: 1px solid #e6ebe8; }
 
 .files-table-panel {
   flex: 1;

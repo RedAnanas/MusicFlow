@@ -49,6 +49,13 @@ class FileImportRequest(BaseModel):
     paths: List[str]
 
 
+class LibrarySourceResponse(BaseModel):
+    id: str
+    path: str
+    is_directory: bool
+    exists: bool
+
+
 class MetadataUpdate(BaseModel):
     title: Optional[str] = None
     artist: Optional[str] = None
@@ -105,8 +112,7 @@ def _scan_files() -> List[dict]:
     files = []
     seen_ids = set()
 
-    # 扫描所有配置的源目录
-    source_dirs = [settings.MUSIC_SOURCE_DIR, *_load_library_sources()]
+    source_dirs = _load_library_sources()
 
     for source_dir in source_dirs:
         for file_path in _iter_audio_files(Path(source_dir)):
@@ -127,6 +133,40 @@ def _load_library_sources() -> List[str]:
 def _save_library_sources(paths: List[str]):
     if not config_manager.save("library_sources.json", {"paths": paths}):
         raise HTTPException(status_code=500, detail="保存音乐库来源失败")
+
+
+def _source_id(path: str) -> str:
+    return hashlib.md5(path.encode()).hexdigest()
+
+
+@router.get("/sources", response_model=List[LibrarySourceResponse])
+async def get_library_sources():
+    """返回用户主动添加的音乐库来源。"""
+    return [
+        LibrarySourceResponse(
+            id=_source_id(path),
+            path=path,
+            is_directory=Path(path).is_dir(),
+            exists=Path(path).exists(),
+        )
+        for path in _load_library_sources()
+    ]
+
+
+@router.delete("/sources/{source_id}")
+async def remove_library_source(source_id: str):
+    """停止读取音乐库来源，不删除磁盘上的文件或目录。"""
+    sources = _load_library_sources()
+    removed = next((path for path in sources if _source_id(path) == source_id), None)
+    if not removed:
+        raise HTTPException(status_code=404, detail="音乐库来源不存在")
+
+    _save_library_sources([path for path in sources if path != removed])
+    global file_list_cache, file_list_loaded
+    files_cache.clear()
+    file_list_cache = _scan_files()
+    file_list_loaded = True
+    return {"status": "success", "removed": removed, "deleted_from_disk": False}
 
 
 def _iter_audio_files(path: Path):
@@ -238,12 +278,13 @@ async def delete_file(file_id: str):
     if not file_data:
         raise HTTPException(status_code=404, detail="文件不存在")
 
-    source_root = Path(settings.MUSIC_SOURCE_DIR).resolve()
     file_path = Path(file_data["path"]).resolve()
-    try:
-        file_path.relative_to(source_root)
-    except ValueError as exc:
-        raise HTTPException(status_code=403, detail="禁止删除音乐源目录之外的文件") from exc
+    source_paths = [Path(path).resolve() for path in _load_library_sources()]
+    if not any(
+        file_path == source_path or (source_path.is_dir() and file_path.is_relative_to(source_path))
+        for source_path in source_paths
+    ):
+        raise HTTPException(status_code=403, detail="禁止删除音乐库来源之外的文件")
 
     if not file_path.is_file():
         files_cache.pop(file_id, None)
@@ -311,7 +352,10 @@ async def queue_file_conversion(file_id: str, request: FileConvertRequest):
     if not profile or not profile.enabled:
         raise HTTPException(status_code=400, detail="转换配置不可用")
 
-    output_root = Path(request.output_dir or settings.MUSIC_OUTPUT_DIR)
+    output_dir = request.output_dir or profile.output_dir
+    if not output_dir:
+        raise HTTPException(status_code=400, detail="请先选择输出目录")
+    output_root = Path(output_dir)
     if not output_root.is_absolute():
         raise HTTPException(status_code=400, detail="输出路径必须为绝对路径")
     try:

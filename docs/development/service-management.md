@@ -1,23 +1,23 @@
-# MusicFlow WSL 项目管理
+# MusicFlow Windows 项目管理
 
-MusicFlow 前后端仅在 WSL 中运行。首次使用时，执行以下命令创建隔离的 Python 环境并安装前后端依赖：
+MusicFlow 本地开发默认在 Windows PowerShell 中运行。首次使用时，请确保已安装 Python 3.12、Node.js 18+ 和 FFmpeg/FFprobe，然后执行：
 
-```bash
-# MusicFlow 后端依赖目前要求 Python 3.12
-# 请确保 python3.12 与 python3.12-venv 已安装
-./scripts/setup-wsl.sh
+```powershell
+.\scripts\setup-windows.ps1
 ```
 
-之后统一使用 `scripts/musicflow.sh`：
+之后统一使用 `scripts\musicflow.ps1`：
 
-```bash
-./scripts/musicflow.sh start
-./scripts/musicflow.sh stop
-./scripts/musicflow.sh restart
-./scripts/musicflow.sh status
+```powershell
+.\scripts\musicflow.ps1 start
+.\scripts\musicflow.ps1 stop
+.\scripts\musicflow.ps1 restart
+.\scripts\musicflow.ps1 status
 ```
 
-脚本会自动加载 NVM 中的 Node.js，并且只会停止经命令行校验确认为 MusicFlow 的服务。运行日志保存在项目的 `logs/` 目录，进程状态保存在已忽略的 `temp/run/` 目录。WSL 中的 Docker 检查需要先在 Docker Desktop 的 **Settings → Resources → WSL Integration** 启用 Ubuntu。
+脚本会优先使用项目根目录下的 Windows `.venv`，并且只停止经命令行校验确认为 MusicFlow 的服务。运行日志保存在 `logs\`，进程状态保存在已忽略的 `temp\run\`。
+
+本地业务路径使用 Windows 绝对路径，例如 `D:\Music\source`，也支持已由 Windows 访问的 UNC 网络路径。
 
 访问地址：
 
