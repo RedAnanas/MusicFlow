@@ -78,6 +78,8 @@ docker compose up -d --build
 - Web UI：http://127.0.0.1:8080
 - 容器 API 不直接暴露，网页会自动转发 `/api` 请求。
 
+推送 `main` 会自动构建并发布 `redananas/musicflow` 的 `linux/amd64` 与 `linux/arm64` 镜像。首次发布前，在 GitHub 仓库 Secrets 中配置 `DOCKERHUB_USERNAME` 和 `DOCKERHUB_TOKEN`。
+
 ## 文档
 
 - [文档索引](docs/README.md)
