@@ -21,6 +21,7 @@ MusicFlow/
 │  └─ examples/             可提交的配置示例
 ├─ docs/                    架构、指南和历史文档
 ├─ scripts/                 启停、检查和环境安装脚本
+├─ VERSION                  唯一的项目版本来源
 ├─ logs/                    本地日志（Git 忽略）
 ├─ temp/                    临时文件和进程状态（Git 忽略）
 ├─ AGENTS.md                工程与协作规范
@@ -51,6 +52,12 @@ MusicFlow/
 
 # 停止
 .\scripts\musicflow.ps1 stop
+
+# 查看版本
+.\scripts\musicflow.ps1 version
+
+# 发布或升级前，只读检查现有数据能否被当前版本兼容
+.\scripts\musicflow.ps1 preflight
 ```
 
 - 前端：http://127.0.0.1:3000
@@ -78,7 +85,15 @@ docker compose up -d --build
 - Web UI：http://127.0.0.1:8080
 - 容器 API 不直接暴露，网页会自动转发 `/api` 请求。
 
-推送 `main` 会自动构建并发布 `redananas/musicflow` 的 `linux/amd64` 与 `linux/arm64` 镜像。首次发布前，在 GitHub 仓库 Secrets 中配置 `DOCKERHUB_USERNAME` 和 `DOCKERHUB_TOKEN`。
+推送 `main` 会自动构建并发布 `redananas/musicflow` 的 `linux/amd64` 与 `linux/arm64` 镜像。版本唯一来自根目录 `VERSION`：Actions 会发布 `latest`、完整版本号（如 `0.2.0`）和短版本号（如 `0.2`）标签，并写入镜像元数据。首次发布前，在 GitHub 仓库 Secrets 中配置 `DOCKERHUB_USERNAME` 和 `DOCKERHUB_TOKEN`。
+
+升级飞牛前，先用候选镜像挂载原有 `data` 目录运行只读预检。预检通过后再更新容器；预检不会创建、修改、备份或迁移数据。
+
+```sh
+docker run --rm -v /实际/data目录:/data:ro -e CONFIG_DIR=/data/config redananas/musicflow:0.2.0 python -m app.preflight
+```
+
+预检返回 `"status": "passed"` 才可升级；返回 `"blocked"` 时保留旧容器和数据，先处理报告中的错误。发布前也应备份 `data`，并在部署后检查 `/health` 的版本号。
 
 ## 文档
 

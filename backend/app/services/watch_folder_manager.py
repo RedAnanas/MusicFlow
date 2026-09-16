@@ -1,13 +1,15 @@
 import asyncio
 import logging
+import shutil
 import time
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from app.config import settings
 from app.core.watcher import watcher_service
-from app.models import WatchFolder
+from app.models import DeliveryTarget, DeliveryTargetType, WatchFolder
 from app.services.config_manager import config_manager
 
 logger = logging.getLogger(__name__)
@@ -34,6 +36,7 @@ class WatchFolderManager:
         for folder_id, folder_data in data.items():
             try:
                 folder = WatchFolder(**folder_data)
+                self._migrate_legacy_targets(folder)
                 self.watch_folders[folder_id] = folder
                 self._ensure_runtime(folder_id)
             except Exception as exc:
@@ -152,19 +155,22 @@ class WatchFolderManager:
     async def process_watch_folder(self, folder_id: str, trigger: str = "manual") -> Dict[str, Any]:
         folder = self.watch_folders.get(folder_id)
         if not folder:
-            return {"files": [], "created_tasks": 0}
+            return {"files": [], "created_tasks": 0, "copied_files": 0}
 
         files = self.scan_watch_folder(folder_id)
         created_tasks = 0
+        copied_files = 0
         for file_path in files:
-            created_tasks += await self._process_file(folder, file_path, trigger)
+            result = await self._process_file(folder, file_path, trigger)
+            created_tasks += result["created_tasks"]
+            copied_files += result["copied_files"]
 
         self._record_event(
             folder_id,
             "processed",
-            f"{trigger} 扫描创建 {created_tasks} 个转换任务",
+            f"{trigger} 扫描创建 {created_tasks} 个转换任务，原样复制 {copied_files} 个文件",
         )
-        return {"files": files, "created_tasks": created_tasks}
+        return {"files": files, "created_tasks": created_tasks, "copied_files": copied_files}
 
     def get_status(self, folder_id: str) -> Dict[str, Any]:
         folder = self.watch_folders.get(folder_id)
@@ -214,55 +220,90 @@ class WatchFolderManager:
         if not folder.auto_process:
             self._record_event(folder_id, "ignored", "自动处理已关闭，仅记录文件事件")
             return
-        created = await self._process_file(folder, file_path, "realtime")
-        self._record_event(folder_id, "processed", f"实时事件创建 {created} 个转换任务")
+        result = await self._process_file(folder, file_path, "realtime")
+        self._record_event(
+            folder_id,
+            "processed",
+            f"实时事件创建 {result['created_tasks']} 个转换任务，原样复制 {result['copied_files']} 个文件",
+        )
 
-    async def _process_file(self, folder: WatchFolder, file_path: str, trigger: str) -> int:
+    async def _process_file(self, folder: WatchFolder, file_path: str, trigger: str) -> Dict[str, int]:
         from app.api.routes.tasks import TaskCreate, enqueue_conversion_task
         from app.services.profile_manager import profile_manager
 
         source_path = Path(file_path)
         created = 0
-        for profile_id in folder.profile_ids:
-            profile = profile_manager.get_profile(profile_id)
-            if not profile or not profile.enabled:
-                self._record_event(folder.id, "error", f"输出配置不可用：{profile_id}")
-                continue
+        copied = 0
+        for target in folder.targets:
+            if target.type == DeliveryTargetType.CONVERT:
+                profile = profile_manager.get_profile(target.profile_id or "")
+                if not profile or not profile.enabled:
+                    self._record_event(folder.id, "error", f"转换方案不可用：{target.profile_id}")
+                    continue
 
-            output_file = self._build_output_path(folder, source_path, profile)
-            task = await enqueue_conversion_task(
-                TaskCreate(
-                    source_file=str(source_path),
-                    output_file=str(output_file),
-                    profile_id=profile_id,
-                ),
-                skip_existing=True,
-            )
-            if task:
-                created += 1
-                self._record_event(
-                    folder.id,
-                    "task",
-                    f"{trigger} 创建任务：{source_path.name} -> {output_file}",
+                output_file = self._build_output_path(folder, source_path, target, profile)
+                task = await enqueue_conversion_task(
+                    TaskCreate(
+                        source_file=str(source_path),
+                        output_file=str(output_file),
+                        profile_id=profile.id,
+                    ),
+                    skip_existing=True,
                 )
+                if task:
+                    created += 1
+                    self._record_event(
+                        folder.id,
+                        "task",
+                        f"{trigger} 创建 Apple Music 转换任务：{source_path.name} -> {output_file}",
+                    )
+            elif target.type == DeliveryTargetType.COPY:
+                output_file = self._build_output_path(folder, source_path, target)
+                if await asyncio.to_thread(self._copy_file, source_path, output_file):
+                    copied += 1
+                    self._record_event(
+                        folder.id,
+                        "copied",
+                        f"{trigger} 原样复制到飞牛音乐：{source_path.name} -> {output_file}",
+                    )
+                else:
+                    self._record_event(
+                        folder.id,
+                        "skipped",
+                        f"飞牛音乐目标已存在同名文件，已跳过：{output_file}",
+                    )
 
         status = self._ensure_runtime(folder.id)
         status["created_tasks"] = status.get("created_tasks", 0) + created
-        return created
+        status["copied_files"] = status.get("copied_files", 0) + copied
+        return {"created_tasks": created, "copied_files": copied}
 
-    def _build_output_path(self, folder: WatchFolder, source_path: Path, profile) -> Path:
-        output_dir = folder.output_dir or profile.output_dir
-        if not output_dir:
-            raise ValueError("请先为监控目录选择输出目录")
-        output_root = Path(output_dir)
+    def _build_output_path(self, folder: WatchFolder, source_path: Path, target: DeliveryTarget, profile=None) -> Path:
+        output_root = Path(target.output_dir)
         try:
             relative_path = source_path.relative_to(Path(folder.input_dir))
         except ValueError:
             relative_path = Path(source_path.name)
 
-        if len(folder.profile_ids) > 1:
-            output_root = output_root / profile.id
+        if target.type == DeliveryTargetType.COPY:
+            return output_root / relative_path
         return output_root / relative_path.with_suffix(f".{profile.output_format.value}")
+
+    @staticmethod
+    def _copy_file(source_path: Path, output_file: Path) -> bool:
+        if output_file.exists():
+            return False
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        temporary_file = output_file.with_name(f".{output_file.name}.{uuid.uuid4().hex}.part")
+        try:
+            shutil.copy2(source_path, temporary_file)
+            if output_file.exists():
+                return False
+            temporary_file.replace(output_file)
+            return True
+        finally:
+            if temporary_file.exists():
+                temporary_file.unlink()
 
     async def _periodic_scan_loop(self):
         while True:
@@ -344,6 +385,7 @@ class WatchFolderManager:
                 "last_event": None,
                 "last_error": None,
                 "created_tasks": 0,
+                "copied_files": 0,
             },
         )
 
@@ -355,6 +397,19 @@ class WatchFolderManager:
             del events[:-self.MAX_EVENTS_PER_FOLDER]
         self._ensure_runtime(folder_id)["last_event"] = timestamp
         logger.info(f"Watch folder {folder_id} [{event_type}]: {message}")
+
+    @staticmethod
+    def _migrate_legacy_targets(folder: WatchFolder):
+        if folder.targets or not folder.output_dir:
+            return
+        folder.targets = [
+            DeliveryTarget(
+                type=DeliveryTargetType.CONVERT,
+                profile_id=profile_id,
+                output_dir=folder.output_dir,
+            )
+            for profile_id in folder.profile_ids
+        ]
 
     @staticmethod
     def _log_callback_error(future):

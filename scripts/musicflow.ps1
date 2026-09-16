@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet("start", "stop", "restart", "status")]
+    [ValidateSet("start", "stop", "restart", "status", "version", "preflight")]
     [string]$Action = "status"
 )
 
@@ -12,6 +12,27 @@ $projectRoot = Split-Path -Parent $PSScriptRoot
 $runtimeDir = Join-Path $projectRoot "temp\run"
 $logDir = Join-Path $projectRoot "logs"
 $bindAddress = "127.0.0.1"
+$versionFile = Join-Path $projectRoot "VERSION"
+
+function Get-MusicFlowVersion {
+    if (-not (Test-Path -LiteralPath $versionFile)) {
+        throw "未找到版本文件：$versionFile"
+    }
+    return (Get-Content -LiteralPath $versionFile -Raw).Trim()
+}
+
+function Invoke-MusicFlowPreflight {
+    Push-Location (Join-Path $projectRoot "backend")
+    try {
+        & (Get-PythonExecutable) -m app.preflight
+        if ($LASTEXITCODE -ne 0) {
+            throw "发布前兼容性检查未通过。"
+        }
+    }
+    finally {
+        Pop-Location
+    }
+}
 
 function Get-PythonExecutable {
     $venvPython = Join-Path $projectRoot ".venv\Scripts\python.exe"
@@ -235,5 +256,11 @@ switch ($Action) {
     }
     "status" {
         Show-MusicFlowStatus
+    }
+    "version" {
+        Write-Host ("MusicFlow v{0}" -f (Get-MusicFlowVersion))
+    }
+    "preflight" {
+        Invoke-MusicFlowPreflight
     }
 }

@@ -17,6 +17,7 @@ interface WatchFolderApiResponse {
   name: string
   input_dir: string
   profile_ids: string[]
+  targets: Array<{ type: 'convert' | 'copy'; output_dir: string; profile_id?: string | null }>
   auto_process: boolean
   recursive_scan: boolean
   scan_interval_minutes: number
@@ -29,6 +30,7 @@ interface WatchFolderApiResponse {
   last_error: string | null
   next_scan_at: string | null
   created_tasks: number
+  copied_files: number
 }
 
 function mapWatchFolder(data: WatchFolderApiResponse): WatchFolder {
@@ -37,6 +39,7 @@ function mapWatchFolder(data: WatchFolderApiResponse): WatchFolder {
     name: data.name,
     inputDir: data.input_dir,
     profileIds: data.profile_ids,
+    targets: data.targets.map(target => ({ type: target.type, outputDir: target.output_dir, profileId: target.profile_id || undefined })),
     autoProcess: data.auto_process,
     recursiveScan: data.recursive_scan,
     scanIntervalMinutes: data.scan_interval_minutes,
@@ -49,6 +52,7 @@ function mapWatchFolder(data: WatchFolderApiResponse): WatchFolder {
     lastError: data.last_error || undefined,
     nextScanAt: data.next_scan_at || undefined,
     createdTasks: data.created_tasks,
+    copiedFiles: data.copied_files,
   }
 }
 
@@ -309,6 +313,7 @@ export const useAppStore = defineStore('app', () => {
         name: folder.name,
         input_dir: folder.inputDir,
         profile_ids: folder.profileIds || [],
+        targets: (folder.targets || []).map(target => ({ type: target.type, output_dir: target.outputDir, profile_id: target.profileId || null })),
         auto_process: folder.autoProcess ?? true,
         recursive_scan: folder.recursiveScan ?? true,
         scan_interval_minutes: folder.scanIntervalMinutes ?? 5,
@@ -352,6 +357,7 @@ export const useAppStore = defineStore('app', () => {
       if (folder.name) apiData.name = folder.name
       if (folder.inputDir) apiData.input_dir = folder.inputDir
       if (folder.profileIds) apiData.profile_ids = folder.profileIds
+      if (folder.targets) apiData.targets = folder.targets.map(target => ({ type: target.type, output_dir: target.outputDir, profile_id: target.profileId || null }))
       if (folder.autoProcess !== undefined) apiData.auto_process = folder.autoProcess
       if (folder.recursiveScan !== undefined) apiData.recursive_scan = folder.recursiveScan
       if (folder.scanIntervalMinutes) apiData.scan_interval_minutes = folder.scanIntervalMinutes

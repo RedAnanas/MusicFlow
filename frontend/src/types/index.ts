@@ -101,6 +101,7 @@ export interface WatchFolder {
   name: string
   inputDir: string
   profileIds: string[]
+  targets: DeliveryTarget[]
   autoProcess: boolean
   recursiveScan: boolean
   scanIntervalMinutes: number
@@ -113,6 +114,13 @@ export interface WatchFolder {
   lastError?: string
   nextScanAt?: string
   createdTasks: number
+  copiedFiles: number
+}
+
+export interface DeliveryTarget {
+  type: 'convert' | 'copy'
+  outputDir: string
+  profileId?: string
 }
 
 export interface WatchFolderEvent {

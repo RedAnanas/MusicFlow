@@ -1,6 +1,7 @@
 import asyncio
 
-from app.models import WatchFolder
+from app.models import DeliveryTarget, DeliveryTargetType, WatchFolder
+from app.api.routes.watch_folders import normalize_targets
 from app.core import watcher
 from app.services.watch_folder_manager import WatchFolderManager, watcher_service
 
@@ -70,3 +71,58 @@ def test_watcher_uses_native_observer(monkeypatch):
     watcher.WatcherService()
 
     assert created == [True]
+
+
+def test_copy_target_preserves_relative_path_and_skips_existing(tmp_path):
+    """飞牛音乐目标应原样复制，并避免覆盖已有文件。"""
+    source_root = tmp_path / "source"
+    source_file = source_root / "artist" / "album" / "song.flac"
+    source_file.parent.mkdir(parents=True)
+    source_file.write_bytes(b"lossless music")
+    output_root = tmp_path / "feiniu"
+    folder = WatchFolder(
+        id="copy-folder",
+        name="飞牛音乐",
+        input_dir=str(source_root),
+        targets=[DeliveryTarget(type=DeliveryTargetType.COPY, output_dir=str(output_root))],
+    )
+
+    output_file = WatchFolderManager()._build_output_path(folder, source_file, folder.targets[0])
+
+    assert WatchFolderManager._copy_file(source_file, output_file) is True
+    assert output_file.read_bytes() == b"lossless music"
+    assert WatchFolderManager._copy_file(source_file, output_file) is False
+
+
+def test_legacy_profile_configuration_is_migrated_to_convert_target():
+    """已有监控目录应继续作为 Apple Music 转换目标运行。"""
+    folder = WatchFolder(
+        id="legacy-folder",
+        name="旧配置",
+        input_dir="/music/source",
+        profile_ids=["aac"],
+        output_dir="/music/output",
+    )
+
+    WatchFolderManager._migrate_legacy_targets(folder)
+
+    assert folder.targets == [
+        DeliveryTarget(
+            type=DeliveryTargetType.CONVERT,
+            profile_id="aac",
+            output_dir="/music/output",
+        )
+    ]
+
+
+def test_normalize_targets_accepts_model_dump_data():
+    """更新已有目录时，序列化后的规则也必须能重新校验。"""
+    target = DeliveryTarget(
+        type=DeliveryTargetType.CONVERT,
+        profile_id="aac",
+        output_dir="/music/output",
+    )
+
+    normalized = normalize_targets({"targets": [target.model_dump()]})
+
+    assert normalized == [target]

@@ -13,13 +13,14 @@ ensure_directories()
 
 # 初始化日志服务
 from app.services.logger_service import logger_service
+from app.version import APP_VERSION
 logger = logging.getLogger(__name__)
 logger_service.info("Starting MusicFlow API", "main")
 
 app = FastAPI(
     title="MusicFlow",
     description="NAS 音乐转换与整理工具",
-    version="0.1.0"
+    version=APP_VERSION
 )
 
 app.add_middleware(
@@ -40,7 +41,7 @@ async def root():
     logger_service.info("Root endpoint accessed", "main")
     return {
         "message": "MusicFlow API is running",
-        "version": "0.1.0",
+        "version": APP_VERSION,
         "docs": "/docs"
     }
 
@@ -51,7 +52,7 @@ async def health_check():
     from app.services.conversion_engine import conversion_engine
     return {
         "status": "healthy",
-        "version": "0.1.0",
+        "version": APP_VERSION,
         "conversion_engine": conversion_engine.get_stats()
     }
 

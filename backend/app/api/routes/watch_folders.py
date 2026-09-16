@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
-from app.models import WatchFolder
+from app.models import DeliveryTarget, DeliveryTargetType, WatchFolder
 from app.services.watch_folder_manager import watch_folder_manager
 
 router = APIRouter()
@@ -16,17 +16,19 @@ logger = logging.getLogger(__name__)
 class WatchFolderCreate(BaseModel):
     name: str
     input_dir: str
-    profile_ids: List[str]
+    profile_ids: List[str] = []
+    targets: List[DeliveryTarget] = []
     auto_process: bool = True
     recursive_scan: bool = True
     scan_interval_minutes: int = 5
-    output_dir: str
+    output_dir: Optional[str] = None
 
 
 class WatchFolderUpdate(BaseModel):
     name: Optional[str] = None
     input_dir: Optional[str] = None
     profile_ids: Optional[List[str]] = None
+    targets: Optional[List[DeliveryTarget]] = None
     auto_process: Optional[bool] = None
     recursive_scan: Optional[bool] = None
     scan_interval_minutes: Optional[int] = None
@@ -44,6 +46,7 @@ class WatchFolderResponse(WatchFolderCreate):
     last_error: Optional[str] = None
     next_scan_at: Optional[str] = None
     created_tasks: int = 0
+    copied_files: int = 0
 
 
 def validate_input_directory(directory: str):
@@ -54,14 +57,52 @@ def validate_input_directory(directory: str):
         raise HTTPException(status_code=400, detail=f"Path is not a directory: {directory}")
 
 
-def prepare_output_directory(directory: Optional[str]):
-    if not directory:
-        raise HTTPException(status_code=400, detail="必须选择输出目录")
+def prepare_output_directory(directory: str, input_directory: str):
     path = Path(directory)
     if not path.exists():
         raise HTTPException(status_code=400, detail=f"Directory does not exist: {directory}")
     if not path.is_dir():
         raise HTTPException(status_code=400, detail=f"Path is not a directory: {directory}")
+    try:
+        path.resolve().relative_to(Path(input_directory).resolve())
+    except ValueError:
+        return
+    raise HTTPException(status_code=400, detail="输出目录不能位于监控目录内，以免重复处理文件")
+
+
+def normalize_targets(folder_data: Dict[str, Any]) -> List[DeliveryTarget]:
+    targets = folder_data.get("targets") or []
+    if targets:
+        return [
+            target
+            if isinstance(target, DeliveryTarget)
+            else DeliveryTarget.model_validate(target)
+            for target in targets
+        ]
+
+    output_dir = folder_data.get("output_dir")
+    profile_ids = folder_data.get("profile_ids") or []
+    if output_dir and profile_ids:
+        return [
+            DeliveryTarget(
+                type=DeliveryTargetType.CONVERT,
+                profile_id=profile_id,
+                output_dir=output_dir,
+            )
+            for profile_id in profile_ids
+        ]
+    return []
+
+
+def validate_targets(targets: List[DeliveryTarget], input_directory: str):
+    if not targets:
+        raise HTTPException(status_code=400, detail="至少选择一个投递目标")
+    for target in targets:
+        if target.type == DeliveryTargetType.CONVERT and not target.profile_id:
+            raise HTTPException(status_code=400, detail="转换输出规则必须选择转换方案")
+        if target.type == DeliveryTargetType.COPY and target.profile_id:
+            raise HTTPException(status_code=400, detail="原样复制规则不能关联转换方案")
+        prepare_output_directory(target.output_dir, input_directory)
 
 
 def build_response(folder: WatchFolder) -> WatchFolderResponse:
@@ -86,11 +127,13 @@ async def get_watch_folder(folder_id: str):
 @router.post("/", response_model=WatchFolderResponse)
 async def create_watch_folder(folder_create: WatchFolderCreate):
     validate_input_directory(folder_create.input_dir)
-    prepare_output_directory(folder_create.output_dir)
+    folder_data = folder_create.model_dump()
+    folder_data["targets"] = normalize_targets(folder_data)
+    validate_targets(folder_data["targets"], folder_create.input_dir)
 
     folder = WatchFolder(
         id=str(uuid.uuid4()),
-        **folder_create.model_dump(),
+        **folder_data,
         enabled=True,
     )
     watch_folder_manager.create_watch_folder(folder)
@@ -106,11 +149,10 @@ async def update_watch_folder(folder_id: str, folder_update: WatchFolderUpdate):
     update_data = folder_update.model_dump(exclude_unset=True)
     if update_data.get("input_dir"):
         validate_input_directory(update_data["input_dir"])
-    if "output_dir" in update_data:
-        prepare_output_directory(update_data["output_dir"])
-
     folder_data = existing_folder.model_dump()
     folder_data.update(update_data)
+    folder_data["targets"] = normalize_targets(folder_data)
+    validate_targets(folder_data["targets"], folder_data["input_dir"])
     updated_folder = WatchFolder(**folder_data)
     watch_folder_manager.update_watch_folder(folder_id, updated_folder)
     return build_response(updated_folder)

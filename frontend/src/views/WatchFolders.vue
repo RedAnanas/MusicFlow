@@ -2,7 +2,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useAppStore } from '../stores/app'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import type { WatchFolder, WatchFolderEvent } from '../types'
+import type { DeliveryTarget, WatchFolder, WatchFolderEvent } from '../types'
 import WatchFolderEditorDialog from '../components/WatchFolderEditorDialog.vue'
 
 const store = useAppStore()
@@ -18,21 +18,23 @@ let refreshTimer: ReturnType<typeof setInterval> | undefined
 const newFolder = ref({
   name: '',
   inputDir: '',
+  targets: [] as DeliveryTarget[],
   profileIds: [] as string[],
+  outputDir: '',
   autoProcess: true,
   recursiveScan: true,
   scanIntervalMinutes: 5,
-  outputDir: '',
 })
 
 const editFolder = ref({
   name: '',
   inputDir: '',
+  targets: [] as DeliveryTarget[],
   profileIds: [] as string[],
+  outputDir: '',
   autoProcess: true,
   recursiveScan: true,
   scanIntervalMinutes: 5,
-  outputDir: '',
 })
 
 onMounted(async () => {
@@ -47,7 +49,9 @@ onUnmounted(() => {
 const enabledCount = computed(() => store.watchFolders.filter(folder => folder.enabled).length)
 const watchingCount = computed(() => store.watchFolders.filter(folder => folder.watching).length)
 const errorCount = computed(() => store.watchFolders.filter(folder => folder.lastError).length)
-const selectedProfiles = computed(() => store.profiles.filter(profile => selectedFolder.value?.profileIds.includes(profile.id)))
+const selectedProfiles = computed(() => store.profiles.filter(profile => selectedFolder.value?.targets.some(target => target.type === 'convert' && target.profileId === profile.id)))
+
+const folderTargets = (folder: WatchFolder) => folder.targets.map(target => target.type === 'convert' ? '转换输出' : '原样复制').join('、') || '未配置'
 
 watch(
   () => store.watchFolders,
@@ -90,11 +94,12 @@ const handleCreate = async () => {
     newFolder.value = {
       name: '',
       inputDir: '',
+      targets: [],
       profileIds: [],
+      outputDir: '',
       autoProcess: true,
       recursiveScan: true,
       scanIntervalMinutes: 5,
-      outputDir: '',
     }
   } catch (error) {
     console.error('>>> handleCreate error:', error)
@@ -107,11 +112,12 @@ const handleEdit = (folder: WatchFolder) => {
   editFolder.value = {
     name: folder.name,
     inputDir: folder.inputDir,
-    profileIds: folder.profileIds || [],
+    targets: folder.targets.map(target => ({ ...target })),
+    profileIds: [],
+    outputDir: '',
     autoProcess: folder.autoProcess,
     recursiveScan: folder.recursiveScan,
     scanIntervalMinutes: folder.scanIntervalMinutes,
-    outputDir: folder.outputDir || '',
   }
   showEditDialog.value = true
 }
@@ -160,7 +166,7 @@ const handleTriggerConvert = async (folderId: string) => {
       ElMessage.warning('目录中没有找到音频文件')
       return
     }
-    ElMessage.success(`扫描完成，已创建 ${result.created_tasks} 个转换任务`)
+    ElMessage.success(`扫描完成，已创建 ${result.created_tasks} 个转换任务，原样复制 ${result.copied_files || 0} 个文件`)
   } catch (error) {
     ElMessage.error('触发转换失败')
   }
@@ -194,7 +200,7 @@ const handleEvents = async (folder: WatchFolder) => {
     <div class="page-header">
       <div class="page-title-block">
         <h1>监控目录</h1>
-        <p>持续监听 NAS 文件夹，自动发现并按指定方案转换新音乐。</p>
+        <p>持续监听下载入口，按一条或多条输出规则处理新音乐。</p>
       </div>
       <el-button type="primary" @click="showCreateDialog = true">
         <el-icon><Plus /></el-icon>
@@ -215,7 +221,7 @@ const handleEvents = async (folder: WatchFolder) => {
         <el-table :data="store.watchFolders" highlight-current-row height="540" @current-change="(row: WatchFolder) => selectedFolder = row">
           <el-table-column label="状态" width="86"><template #default="{ row }"><span class="state-pill" :class="{ active: row.watching, disabled: !row.enabled, error: row.enabled && !row.watching }"><i></i>{{ !row.enabled ? '停用' : row.watching ? '监听中' : '异常' }}</span></template></el-table-column>
           <el-table-column label="目录" min-width="230"><template #default="{ row }"><div class="folder-cell"><strong>{{ row.name }}</strong><code>{{ row.inputDir }}</code></div></template></el-table-column>
-          <el-table-column label="方案" width="118"><template #default="{ row }">{{ row.profileIds.length }} 个方案</template></el-table-column>
+          <el-table-column label="投递目标" width="150"><template #default="{ row }">{{ folderTargets(row) }}</template></el-table-column>
           <el-table-column label="最近扫描" width="150"><template #default="{ row }"><div class="scan-cell"><span>{{ formatTime(row.lastScan) }}</span><small>{{ row.lastScanCount }} 个文件</small></div></template></el-table-column>
           <el-table-column label="任务" width="76" align="right"><template #default="{ row }"><strong>{{ row.createdTasks }}</strong></template></el-table-column>
         </el-table>
@@ -224,10 +230,10 @@ const handleEvents = async (folder: WatchFolder) => {
       <aside v-if="selectedFolder" class="watch-inspector">
         <div class="folder-heading"><div class="folder-mark"><el-icon><FolderOpened /></el-icon></div><div><span class="eyebrow">监控详情</span><h2>{{ selectedFolder.name }}</h2></div></div>
         <div class="health-banner" :class="{ error: selectedFolder.lastError, idle: !selectedFolder.watching }"><span class="health-icon"><el-icon><CircleCheck v-if="selectedFolder.watching && !selectedFolder.lastError" /><Warning v-else /></el-icon></span><div><strong>{{ selectedFolder.lastError ? '监控发生异常' : selectedFolder.watching ? '目录运行正常' : '目录当前未监听' }}</strong><small>{{ selectedFolder.lastError || selectedFolder.lastEvent || '等待新的文件事件' }}</small></div></div>
-        <section class="inspector-section"><h3>运行信息</h3><dl><div><dt>输入目录</dt><dd><code>{{ selectedFolder.inputDir }}</code></dd></div><div><dt>输出目录</dt><dd><code>{{ selectedFolder.outputDir || '尚未设置' }}</code></dd></div><div><dt>下次扫描</dt><dd>{{ formatTime(selectedFolder.nextScanAt) }}</dd></div><div><dt>扫描方式</dt><dd>{{ selectedFolder.recursiveScan ? '递归扫描' : '仅当前目录' }} · {{ selectedFolder.autoProcess ? '自动处理' : '手动处理' }}</dd></div></dl></section>
-        <section class="inspector-section"><h3>转换方案</h3><div class="profile-chips"><el-tag v-for="profile in selectedProfiles" :key="profile.id" effect="plain">{{ profile.name }}</el-tag><span v-if="!selectedProfiles.length" class="empty-copy">尚未关联方案</span></div></section>
+        <section class="inspector-section"><h3>运行信息</h3><dl><div><dt>下载目录</dt><dd><code>{{ selectedFolder.inputDir }}</code></dd></div><div><dt>下次扫描</dt><dd>{{ formatTime(selectedFolder.nextScanAt) }}</dd></div><div><dt>扫描方式</dt><dd>{{ selectedFolder.recursiveScan ? '递归扫描' : '仅当前目录' }} · {{ selectedFolder.autoProcess ? '自动处理' : '手动处理' }}</dd></div></dl></section>
+        <section class="inspector-section"><h3>输出规则</h3><div class="profile-chips"><el-tag v-for="profile in selectedProfiles" :key="profile.id" effect="plain">转换输出：{{ profile.name }}</el-tag><el-tag v-for="(target, index) in selectedFolder.targets.filter(target => target.type === 'copy')" :key="`copy-${target.outputDir}-${index}`" effect="plain">原样复制</el-tag><span v-if="!selectedFolder.targets.length" class="empty-copy">尚未配置输出规则</span></div></section>
         <section class="inspector-section events-section"><div class="section-heading"><h3>最近事件</h3><el-button link type="primary" @click="handleEvents(selectedFolder)">查看全部</el-button></div><div v-if="watchEvents.length" class="event-list"><div v-for="event in watchEvents.slice(0, 3)" :key="`${event.timestamp}-${event.message}`"><i></i><p><strong>{{ event.type }}</strong><span>{{ event.message }}</span><small>{{ formatTime(event.timestamp) }}</small></p></div></div><span v-else class="empty-copy">暂无监控事件</span></section>
-        <div class="inspector-buttons"><el-button type="primary" @click="handleTriggerConvert(selectedFolder.id)"><el-icon><VideoPlay /></el-icon>立即转换</el-button><el-button @click="handleScan(selectedFolder.id)"><el-icon><Search /></el-icon>扫描</el-button><el-button @click="handleEdit(selectedFolder)"><el-icon><Edit /></el-icon>编辑</el-button><el-button :type="selectedFolder.enabled ? 'warning' : 'success'" plain @click="handleToggle(selectedFolder)">{{ selectedFolder.enabled ? '停用' : '启用' }}</el-button></div>
+        <div class="inspector-buttons"><el-button type="primary" @click="handleTriggerConvert(selectedFolder.id)"><el-icon><VideoPlay /></el-icon>立即处理</el-button><el-button @click="handleScan(selectedFolder.id)"><el-icon><Search /></el-icon>扫描</el-button><el-button @click="handleEdit(selectedFolder)"><el-icon><Edit /></el-icon>编辑</el-button><el-button :type="selectedFolder.enabled ? 'warning' : 'success'" plain @click="handleToggle(selectedFolder)">{{ selectedFolder.enabled ? '停用' : '启用' }}</el-button></div>
         <el-button class="delete-folder" type="danger" link @click="handleDelete(selectedFolder.id)"><el-icon><Delete /></el-icon>删除监控目录</el-button>
       </aside>
     </div>

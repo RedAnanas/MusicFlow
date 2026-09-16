@@ -33,6 +33,11 @@ class MetadataPolicy(str, Enum):
     STRIP = "strip"
 
 
+class DeliveryTargetType(str, Enum):
+    CONVERT = "convert"
+    COPY = "copy"
+
+
 class CoverPolicy(str, Enum):
     KEEP = "keep"
     EMBED = "embed"
@@ -97,11 +102,18 @@ class Profile(BaseModel):
     version: int = 1
 
 
+class DeliveryTarget(BaseModel):
+    type: DeliveryTargetType
+    output_dir: str
+    profile_id: Optional[str] = None
+
+
 class WatchFolder(BaseModel):
     id: str
     name: str
     input_dir: str
-    profile_ids: List[str]
+    profile_ids: List[str] = []
+    targets: List[DeliveryTarget] = []
     auto_process: bool = True
     recursive_scan: bool = True
     scan_interval_minutes: int = 5
