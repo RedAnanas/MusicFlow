@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import type { Profile, WatchFolder } from '../types'
+import ServerFileBrowser from './ServerFileBrowser.vue'
 
 export interface WatchFolderEditorForm {
   name: string
@@ -15,14 +16,27 @@ export interface WatchFolderEditorForm {
 const props = defineProps<{ modelValue: boolean; mode: 'create' | 'edit'; form: WatchFolderEditorForm; profiles: Profile[]; folder?: WatchFolder | null; fileStableSeconds: number }>()
 const emit = defineEmits<{ 'update:modelValue': [value: boolean]; submit: [] }>()
 const openSections = ref<string[]>([])
+const showDirectoryBrowser = ref(false)
+const directoryTarget = ref<'input' | 'output'>('input')
 watch(() => props.modelValue, visible => {
   if (visible) openSections.value = [props.mode === 'create' ? 'directory' : 'rules']
 })
 
-const isWslPath = (value: string) => value.startsWith('/')
-const isValid = computed(() => props.form.name.trim() && isWslPath(props.form.inputDir) && props.form.profileIds.length > 0)
+const isAbsolutePath = (value: string) => value.startsWith('/') || /^[A-Za-z]:[\\/]/.test(value) || value.startsWith('\\\\')
+const isValid = computed(() => props.form.name.trim() && isAbsolutePath(props.form.inputDir) && isAbsolutePath(props.form.outputDir) && props.form.profileIds.length > 0)
 const selectedProfiles = computed(() => props.profiles.filter(profile => props.form.profileIds.includes(profile.id)))
-const outputPreview = computed(() => props.form.outputDir.trim() || '使用转换方案或全局输出目录')
+const outputPreview = computed(() => props.form.outputDir.trim() || '尚未设置')
+
+const openDirectoryBrowser = (target: 'input' | 'output') => {
+  directoryTarget.value = target
+  showDirectoryBrowser.value = true
+}
+
+const selectDirectory = (paths: string[]) => {
+  const path = paths[0] || ''
+  if (directoryTarget.value === 'input') props.form.inputDir = path
+  else props.form.outputDir = path
+}
 </script>
 
 <template>
@@ -35,12 +49,12 @@ const outputPreview = computed(() => props.form.outputDir.trim() || '使用转�
           <el-tag v-if="mode === 'edit'" :type="folder?.watching ? 'success' : 'info'" effect="light">{{ folder?.watching ? '监听中' : '未监听' }}</el-tag>
         </header>
 
-        <div class="path-flow"><div><span>输入目录（WSL）</span><code>{{ form.inputDir || '尚未设置' }}</code></div><el-icon><Right /></el-icon><div><span>输出目录（WSL）</span><code>{{ outputPreview }}</code></div></div>
+        <div class="path-flow"><div><span>输入目录</span><code>{{ form.inputDir || '尚未设置' }}</code></div><el-icon><Right /></el-icon><div><span>输出目录</span><code>{{ outputPreview }}</code></div></div>
 
         <el-collapse v-model="openSections" class="rule-sections">
           <el-collapse-item name="directory">
             <template #title><div class="rule-title"><strong>监控目录</strong><small>定义目录名称和来源路径</small></div></template>
-            <el-form :model="form" label-position="top" class="rule-form"><el-form-item label="名称" required><el-input v-model="form.name" placeholder="例如：下载音乐" /></el-form-item><el-form-item label="输入目录" required :error="form.inputDir && !isWslPath(form.inputDir) ? '请输入以 / 开头的 WSL 绝对路径' : ''"><el-input v-model="form.inputDir" placeholder="/mnt/d/Music/source" /></el-form-item></el-form>
+            <el-form :model="form" label-position="top" class="rule-form"><el-form-item label="名称" required><el-input v-model="form.name" placeholder="例如：下载音乐" /></el-form-item><el-form-item label="输入目录" required><el-input v-model="form.inputDir" readonly placeholder="请选择要监控的目录"><template #append><el-button @click="openDirectoryBrowser('input')"><el-icon><FolderOpened /></el-icon>选择</el-button></template></el-input></el-form-item></el-form>
           </el-collapse-item>
           <el-collapse-item name="profiles">
             <template #title><div class="rule-title"><strong>转换方案</strong><small>选择新文件使用的转换规则</small></div></template>
@@ -52,7 +66,7 @@ const outputPreview = computed(() => props.form.outputDir.trim() || '使用转�
           </el-collapse-item>
           <el-collapse-item name="output">
             <template #title><div class="rule-title"><strong>输出目录</strong><small>覆盖方案默认目录（可选）</small></div></template>
-            <el-form :model="form" label-position="top" class="rule-form"><el-form-item label="自定义输出目录" :error="form.outputDir && !isWslPath(form.outputDir) ? '请输入以 / 开头的 WSL 绝对路径' : ''"><el-input v-model="form.outputDir" clearable placeholder="留空则使用转换方案或全局输出目录" /><span class="path-tip">优先级：监控目录 ＞ 转换方案 ＞ 全局默认目录</span></el-form-item></el-form>
+            <el-form :model="form" label-position="top" class="rule-form"><el-form-item label="输出目录" required><el-input v-model="form.outputDir" readonly placeholder="请选择转换成品保存目录"><template #append><el-button @click="openDirectoryBrowser('output')"><el-icon><FolderOpened /></el-icon>选择</el-button></template></el-input></el-form-item></el-form>
           </el-collapse-item>
         </el-collapse>
       </main>
@@ -66,6 +80,7 @@ const outputPreview = computed(() => props.form.outputDir.trim() || '使用转�
         <section class="behavior-list"><h4>保存后的行为</h4><p><el-icon><CircleCheck /></el-icon>持续检测新加入的音频文件</p><p><el-icon><CircleCheck /></el-icon>{{ form.autoProcess ? '文件稳定后自动创建任务' : '保留文件事件，等待手动处理' }}</p><p><el-icon><CircleCheck /></el-icon>保持原有目录结构</p></section>
       </aside>
     </div>
+    <ServerFileBrowser v-model="showDirectoryBrowser" mode="directory" @select="selectDirectory" />
     <template #footer><div class="dialog-footer"><span>{{ mode === 'edit' && folder?.watching ? '正在监听的目录会立即应用新规则' : '保存后可在监控目录列表中启用或停用' }}</span><div><el-button @click="emit('update:modelValue', false)">取消</el-button><el-button type="primary" :disabled="!isValid" @click="emit('submit')">{{ mode === 'create' ? '添加监控目录' : '保存更改' }}</el-button></div></div></template>
   </el-dialog>
 </template>

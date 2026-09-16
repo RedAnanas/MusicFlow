@@ -88,6 +88,7 @@ watch(() => props.modelValue, visible => {
     :title="title"
     width="760px"
     class="server-file-browser"
+    append-to-body
     destroy-on-close
     @update:model-value="emit('update:modelValue', $event)"
   >

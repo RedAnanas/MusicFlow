@@ -31,7 +31,7 @@ def test_delete_file_removes_source_file(monkeypatch, tmp_path):
     source_file = source_dir / "album" / "song.flac"
     source_file.parent.mkdir(parents=True)
     source_file.write_bytes(b"audio")
-    monkeypatch.setattr(files_api.settings, "MUSIC_SOURCE_DIR", str(source_dir))
+    monkeypatch.setattr(files_api, "_load_library_sources", lambda: [str(source_dir)])
     files_api.files_cache["file-1"] = {
         "path": str(source_file),
         "filename": source_file.name,
@@ -50,7 +50,7 @@ def test_delete_file_rejects_path_outside_source_directory(monkeypatch, tmp_path
     source_dir.mkdir()
     outside_file = tmp_path / "outside.flac"
     outside_file.write_bytes(b"audio")
-    monkeypatch.setattr(files_api.settings, "MUSIC_SOURCE_DIR", str(source_dir))
+    monkeypatch.setattr(files_api, "_load_library_sources", lambda: [str(source_dir)])
     files_api.files_cache["outside"] = {
         "path": str(outside_file),
         "filename": outside_file.name,
@@ -167,3 +167,21 @@ def test_import_files_adds_server_audio_and_persists_source(monkeypatch, tmp_pat
     assert result["imported"][0]["path"] == str(source_file)
     assert saved == [str(source_file)]
     assert source_file.read_bytes() == b"audio"
+
+
+def test_remove_library_source_only_stops_reading(monkeypatch, tmp_path):
+    """移除音乐库来源不得删除磁盘上的目录和文件。"""
+    source_dir = tmp_path / "music"
+    source_dir.mkdir()
+    source_file = source_dir / "歌曲.flac"
+    source_file.write_bytes(b"audio")
+    saved = []
+    monkeypatch.setattr(files_api, "_load_library_sources", lambda: [str(source_dir)])
+    monkeypatch.setattr(files_api, "_save_library_sources", lambda paths: saved.extend(paths))
+    monkeypatch.setattr(files_api, "_scan_files", lambda: [])
+
+    result = asyncio.run(files_api.remove_library_source(files_api._source_id(str(source_dir))))
+
+    assert saved == []
+    assert result["deleted_from_disk"] is False
+    assert source_file.exists()

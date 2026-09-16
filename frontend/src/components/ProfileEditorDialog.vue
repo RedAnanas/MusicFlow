@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import type { Profile } from '../types'
+import ServerFileBrowser from './ServerFileBrowser.vue'
 
 export interface ProfileEditorForm {
   name: string
@@ -19,6 +20,7 @@ export interface ProfileEditorForm {
 const props = defineProps<{ modelValue: boolean; mode: 'create' | 'edit'; form: ProfileEditorForm }>()
 const emit = defineEmits<{ 'update:modelValue': [value: boolean]; submit: [] }>()
 const activeSection = ref('basic')
+const showDirectoryBrowser = ref(false)
 
 watch(() => props.modelValue, visible => { if (visible) activeSection.value = 'basic' })
 
@@ -30,7 +32,11 @@ const sections = [
   { key: 'handoff', label: '自动交接' },
 ]
 const lossless = computed(() => ['alac', 'flac', 'pcm_s16le'].includes(props.form.codec))
-const isValid = computed(() => props.form.name.trim() && props.form.filenameTemplate.trim() && props.form.directoryTemplate.trim())
+const isValid = computed(() => props.form.name.trim() && props.form.filenameTemplate.trim() && props.form.directoryTemplate.trim() && (!props.form.appleMusicHandoffEnabled || props.form.appleMusicImportDir.trim()))
+
+const selectAppleMusicDirectory = (paths: string[]) => {
+  props.form.appleMusicImportDir = paths[0] || ''
+}
 </script>
 
 <template>
@@ -69,11 +75,16 @@ const isValid = computed(() => props.form.name.trim() && props.form.filenameTemp
         <section v-show="activeSection === 'handoff'">
           <div class="section-heading"><div><span>05</span><h3>Apple Music 自动交接</h3></div><p>转换完成后复制到 Apple Music 自动导入目录。</p></div>
           <div class="switch-row"><div><strong>启用自动交接</strong><span>仅表示文件已交给 Apple Music，不代表云端上传成功。</span></div><el-switch v-model="form.appleMusicHandoffEnabled" /></div>
-          <el-form-item v-if="form.appleMusicHandoffEnabled" label="自动导入目录"><el-input v-model="form.appleMusicImportDir" placeholder="/mnt/d/.../Automatically Add to Apple Music" /></el-form-item>
+          <el-form-item v-if="form.appleMusicHandoffEnabled" label="自动导入目录" required>
+            <el-input v-model="form.appleMusicImportDir" readonly placeholder="请选择 Apple Music 自动导入目录">
+              <template #append><el-button @click="showDirectoryBrowser = true"><el-icon><FolderOpened /></el-icon>选择</el-button></template>
+            </el-input>
+          </el-form-item>
         </section>
       </el-form>
 
     </div>
+    <ServerFileBrowser v-model="showDirectoryBrowser" mode="directory" @select="selectAppleMusicDirectory" />
     <template #footer><div class="dialog-footer"><span>{{ mode === 'edit' ? '修改将用于之后创建的转换任务' : '保存后可立即在转换任务中使用' }}</span><div><el-button @click="emit('update:modelValue', false)">取消</el-button><el-button type="primary" :disabled="!isValid" @click="emit('submit')">{{ mode === 'create' ? '创建方案' : '保存更改' }}</el-button></div></div></template>
   </el-dialog>
 </template>

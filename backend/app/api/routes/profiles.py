@@ -1,10 +1,21 @@
 import uuid
+from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import List, Optional
 from enum import Enum
 
 router = APIRouter()
+
+
+def validate_apple_music_directory(enabled: bool, directory: Optional[str]):
+    if not enabled:
+        return
+    if not directory:
+        raise HTTPException(status_code=400, detail="启用 Apple Music 自动交接时必须选择目录")
+    path = Path(directory)
+    if not path.is_dir():
+        raise HTTPException(status_code=400, detail="Apple Music 自动交接目录不存在")
 
 
 class OutputFormat(str, Enum):
@@ -119,6 +130,10 @@ async def create_profile(profile_create: ProfileCreate):
     from app.services.profile_manager import profile_manager
     from app.models import Profile, OutputFormat as ModelOutputFormat
 
+    validate_apple_music_directory(
+        profile_create.apple_music_handoff_enabled,
+        profile_create.apple_music_import_dir,
+    )
     try:
         profile = Profile(
             id=str(uuid.uuid4()),
@@ -161,6 +176,11 @@ async def update_profile(profile_id: str, profile_update: ProfileUpdate):
     try:
         # 合并更新数据
         update_data = profile_update.model_dump(exclude_unset=True)
+
+        validate_apple_music_directory(
+            update_data.get("apple_music_handoff_enabled", existing_profile.apple_music_handoff_enabled),
+            update_data.get("apple_music_import_dir", existing_profile.apple_music_import_dir),
+        )
 
         # 构建更新后的 Profile
         profile_dict = existing_profile.dict()

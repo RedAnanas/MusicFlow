@@ -61,21 +61,21 @@ temp/                 临时文件，Git 忽略
 
 ## 统一命令
 
-```bash
+```powershell
 # 启动
-./scripts/musicflow.sh start
+.\scripts\musicflow.ps1 start
 
 # 停止
-./scripts/musicflow.sh stop
+.\scripts\musicflow.ps1 stop
 
 # 重启
-./scripts/musicflow.sh restart
+.\scripts\musicflow.ps1 restart
 
 # 状态
-./scripts/musicflow.sh status
+.\scripts\musicflow.ps1 status
 
 # 全量质量检查
-./scripts/check.sh
+.\scripts\check.ps1
 ```
 
 访问地址：前端 `http://127.0.0.1:3000`，后端文档 `http://127.0.0.1:8082/docs`。

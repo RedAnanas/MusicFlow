@@ -356,7 +356,7 @@ const handleDelete = async (id: string) => {
           <template #label>自动导入目录<el-tooltip content="Apple Music 监控的 Automatically Add to Apple Music 目录。" placement="top"><el-icon class="field-help"><QuestionFilled /></el-icon></el-tooltip></template>
           <el-input
             v-model="newProfile.appleMusicImportDir"
-            placeholder="/mnt/d/Music/output/M4A/AAC/Automatically Add to Apple Music"
+            placeholder="D:\Music\Automatically Add to Apple Music"
           />
         </el-form-item>
       </el-form>
@@ -466,7 +466,7 @@ const handleDelete = async (id: string) => {
           <template #label>自动导入目录<el-tooltip content="Apple Music 监控的 Automatically Add to Apple Music 目录。" placement="top"><el-icon class="field-help"><QuestionFilled /></el-icon></el-tooltip></template>
           <el-input
             v-model="editProfile.appleMusicImportDir"
-            placeholder="/mnt/d/Music/output/M4A/AAC/Automatically Add to Apple Music"
+            placeholder="D:\Music\Automatically Add to Apple Music"
           />
         </el-form-item>
       </el-form>

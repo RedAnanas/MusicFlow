@@ -5,9 +5,9 @@ router = APIRouter()
 
 
 class SettingsResponse(BaseModel):
-    music_source_dir: str = "/music/source"
-    music_output_dir: str = "/music/output"
-    music_archive_dir: str = "/music/archive"
+    music_source_dir: str = ""
+    music_output_dir: str = ""
+    music_archive_dir: str = ""
     max_concurrent_tasks: int = 2
     ffmpeg_threads: int = 2
     file_stable_seconds: int = 30
