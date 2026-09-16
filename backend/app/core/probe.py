@@ -26,8 +26,12 @@ class FFprobeService:
                 logger.error(f"File not found: {file_path}")
                 return None
 
+            from app.services.system_service import system_service
+            ffprobe_path, _ = system_service.find_binary("ffprobe")
+            if not ffprobe_path:
+                raise RuntimeError("未安装 FFprobe，请在系统状态页安装后重试")
             cmd = [
-                self.ffprobe_path,
+                ffprobe_path,
                 "-v", "quiet",
                 "-print_format", "json",
                 "-show_format",

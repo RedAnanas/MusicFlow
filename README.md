@@ -69,17 +69,14 @@ MusicFlow/
 
 ## Docker Compose
 
-默认使用项目内的 `data/` 作为音乐目录；也可通过环境变量映射真实路径：
+Docker 部署只启动一个 `musicflow` 服务。首次启动后，在网页“系统状态”页面点击安装 FFmpeg；应用会根据运行平台下载并校验对应版本。`data/` 保存配置、任务历史、日志和工具，`music/` 是容器可访问的音乐根目录。
 
 ```powershell
-$env:MUSIC_SOURCE_PATH = "D:/Music/source"
-$env:MUSIC_OUTPUT_PATH = "D:/Music/output"
-$env:MUSIC_ARCHIVE_PATH = "D:/Music/archive"
 docker compose up -d --build
 ```
 
 - Web UI：http://127.0.0.1:8080
-- 后端 API：http://127.0.0.1:8082
+- 容器 API 不直接暴露，网页会自动转发 `/api` 请求。
 
 ## 文档
 

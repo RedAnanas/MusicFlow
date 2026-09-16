@@ -27,8 +27,12 @@ class FFmpegService:
         """
         构建 FFmpeg 转换命令
         """
+        from app.services.system_service import system_service
+        ffmpeg_path, _ = system_service.find_binary("ffmpeg")
+        if not ffmpeg_path:
+            raise RuntimeError("未安装 FFmpeg，请在系统状态页安装后重试")
         cmd = [
-            self.ffmpeg_path,
+            ffmpeg_path,
             "-i", input_path,
             "-y",  # 覆盖输出文件
         ]

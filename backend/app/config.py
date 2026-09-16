@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     MUSIC_SOURCE_DIR: str = ""
     MUSIC_OUTPUT_DIR: str = ""
     MUSIC_ARCHIVE_DIR: str = ""
+    DATA_DIR: str = str(PROJECT_ROOT / "data")
     CONFIG_DIR: str = str(PROJECT_ROOT / "config")
     LOGS_DIR: str = str(PROJECT_ROOT / "logs")
     TEMP_DIR: str = str(PROJECT_ROOT / "temp")

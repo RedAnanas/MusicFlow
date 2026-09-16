@@ -1,0 +1,11 @@
+.git
+.venv
+backend/.env
+frontend/node_modules
+data
+config
+logs
+temp
+dist
+docs
+.dev-docs
