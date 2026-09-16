@@ -3,7 +3,7 @@ import { computed } from 'vue'
 import { RouterView, useRoute } from 'vue-router'
 
 const route = useRoute()
-const pageTitle = computed(() => ({ '/': '仪表盘', '/files': '音乐库', '/tasks': '转换任务', '/profiles': '转换方案', '/watch-folders': '监控目录', '/logs': '日志' }[route.path] || 'MusicFlow'))
+const pageTitle = computed(() => ({ '/': '仪表盘', '/files': '音乐库', '/tasks': '转换任务', '/profiles': '转换方案', '/watch-folders': '监控目录', '/logs': '日志', '/system': '系统状态' }[route.path] || 'MusicFlow'))
 </script>
 
 <template>
@@ -17,6 +17,7 @@ const pageTitle = computed(() => ({ '/': '仪表盘', '/files': '音乐库', '/t
         <el-menu-item index="/profiles"><el-icon><Setting /></el-icon><span>转换方案</span></el-menu-item>
         <el-menu-item index="/watch-folders"><el-icon><FolderOpened /></el-icon><span>监控目录</span></el-menu-item>
         <el-menu-item index="/logs"><el-icon><Tickets /></el-icon><span>日志</span></el-menu-item>
+        <el-menu-item index="/system"><el-icon><Monitor /></el-icon><span>系统状态</span></el-menu-item>
       </el-menu>
       <div class="aside-footer"><div class="service-summary"><el-icon><Coin /></el-icon><span>本地服务模式</span></div><p>目录和任务由本机后台处理</p><div class="collapse-hint"><el-icon><DArrowLeft /></el-icon>收起导航</div></div>
     </el-aside>

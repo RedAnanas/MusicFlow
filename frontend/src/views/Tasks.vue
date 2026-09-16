@@ -14,7 +14,7 @@ const actionLoading = ref(false)
 const profilesLoaded = ref(false)
 const selectedTask = ref<Task | null>(null)
 const coverErrors = ref(new Set<string>())
-const taskApiBase = 'http://localhost:8082/api/tasks'
+const taskApiBase = '/api/tasks'
 let refreshTimer: ReturnType<typeof setInterval> | null = null
 
 const statusFilters = [
