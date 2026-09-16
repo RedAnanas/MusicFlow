@@ -51,6 +51,14 @@ function mapWatchFolder(data: WatchFolderApiResponse): WatchFolder {
   }
 }
 
+function mapFile(data: any): FileItem {
+  return {
+    ...data,
+    sampleRate: data.sample_rate,
+    bitDepth: data.bit_depth,
+  }
+}
+
 export const useAppStore = defineStore('app', () => {
   // 状态
   const files = ref<FileItem[]>([])
@@ -77,7 +85,7 @@ export const useAppStore = defineStore('app', () => {
     loading.value = true
     try {
       const response = await axios.get('/api/files/', { params: { limit: 1000, refresh } })
-      files.value = response.data
+      files.value = response.data.map(mapFile)
       filesLoaded.value = true
     } catch (error) {
       console.error('Failed to fetch files:', error)
@@ -89,6 +97,16 @@ export const useAppStore = defineStore('app', () => {
   async function deleteFile(id: string) {
     await axios.delete(`/api/files/${id}`)
     files.value = files.value.filter(file => file.id !== id)
+  }
+
+  async function importFiles(paths: string[]) {
+    const response = await axios.post('/api/files/import', { paths })
+    const imported = response.data.imported.map(mapFile)
+    const merged = new Map(files.value.map(file => [file.id, file]))
+    imported.forEach((file: FileItem) => merged.set(file.id, file))
+    files.value = [...merged.values()]
+    filesLoaded.value = true
+    return { imported, errors: response.data.errors }
   }
 
   // 任务操作
@@ -422,6 +440,7 @@ export const useAppStore = defineStore('app', () => {
     logs,
     loading,
     fetchFiles,
+    importFiles,
     deleteFile,
     fetchTasks,
     fetchProfiles,
