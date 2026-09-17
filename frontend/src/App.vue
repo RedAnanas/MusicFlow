@@ -1,45 +1,34 @@
 <script setup lang="ts">
-import { computed } from 'vue'
-import { RouterView, useRoute } from 'vue-router'
+import { useRoute } from 'vue-router'
+import { Document, Files, FolderOpened, House, Setting } from '@element-plus/icons-vue'
 
 const route = useRoute()
 const appVersion = __MUSICFLOW_VERSION__
-const pageTitle = computed(() => ({ '/': '仪表盘', '/files': '音乐库', '/tasks': '转换任务', '/profiles': '转换方案', '/watch-folders': '监控目录', '/logs': '日志', '/system': '系统状态' }[route.path] || 'MusicFlow'))
+const navItems = [
+  { path: '/', label: '首页', icon: House },
+  { path: '/files', label: '操作台', icon: Files },
+  { path: '/tasks', label: '操作记录', icon: Document },
+  { path: '/profiles', label: '转换方案', icon: Document },
+  { path: '/watch-folders', label: '监控目录', icon: FolderOpened },
+  { path: '/system', label: '系统设置', icon: Setting },
+]
+const mobileNavItems = navItems.filter(item => ['/', '/files', '/tasks', '/profiles', '/watch-folders', '/system'].includes(item.path))
 </script>
 
 <template>
-  <el-container class="app-container">
-    <el-aside width="244px" class="app-aside">
-      <div class="logo"><div class="logo-mark"><el-icon><Headset /></el-icon></div><div><h1>MusicFlow</h1><p>本地音乐转换与整理工具</p></div></div>
-      <el-menu :default-active="$route.path" router class="aside-menu">
-        <el-menu-item index="/"><el-icon><Monitor /></el-icon><span>控制台</span></el-menu-item>
-        <el-menu-item index="/files"><el-icon><Document /></el-icon><span>音乐库</span></el-menu-item>
-        <el-menu-item index="/tasks"><el-icon><List /></el-icon><span>转换任务</span></el-menu-item>
-        <el-menu-item index="/profiles"><el-icon><Setting /></el-icon><span>转换方案</span></el-menu-item>
-        <el-menu-item index="/watch-folders"><el-icon><FolderOpened /></el-icon><span>监控目录</span></el-menu-item>
-        <el-menu-item index="/logs"><el-icon><Tickets /></el-icon><span>日志</span></el-menu-item>
-        <el-menu-item index="/system"><el-icon><Monitor /></el-icon><span>系统状态</span></el-menu-item>
-      </el-menu>
-      <div class="aside-footer"><div class="service-summary"><el-icon><Coin /></el-icon><span>本地服务模式</span></div><p>目录和任务由本机后台处理</p><div class="app-version">MusicFlow v{{ appVersion }}</div><div class="collapse-hint"><el-icon><DArrowLeft /></el-icon>收起导航</div></div>
-    </el-aside>
-    <el-container class="main-container">
-      <el-header class="app-header"><div class="header-status"><el-icon><Coin /></el-icon><span>本地服务</span></div><div class="header-divider"></div><div class="header-title">{{ pageTitle }}</div><div class="header-actions"><el-button text circle aria-label="帮助"><el-icon><QuestionFilled /></el-icon></el-button><el-button text circle aria-label="通知"><el-icon><Bell /></el-icon></el-button></div></el-header>
-      <el-main class="app-main"><RouterView /></el-main>
-    </el-container>
-  </el-container>
+  <div class="app-shell">
+    <header class="topbar">
+      <RouterLink to="/" class="brand" aria-label="MusicFlow 首页"><img class="brand-mark" src="/musicflow-icon.png" alt="" /><span>MusicFlow</span><small>v{{ appVersion }}</small></RouterLink>
+      <nav class="main-nav" aria-label="主导航"><RouterLink v-for="item in navItems" :key="item.path" :to="item.path" :class="{ active: route.path === item.path }">{{ item.label }}</RouterLink></nav>
+      <div class="top-actions"><el-button text circle aria-label="搜索"><el-icon><Search /></el-icon></el-button><el-button text circle aria-label="通知"><el-icon><Bell /></el-icon></el-button><span class="service-avatar" title="本地服务"><el-icon><Connection /></el-icon></span></div>
+    </header>
+    <main class="app-main"><RouterView /></main>
+    <nav class="mobile-nav" aria-label="移动端主导航"><RouterLink v-for="item in mobileNavItems" :key="item.path" :to="item.path" :class="{ active: route.path === item.path }"><el-icon><component :is="item.icon" /></el-icon><span>{{ item.label }}</span></RouterLink></nav>
+  </div>
 </template>
 
 <style>
-* { margin: 0; padding: 0; box-sizing: border-box; }
-html, body { height: 100%; font-family: Inter, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', Arial, sans-serif; }
-#app, .app-container { height: 100%; }
-:root { --mf-green: #0c9c68; --mf-green-dark: #06251e; --mf-green-soft: #e5f5ed; --mf-ink: #1f2d26; --mf-muted: #748179; --mf-line: #dfe4df; --mf-surface: #fffefa; }
-.app-aside { position: relative; display: flex; flex-direction: column; background: #06251e; color: #fff; }
-.logo { display: flex; align-items: center; gap: 10px; padding: 28px 24px 24px; }.logo-mark { display: grid; width: 32px; height: 32px; place-items: center; border-radius: 10px; background: #13bf7a; color: #06251e; font-size: 19px; }.logo h1 { margin: 0 0 3px; color: #f1fff8; font-size: 21px; letter-spacing: -.6px; }.logo p { color: #88aa9b; font-size: 11px; }
-.aside-menu { flex: 1; padding: 4px 12px; border: none; background: transparent; }.aside-menu .el-menu-item { height: 48px; margin: 3px 0; border-radius: 8px; color: #9ebbae !important; background: transparent !important; }.aside-menu .el-menu-item:hover, .aside-menu .el-menu-item:active, .aside-menu .el-menu-item.is-active { background: #103c31 !important; }.aside-menu .el-menu-item:hover { color: #fff !important; }.aside-menu .el-menu-item.is-active { color: #56e0a6 !important; }
-.aside-footer { padding: 20px 24px 22px; color: #8da99c; font-size: 12px; }.service-summary { display: flex; gap: 8px; align-items: center; color: #d7eadf; }.service-summary .el-icon { color: #16c784; }.aside-footer p { margin: 9px 0 18px; line-height: 1.5; }.app-version { margin-bottom: 18px; color: #6f9484; font-size: 11px; }.collapse-hint { display: flex; gap: 8px; align-items: center; padding-top: 18px; border-top: 1px solid #164339; }
-.main-container { flex-direction: column; }.app-header { display: flex; gap: 16px; align-items: center; height: 76px; padding: 0 40px; background: #fffefa; border-bottom: 1px solid #e7e9e4; }.app-main { padding: 0 40px 44px; background: #f8f9f5; }.header-status { display: flex; gap: 8px; align-items: center; color: #25332d; font-size: 14px; }.header-status .el-icon { color: #179365; }.header-divider { width: 1px; height: 20px; background: #dde2dd; }.header-title { color: #718078; font-size: 14px; }.header-actions { display: flex; gap: 12px; align-items: center; margin-left: auto; color: #314039; font-size: 14px; }.header-actions .el-button { color: #536158; }.header-actions .el-avatar { background: #13a96f; color: #fff; font-size: 13px; }.user-name { margin-left: -5px; }
-.product-page { max-width: 1320px; margin: 0 auto; padding-top: 34px; }.product-page .page-header { display: flex; justify-content: space-between; gap: 24px; align-items: flex-end; margin-bottom: 24px; }.product-page .page-title-block h1 { margin: 0 0 8px; color: var(--mf-ink); font-size: 32px; line-height: 1.2; letter-spacing: -.8px; }.product-page .page-title-block p { color: var(--mf-muted); font-size: 14px; line-height: 1.6; }.product-page > .el-card { border: 1px solid var(--mf-line); border-radius: 12px; background: var(--mf-surface); box-shadow: none; }.product-page > .el-card > .el-card__body { padding: 0; }.product-page .el-button--primary { border-color: var(--mf-green); background: var(--mf-green); }.product-page .el-button--primary.is-link, .product-page .el-button--primary.is-text { border-color: transparent; background: transparent; color: var(--mf-green); }.product-page .el-table { --el-table-border-color: #e7ebe7; --el-table-header-bg-color: #f4f7f3; --el-table-row-hover-bg-color: #f2f8f4; color: #425048; }.product-page .el-table th.el-table__cell { height: 46px; color: #748179; font-size: 12px; font-weight: 600; }.product-page .el-table td.el-table__cell { height: 58px; }.product-page .el-tag { border-radius: 999px; }.product-page .el-input__wrapper, .product-page .el-select__wrapper { border-radius: 8px; box-shadow: 0 0 0 1px #ced7d0 inset; }.product-page .el-input__wrapper.is-focus, .product-page .el-select__wrapper.is-focused { box-shadow: 0 0 0 1px var(--mf-green) inset !important; }.product-page .el-pagination { padding: 18px 20px; }
-@media (max-width: 900px) { .app-aside { width: 72px !important; }.logo { justify-content: center; padding: 22px 12px; }.logo > div:last-child, .aside-menu span, .aside-footer, .header-title, .user-name, .header-divider { display: none; }.aside-menu { padding: 4px 8px; }.aside-menu .el-menu-item { justify-content: center; padding: 0 !important; }.app-header, .app-main { padding-left: 24px; padding-right: 24px; } }
-@media (max-width: 720px) { .product-page { padding-top: 24px; }.product-page .page-header { align-items: stretch; flex-direction: column; }.product-page .page-header > .el-button { width: 100%; }.product-page .page-title-block h1 { font-size: 28px; } }
+* { box-sizing: border-box; } html, body, #app { min-height: 100%; margin: 0; } body { background: #f7f8fa; color: #20293a; font-family: Inter, 'PingFang SC', 'Microsoft YaHei', Arial, sans-serif; }
+.app-shell { min-height: 100vh; padding: 12px; background: radial-gradient(circle at 15% 0%, #eee8ff 0, transparent 24%), #f7f8fa; }.topbar { display: flex; min-height: 76px; align-items: center; gap: 24px; padding: 0 16px; border: 1px solid #eff0f4; border-radius: 22px; background: rgb(255 255 255 / 94%); box-shadow: 0 12px 30px rgb(64 66 90 / 7%); }.brand { display: flex; flex: 0 0 auto; align-items: center; gap: 10px; color: #20293a; font-size: 18px; font-weight: 800; text-decoration: none; letter-spacing: -.5px; }.brand-mark { width: 48px; height: 48px; flex:0 0 48px; filter:drop-shadow(0 8px 18px rgb(146 112 244 / 28%)); }.brand small { padding: 6px 11px; border: 1px solid #e8e9ee; border-radius: 999px; color: #606978; font-size: 12px; font-weight: 700; letter-spacing: 0; }.main-nav { display: flex; gap: 2px; align-items: center; margin: 0 auto; padding: 5px; border: 1px solid #eff0f4; border-radius: 17px; background: #fafbfc; }.main-nav a { display: grid; min-height: 43px; padding: 0 16px; place-items: center; border-radius: 11px; color: #687282; font-size: 14px; font-weight: 700; text-decoration: none; white-space: nowrap; transition: color .2s, background .2s, box-shadow .2s; }.main-nav a:hover { background: #f1ecff; color: #7254d2; }.main-nav a.active { background: #aa86fb; color: #fff; box-shadow: 0 5px 12px rgb(151 112 239 / 28%); }.top-actions { display: flex; gap: 7px; align-items: center; }.top-actions .el-button { color: #657080; font-size: 20px; }.service-avatar { display: grid; width: 38px; height: 38px; place-items: center; border-radius: 50%; background: #2e3749; color: #c4b1ff; font-size: 17px; }
+.app-main { max-width: 1784px; margin: 0 auto; padding: 22px 0 44px; }.mobile-nav { display: none; } @media (max-width: 1080px) { .topbar { gap: 13px; }.main-nav { max-width: calc(100vw - 280px); overflow-x: auto; }.main-nav a { padding: 0 12px; } } @media (max-width: 700px) { .app-shell { padding: 0 0 82px; }.topbar { min-height: 64px; gap: 0; border-width: 0 0 1px; border-radius: 0; padding: 10px 14px; }.brand-mark { width: 38px; height: 38px; border-radius: 11px; font-size: 17px; }.brand { font-size: 17px; }.brand small, .main-nav { display: none; }.top-actions { margin-left: auto; }.service-avatar { display: none; }.app-main { padding: 14px 12px 20px; }.mobile-nav { position: fixed; z-index: 20; right: 0; bottom: 0; left: 0; display: grid; grid-template-columns: repeat(6, 1fr); min-height: 66px; padding: 7px max(8px, env(safe-area-inset-right)) calc(7px + env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left)); background: rgb(255 255 255 / 96%); box-shadow: 0 -8px 24px rgb(40 48 70 / 5%); backdrop-filter: blur(14px); }.mobile-nav a { display: flex; flex-direction: column; gap: 3px; align-items: center; justify-content: center; color: #8791a1; font-size: 9px; font-weight: 650; text-decoration: none; }.mobile-nav .el-icon { font-size: 18px; }.mobile-nav a.active { color: #9a72ed; }.mobile-nav a.active .el-icon { display: grid; width: 29px; height: 26px; place-items: center; border-radius: 10px; color: #fff; background: #a881f3; box-shadow: 0 5px 12px rgb(157 112 239 / 25%); } }
 </style>

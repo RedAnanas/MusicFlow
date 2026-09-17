@@ -1,11 +1,15 @@
+import asyncio
 import hashlib
 import logging
+import shutil
+import uuid
 from pathlib import Path
 from fastapi import APIRouter, HTTPException, Query, Response
 from pydantic import BaseModel
 from typing import List, Optional
 from app.config import settings
 from app.core import ffprobe_service, metadata_service
+from app.models import DeliveryTarget, DeliveryTargetType
 from app.services.config_manager import config_manager
 
 router = APIRouter()
@@ -43,6 +47,11 @@ class FileConvertRequest(BaseModel):
 
 class FileBatchConvertRequest(FileConvertRequest):
     file_ids: List[str]
+
+
+class FileBatchDeliveryRequest(BaseModel):
+    file_ids: List[str]
+    targets: List[DeliveryTarget]
 
 
 class FileImportRequest(BaseModel):
@@ -378,6 +387,43 @@ async def queue_file_conversion(file_id: str, request: FileConvertRequest):
     return {"status": "queued", "output_file": str(output_file), "task_id": task.id}
 
 
+async def queue_file_copy(file_id: str, target: DeliveryTarget):
+    """按监控目录同样的安全规则原样复制单个文件。"""
+    if file_id not in files_cache:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    source_path = Path(files_cache[file_id]["path"])
+    if not source_path.is_file():
+        raise HTTPException(status_code=404, detail="文件不存在")
+
+    output_root = Path(target.output_dir)
+    if not output_root.is_absolute():
+        raise HTTPException(status_code=400, detail="输出路径必须为绝对路径")
+    output_file = output_root / source_path.name
+
+    def copy_file() -> bool:
+        if output_file.exists():
+            return False
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        temporary_file = output_file.with_name(f".{output_file.name}.{uuid.uuid4().hex}.part")
+        try:
+            shutil.copy2(source_path, temporary_file)
+            if output_file.exists():
+                return False
+            temporary_file.replace(output_file)
+            return True
+        finally:
+            if temporary_file.exists():
+                temporary_file.unlink()
+
+    copied = await asyncio.to_thread(copy_file)
+    return {
+        "status": "copied" if copied else "skipped",
+        "output_file": str(output_file),
+        "task_id": None,
+    }
+
+
 @router.post("/{file_id}/convert")
 async def convert_file(file_id: str, request: FileConvertRequest):
     """转换单个文件。"""
@@ -403,3 +449,32 @@ async def batch_convert_files(request: FileBatchConvertRequest):
         "converted": converted_files,
         "errors": errors
     }
+
+
+@router.post("/batch-deliver")
+async def batch_deliver_files(request: FileBatchDeliveryRequest):
+    """按监控目录输出规则对已选文件执行转换和原样复制。"""
+    if not request.file_ids:
+        raise HTTPException(status_code=400, detail="至少选择一个文件")
+    if not request.targets:
+        raise HTTPException(status_code=400, detail="至少配置一条输出规则")
+
+    deliveries = []
+    errors = []
+    for file_id in request.file_ids:
+        for target in request.targets:
+            try:
+                if target.type == DeliveryTargetType.CONVERT:
+                    if not target.profile_id:
+                        raise HTTPException(status_code=400, detail="转换输出规则必须选择转换方案")
+                    result = await queue_file_conversion(file_id, FileConvertRequest(
+                        profile_id=target.profile_id,
+                        output_dir=target.output_dir,
+                    ))
+                else:
+                    result = await queue_file_copy(file_id, target)
+                deliveries.append({"file_id": file_id, "type": target.type.value, **result})
+            except HTTPException as exc:
+                errors.append({"file_id": file_id, "type": target.type.value, "error": exc.detail})
+
+    return {"status": "success", "deliveries": deliveries, "errors": errors}
