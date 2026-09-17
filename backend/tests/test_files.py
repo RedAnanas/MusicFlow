@@ -5,7 +5,7 @@ from fastapi import HTTPException
 
 from app.api.routes import files as files_api
 from app.api.routes import tasks as tasks_api
-from app.models import OutputFormat, Profile, TaskStatus
+from app.models import DeliveryTarget, DeliveryTargetType, OutputFormat, Profile, TaskStatus
 from app.services.profile_manager import profile_manager
 
 
@@ -123,6 +123,35 @@ def test_batch_convert_returns_missing_file_errors(monkeypatch, tmp_path):
         "task_id": "file-1",
     }]
     assert result["errors"] == [{"file_id": "missing", "error": "File not found"}]
+
+
+def test_batch_delivery_supports_convert_and_copy(monkeypatch, tmp_path):
+    """单文件投递可并行复用转换输出和原样复制规则。"""
+    source_file = tmp_path / "source" / "song.flac"
+    source_file.parent.mkdir(parents=True)
+    source_file.write_bytes(b"audio")
+    files_api.files_cache["file-1"] = {"path": str(source_file), "filename": source_file.name}
+    converted = []
+
+    async def queue(file_id, request):
+        converted.append((file_id, request.profile_id, request.output_dir))
+        return {"status": "queued", "output_file": str(tmp_path / "m4a" / "song.m4a"), "task_id": "task-1"}
+
+    monkeypatch.setattr(files_api, "queue_file_conversion", queue)
+    copy_dir = tmp_path / "copy"
+    result = asyncio.run(files_api.batch_deliver_files(files_api.FileBatchDeliveryRequest(
+        file_ids=["file-1"],
+        targets=[
+            DeliveryTarget(type=DeliveryTargetType.CONVERT, profile_id="aac", output_dir=str(tmp_path / "m4a")),
+            DeliveryTarget(type=DeliveryTargetType.COPY, output_dir=str(copy_dir)),
+        ],
+    )))
+
+    assert converted == [("file-1", "aac", str(tmp_path / "m4a"))]
+    assert result["errors"] == []
+    assert result["deliveries"][0]["status"] == "queued"
+    assert result["deliveries"][1]["status"] == "copied"
+    assert (copy_dir / "song.flac").read_bytes() == b"audio"
 
 
 def test_get_files_reuses_scan_result_until_refresh(monkeypatch):

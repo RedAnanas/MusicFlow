@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import dashboardIllustration from '../assets/images/dashboard-neon-studio.png'
 import { useAppStore } from '../stores/app'
 
 const store = useAppStore()
@@ -26,21 +25,14 @@ onMounted(() => Promise.all([store.fetchFiles(), store.fetchTasks(), store.fetch
 
 <template>
   <div class="dashboard">
-    <section class="overview-grid">
-      <article class="welcome-card">
-        <div class="welcome-copy"><span class="eyebrow">音乐总览</span><h1>欢迎回来，<br>MusicFlow</h1><p>在音乐的流转中，让每一次转换、整理与交接都变得简单、可靠。</p><button class="now-playing" @click="router.push('/files')"><span>开始处理</span> 进入操作台 <el-icon><ArrowRight /></el-icon></button></div>
-        <div class="spotlight-card"><img :src="dashboardIllustration" alt="霓虹音乐工作室插画" /><div><strong>{{ currentTasks.length || completedTasks.length }}</strong><span>{{ currentTasks.length ? '个任务正在处理' : '次已完成转换' }}</span></div></div>
-      </article>
-      <section class="stat-grid">
-        <button class="stat-card" @click="router.push('/files')"><span class="stat-mark purple">TR</span><small>全部歌曲</small><strong>{{ store.files.length }}</strong></button>
-        <button class="stat-card" @click="router.push('/files')"><span class="stat-mark pink">LP</span><small>全部专辑</small><strong>{{ albums }}</strong></button>
-        <button class="stat-card" @click="router.push('/files')"><span class="stat-mark purple">AR</span><small>全部艺术家</small><strong>{{ artists }}</strong></button>
-        <button class="stat-card" @click="router.push('/files')"><span class="stat-mark neutral">GB</span><small>歌曲大小</small><strong>{{ formatBytes(totalSize) }}</strong></button>
-        <button class="stat-card" @click="router.push('/tasks')"><span class="stat-mark pink">OK</span><small>任务完成率</small><strong>{{ store.tasks.length ? `${Math.round(completedTasks.length / store.tasks.length * 100)}%` : '0%' }}</strong></button>
-        <button class="stat-card" @click="router.push('/tasks')"><span class="stat-mark neutral">TM</span><small>歌曲时长</small><strong class="duration">{{ formatDuration(totalDuration) }}</strong></button>
-      </section>
+    <section class="stat-grid">
+      <button class="stat-card" @click="router.push('/files')"><span class="stat-mark purple">TR</span><small>全部歌曲</small><strong>{{ store.files.length }}</strong></button>
+      <button class="stat-card" @click="router.push('/files')"><span class="stat-mark pink">LP</span><small>全部专辑</small><strong>{{ albums }}</strong></button>
+      <button class="stat-card" @click="router.push('/files')"><span class="stat-mark purple">AR</span><small>全部艺术家</small><strong>{{ artists }}</strong></button>
+      <button class="stat-card" @click="router.push('/files')"><span class="stat-mark neutral">GB</span><small>歌曲大小</small><strong>{{ formatBytes(totalSize) }}</strong></button>
+      <button class="stat-card" @click="router.push('/tasks')"><span class="stat-mark pink">OK</span><small>任务完成率</small><strong>{{ store.tasks.length ? `${Math.round(completedTasks.length / store.tasks.length * 100)}%` : '0%' }}</strong></button>
+      <button class="stat-card" @click="router.push('/tasks')"><span class="stat-mark neutral">TM</span><small>歌曲时长</small><strong class="duration">{{ formatDuration(totalDuration) }}</strong></button>
     </section>
-
     <section class="lower-grid">
       <article class="panel task-panel"><header><div><h2>转换任务概览</h2><p>实时查看队列及最近的处理结果</p></div><el-button link @click="router.push('/tasks')">查看全部 <el-icon><ArrowRight /></el-icon></el-button></header><div class="queue-summary"><div><span>进行中</span><strong>{{ currentTasks.length }}</strong></div><div><span>已完成</span><strong>{{ completedTasks.length }}</strong></div><div><span>需处理</span><strong class="warning">{{ failedTasks.length }}</strong></div></div><div v-if="recentTasks.length" class="task-list"><div v-for="task in recentTasks" :key="task.id" class="task-row"><div class="task-note"><el-icon><Headset /></el-icon></div><div><strong>{{ fileName(task.source_file) }}</strong><small>{{ task.output_file || '等待生成输出文件' }}</small></div><el-tag :type="taskType(task.status)" effect="light">{{ taskLabel(task.status) }}</el-tag></div></div><div v-else class="empty-state"><el-icon><Headset /></el-icon><strong>尚无转换任务</strong><span>从操作台选择音乐后即可开始。</span></div></article>
       <article class="panel monitor-panel"><header><div><h2>运行状态</h2><p>本地服务与自动化目录</p></div><el-button link @click="router.push('/watch-folders')">管理 <el-icon><ArrowRight /></el-icon></el-button></header><div class="monitor-main"><span class="pulse"><el-icon><Connection /></el-icon></span><div><strong>本地服务正常</strong><p>{{ activeWatchFolders }} / {{ store.watchFolders.length }} 个监控目录正在工作</p></div></div><div class="monitor-rows"><div><span>转换方案</span><strong>{{ store.profiles.length }} 个可用</strong></div><div><span>最近异常</span><strong :class="{ warning: failedTasks.length }">{{ failedTasks.length ? `${failedTasks.length} 个待处理` : '暂无异常' }}</strong></div></div></article>
