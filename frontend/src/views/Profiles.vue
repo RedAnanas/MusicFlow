@@ -8,6 +8,7 @@ import ProfileEditorDialog from '../components/ProfileEditorDialog.vue'
 const store = useAppStore()
 const showCreateDialog = ref(false)
 const showEditDialog = ref(false)
+const showDetailsDialog = ref(false)
 const selectedProfile = ref<Profile | null>(null)
 
 interface ProfileForm {
@@ -139,6 +140,7 @@ const handleCreate = async () => {
 }
 
 const handleEdit = (profile: Profile) => {
+  showDetailsDialog.value = false
   selectedProfile.value = profile
   editProfile.value = {
     name: profile.name,
@@ -217,15 +219,17 @@ const handleDelete = async (id: string) => {
     <div class="profile-workspace" v-loading="store.loading">
       <aside class="profile-list-panel">
         <div class="panel-heading"><span>全部方案</span><span class="panel-count">{{ store.profiles.length }}</span></div>
-        <button v-for="profile in store.profiles" :key="profile.id" class="profile-list-item" :class="{ active: selectedProfile?.id === profile.id }" type="button" @click="selectedProfile = profile">
+        <div class="profile-table-head"><span class="profile-head-name">方案</span><span>格式 / 编码</span><span>操作</span></div>
+        <article v-for="profile in store.profiles" :key="profile.id" class="profile-list-item">
           <span class="format-icon">{{ profile.outputFormat.toUpperCase() }}</span>
-          <span class="profile-list-copy"><strong>{{ profile.name }}</strong><small>{{ profile.codec?.toUpperCase() || '--' }} · {{ profile.bitrate ? `${profile.bitrate} kbps` : '无损' }}</small></span>
-          <el-icon><ArrowRight /></el-icon>
-        </button>
+          <span class="profile-list-copy"><strong>{{ profile.name }}</strong><small>版本 {{ profile.version }} · {{ profile.enabled ? '可用' : '停用' }}</small></span>
+          <span class="profile-format">{{ profile.outputFormat.toUpperCase() }} · {{ profile.codec?.toUpperCase() || '--' }} · {{ profile.bitrate ? `${profile.bitrate} kbps` : '无损' }}</span>
+          <div class="profile-row-actions"><el-button link type="primary" @click="selectedProfile = profile; showDetailsDialog = true">详情</el-button><el-button link @click="handleEdit(profile)">编辑</el-button><el-button link type="danger" @click="handleDelete(profile.id)">删除</el-button></div>
+        </article>
         <el-empty v-if="!store.profiles.length" description="还没有转换方案" :image-size="70" />
       </aside>
 
-      <section v-if="selectedProfile" class="profile-inspector">
+      <el-dialog v-if="selectedProfile" v-model="showDetailsDialog" class="profile-details-dialog" :title="`${selectedProfile.name} - 方案详情`" width="1180px" destroy-on-close>
         <div class="inspector-header">
           <div><div class="eyebrow">方案详情</div><h2>{{ selectedProfile.name }}</h2><p>版本 {{ selectedProfile.version }} · {{ selectedProfile.enabled ? '当前可用' : '已停用' }}</p></div>
           <div class="inspector-actions"><el-button @click="handleDuplicate(selectedProfile)"><el-icon><CopyDocument /></el-icon>复制</el-button><el-button type="primary" @click="handleEdit(selectedProfile)"><el-icon><Edit /></el-icon>编辑方案</el-button></div>
@@ -253,7 +257,7 @@ const handleDelete = async (id: string) => {
           </article>
         </div>
         <div class="danger-row"><el-button type="danger" link @click="handleDelete(selectedProfile.id)"><el-icon><Delete /></el-icon>删除此方案</el-button></div>
-      </section>
+      </el-dialog>
     </div>
 
     <!-- 创建/编辑对话框 -->
@@ -486,20 +490,19 @@ const handleDelete = async (id: string) => {
 .profiles-page {
   padding-bottom: 32px;
 }
+.page-header { padding:30px 34px; margin-bottom:18px; border:1px solid #ece8fb; border-radius:24px; background:linear-gradient(120deg,#fff 40%,#f7f3ff); }
 
-.profile-workspace { display: grid; grid-template-columns: 286px minmax(0, 1fr); min-height: 650px; overflow: hidden; background: #fff; border: 1px solid #e8ecea; border-radius: 16px; box-shadow: 0 12px 36px rgba(18, 58, 45, .06); }
-.profile-list-panel { padding: 18px 12px; background: #f8faf9; border-right: 1px solid #e8ecea; }
-.panel-heading { display: flex; align-items: center; justify-content: space-between; padding: 0 10px 14px; color: #606b67; font-size: 13px; font-weight: 700; }
+.profile-workspace { min-height: 420px; overflow: hidden; background: #fff; border: 1px solid #e8ecea; border-radius: 16px; box-shadow: 0 12px 36px rgba(18, 58, 45, .06); }
+.profile-list-panel { display:grid; grid-template-columns:repeat(auto-fill,minmax(250px,1fr)); gap:10px; padding:18px; background:#fff; }
+.panel-heading { grid-column:1 / -1; display: flex; align-items: center; justify-content: space-between; padding: 0 10px 6px; color: #606b67; font-size: 13px; font-weight: 700; }
 .panel-count { display: inline-grid; min-width: 24px; height: 24px; place-items: center; background: #e8f5f0; color: #087955; border-radius: 12px; }
-.profile-list-item { display: flex; width: 100%; align-items: center; gap: 12px; padding: 13px 12px; margin-bottom: 6px; color: #33413c; text-align: left; background: transparent; border: 1px solid transparent; border-radius: 12px; cursor: pointer; }
-.profile-list-item:hover { background: #fff; }
-.profile-list-item.active { background: #fff; border-color: #cce8dd; box-shadow: 0 6px 18px rgba(18, 94, 70, .08); }
-.format-icon { display: grid; width: 42px; height: 42px; flex: 0 0 42px; place-items: center; background: #e2f3ed; color: #087955; border-radius: 10px; font-size: 10px; font-weight: 800; }
+.profile-list-item { display: flex; width: 100%; align-items: center; gap: 12px; padding: 16px; color: #33413c; text-align: left; background: #fbfaff; border: 1px solid #eee8ff; border-radius: 14px; cursor: pointer; }
+.profile-list-item:hover { background: #fff; border-color: #cdbcfb; box-shadow: 0 6px 18px rgba(128, 93, 218, .12); }
+.format-icon { display: grid; width: 42px; height: 42px; flex: 0 0 42px; place-items: center; background: #eee7ff; color: #7a54dc; border-radius: 10px; font-size: 10px; font-weight: 800; }
 .profile-list-copy { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 4px; }
 .profile-list-copy strong { overflow: hidden; font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
 .profile-list-copy small { color: #8a9691; font-size: 11px; }
 .profile-list-item > .el-icon { color: #9aa6a1; }
-.profile-list-item.active > .el-icon { color: #0c9c68; }
 .profile-inspector { min-width: 0; padding: 26px 28px; }
 .inspector-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding-bottom: 22px; border-bottom: 1px solid #edf0ef; }
 .eyebrow { margin-bottom: 6px; color: #0c9c68; font-size: 11px; font-weight: 800; letter-spacing: .12em; }
@@ -592,9 +595,10 @@ code { padding: 4px 7px; background: #edf3f0; color: #385148; border-radius: 5px
   border-radius: 14px;
 }
 
+:deep(.profile-details-dialog) { max-width: calc(100vw - 24px); }
+
 @media (max-width: 700px) {
-  .profile-workspace { grid-template-columns: 1fr; }
-  .profile-list-panel { border-right: 0; border-bottom: 1px solid #e8ecea; }
+  .profile-list-panel { grid-template-columns:1fr; }
   .profile-inspector { padding: 20px; }
   .inspector-header { flex-direction: column; }
   .detail-grid { grid-template-columns: 1fr; }
@@ -603,4 +607,16 @@ code { padding: 4px 7px; background: #edf3f0; color: #385148; border-radius: 5px
     grid-template-columns: 1fr;
   }
 }
+.profile-list-panel { grid-template-columns:1fr; }
+.profile-table-head { display:grid; grid-template-columns:42px minmax(0,1fr) 220px 180px; gap:12px; padding:0 16px 8px; color:#8b96aa; font-size:12px; font-weight:700; }
+.profile-head-name { grid-column:1 / 3; }
+.profile-list-item { display:grid; grid-template-columns:42px minmax(0,1fr) 220px 180px; padding:14px 16px; cursor:default; }
+.profile-format { overflow:hidden; color:#70807a; font-size:12px; text-overflow:ellipsis; white-space:nowrap; }
+.profile-row-actions { display:flex; gap:4px; margin-left:auto; }
+:global(.profile-details-dialog),:global(.profile-editor-dialog) { max-width:calc(100vw - 24px); margin-top:3vh !important; }
+:global(.profile-details-dialog) { width:min(1180px, calc(100vw - 32px)) !important; }
+:global(.profile-details-dialog .el-dialog__body),:global(.profile-editor-dialog .el-dialog__body) { max-height:calc(94vh - 120px); overflow-y:auto; }
+@media (min-width:701px) { :global(.profile-details-dialog .el-dialog__body) { max-height:none; overflow:visible; } }
+@media (max-width:700px) { .profile-list-item { display:flex; } .profile-format { display:none; } .profile-row-actions { flex-wrap:wrap; justify-content:flex-end; } }
+@media (max-width:700px) { .profile-table-head { display:none; } }
 </style>

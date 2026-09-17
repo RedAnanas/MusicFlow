@@ -29,8 +29,7 @@ const routes: RouteRecordRaw[] = [
   },
   {
     path: '/logs',
-    name: 'Logs',
-    component: () => import('../views/Logs.vue'),
+    redirect: { path: '/tasks', query: { tab: 'logs' } },
   },
   {
     path: '/system',
