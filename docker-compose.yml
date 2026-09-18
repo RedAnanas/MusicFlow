@@ -12,6 +12,8 @@ services:
       LOGS_DIR: /data/logs
       TEMP_DIR: /data/temp
       MUSIC_SOURCE_DIR: /music
+      # NAS 容器必须确认 Apple Music 目录仍由 SMB/CIFS 挂载提供。
+      APPLE_MUSIC_REQUIRE_NETWORK_MOUNT: "true"
     volumes:
       # 配置、任务历史、日志、临时文件及自动安装的 FFmpeg。
       - ./data:/data
