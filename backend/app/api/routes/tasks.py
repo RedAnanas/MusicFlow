@@ -61,8 +61,17 @@ def refresh_apple_music_statuses():
     for task in tasks_cache.values():
         if task.apple_music_status != "waiting" or not task.apple_music_import_file:
             continue
-        if apple_music_handoff_service.is_received(task.apple_music_import_file):
+        try:
+            received = apple_music_handoff_service.is_received(task.apple_music_import_file)
+        except OSError as exc:
+            task.apple_music_status = "failed"
+            task.apple_music_error = str(exc)
+            logger.warning(f"Apple Music 交接状态检查失败：{task.id}: {exc}")
+            changed = True
+            continue
+        if received:
             task.apple_music_status = "received"
+            task.apple_music_error = None
             changed = True
     if changed:
         save_tasks()
@@ -332,6 +341,7 @@ def retry_apple_music_handoff(task: TaskResponse) -> TaskResponse:
         task.apple_music_status = "failed"
         task.apple_music_error = str(exc)
         logger.error(f"重新交接 Apple Music 失败：{task.id}: {exc}")
+        save_tasks()
         raise HTTPException(status_code=503, detail=f"Apple Music 交接失败：{exc}") from exc
 
     save_tasks()
@@ -396,8 +406,8 @@ async def retry_task_apple_music_handoff(task_id: str):
         raise HTTPException(status_code=404, detail="Task not found")
 
     task = tasks_cache[task_id]
-    if task.apple_music_status != "failed":
-        raise HTTPException(status_code=400, detail="Only failed Apple Music handoffs can be retried")
+    if task.apple_music_status not in {"failed", "received"}:
+        raise HTTPException(status_code=400, detail="Only failed or received Apple Music handoffs can be retried")
 
     return retry_apple_music_handoff(task)
 

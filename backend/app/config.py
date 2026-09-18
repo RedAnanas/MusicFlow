@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     MAX_CONCURRENT_TASKS: int = 2
     FFMPEG_THREADS: int = 2
     FILE_STABLE_SECONDS: int = 30
+    APPLE_MUSIC_REQUIRE_NETWORK_MOUNT: bool = False
 
     # 支持的音频格式
     SUPPORTED_FORMATS: List[str] = ["mp3", "flac", "m4a", "aac", "alac", "wav", "ape", "ogg", "opus", "wma"]

@@ -69,6 +69,31 @@ def test_get_tasks_marks_missing_import_file_as_received(monkeypatch):
     assert saved == [True]
 
 
+def test_get_tasks_marks_unavailable_import_directory_as_failed(monkeypatch):
+    """挂载目录不可访问时不能把文件消失误判为 Apple Music 已接收。"""
+    task = make_task("apple-music", tasks_api.TaskStatus.SUCCESS, datetime.now())
+    task.apple_music_status = "waiting"
+    task.apple_music_import_file = "/unavailable/歌曲.m4a"
+    tasks_api.tasks_cache[task.id] = task
+    saved = []
+
+    monkeypatch.setattr(tasks_api, "save_tasks", lambda: saved.append(True))
+
+    def raise_unavailable(_path):
+        raise OSError("Apple Music 自动导入目录不可访问")
+
+    monkeypatch.setattr(
+        "app.services.apple_music_handoff.apple_music_handoff_service.is_received",
+        raise_unavailable,
+    )
+
+    result = asyncio.run(tasks_api.get_tasks(status=None, limit=100))
+
+    assert result[0].apple_music_status == "failed"
+    assert result[0].apple_music_error == "Apple Music 自动导入目录不可访问"
+    assert saved == [True]
+
+
 @pytest.mark.parametrize("status", list(tasks_api.TaskStatus))
 def test_delete_task_allows_every_status(monkeypatch, status):
     """每一种任务状态都允许删除记录。"""
@@ -188,12 +213,14 @@ def test_retry_apple_music_handoff_records_unavailable_directory(monkeypatch, tm
     task.output_file = str(tmp_path / "missing.m4a")
     task.apple_music_status = "failed"
     tasks_api.tasks_cache[task.id] = task
+    saved = []
 
     class Profile:
         apple_music_handoff_enabled = True
         apple_music_import_dir = str(tmp_path / "Automatically Add to Apple Music")
 
     monkeypatch.setattr(profile_manager_module.profile_manager, "get_profile", lambda _profile_id: Profile())
+    monkeypatch.setattr(tasks_api, "save_tasks", lambda: saved.append(True))
 
     with pytest.raises(HTTPException) as error:
         asyncio.run(tasks_api.retry_task_apple_music_handoff(task.id))
@@ -201,3 +228,23 @@ def test_retry_apple_music_handoff_records_unavailable_directory(monkeypatch, tm
     assert error.value.status_code == 503
     assert task.apple_music_status == "failed"
     assert "转换成品不存在" in (task.apple_music_error or "")
+    assert saved == [True]
+
+
+def test_retry_apple_music_handoff_allows_received_record(monkeypatch):
+    """误判为已接收的记录应允许用户手动再次交接。"""
+    task = make_task("apple-music", tasks_api.TaskStatus.SUCCESS, datetime.now())
+    task.apple_music_status = "received"
+    tasks_api.tasks_cache[task.id] = task
+    retried = []
+
+    def fake_retry(received_task):
+        retried.append(received_task.id)
+        return received_task
+
+    monkeypatch.setattr(tasks_api, "retry_apple_music_handoff", fake_retry)
+
+    result = asyncio.run(tasks_api.retry_task_apple_music_handoff(task.id))
+
+    assert result.id == task.id
+    assert retried == [task.id]
