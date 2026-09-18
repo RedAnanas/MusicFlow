@@ -9,6 +9,7 @@ def test_handoff_copies_complete_file_and_keeps_source(tmp_path: Path):
     source.parent.mkdir()
     source.write_bytes(b"music-data")
     import_dir = tmp_path / "Automatically Add to Apple Music"
+    import_dir.mkdir()
 
     result = AppleMusicHandoffService().handoff(str(source), str(import_dir))
 
@@ -16,6 +17,22 @@ def test_handoff_copies_complete_file_and_keeps_source(tmp_path: Path):
     assert source.read_bytes() == b"music-data"
     assert target.read_bytes() == b"music-data"
     assert not list(import_dir.glob("*.musicflow-copying"))
+
+
+def test_handoff_rejects_unavailable_import_directory(tmp_path: Path):
+    """自动导入目录不可访问时不能创建同名本地目录。"""
+    source = tmp_path / "歌曲.m4a"
+    source.write_bytes(b"music-data")
+    import_dir = tmp_path / "Automatically Add to Apple Music"
+
+    try:
+        AppleMusicHandoffService().handoff(str(source), str(import_dir))
+    except FileNotFoundError as error:
+        assert "自动导入目录不可访问" in str(error)
+    else:
+        raise AssertionError("应拒绝不可访问的自动导入目录")
+
+    assert not import_dir.exists()
 
 
 def test_handoff_reuses_same_size_pending_file(tmp_path: Path):

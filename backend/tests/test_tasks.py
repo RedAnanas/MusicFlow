@@ -5,6 +5,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.api.routes import tasks as tasks_api
+from app.services import profile_manager as profile_manager_module
 
 
 def make_task(
@@ -152,3 +153,51 @@ def test_batch_retry_rejects_non_failed_task(monkeypatch):
 
     assert error.value.status_code == 400
     assert submitted == []
+
+
+def test_retry_apple_music_handoff_reuses_converted_file(monkeypatch, tmp_path):
+    """交接重试只复制既有成品，不重新提交转换任务。"""
+    output_file = tmp_path / "歌曲.m4a"
+    output_file.write_bytes(b"music-data")
+    import_dir = tmp_path / "Automatically Add to Apple Music"
+    import_dir.mkdir()
+    task = make_task("apple-music", tasks_api.TaskStatus.SUCCESS, datetime.now())
+    task.output_file = str(output_file)
+    task.apple_music_status = "failed"
+    tasks_api.tasks_cache[task.id] = task
+    saved = []
+
+    class Profile:
+        apple_music_handoff_enabled = True
+        apple_music_import_dir = str(import_dir)
+
+    monkeypatch.setattr(tasks_api, "save_tasks", lambda: saved.append(True))
+    monkeypatch.setattr(profile_manager_module.profile_manager, "get_profile", lambda _profile_id: Profile())
+
+    result = asyncio.run(tasks_api.retry_task_apple_music_handoff(task.id))
+
+    assert result.apple_music_status == "waiting"
+    assert result.apple_music_error is None
+    assert (import_dir / output_file.name).read_bytes() == b"music-data"
+    assert saved == [True]
+
+
+def test_retry_apple_music_handoff_records_unavailable_directory(monkeypatch, tmp_path):
+    """交接目录不可用时应保留失败状态和原因。"""
+    task = make_task("apple-music", tasks_api.TaskStatus.SUCCESS, datetime.now())
+    task.output_file = str(tmp_path / "missing.m4a")
+    task.apple_music_status = "failed"
+    tasks_api.tasks_cache[task.id] = task
+
+    class Profile:
+        apple_music_handoff_enabled = True
+        apple_music_import_dir = str(tmp_path / "Automatically Add to Apple Music")
+
+    monkeypatch.setattr(profile_manager_module.profile_manager, "get_profile", lambda _profile_id: Profile())
+
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(tasks_api.retry_task_apple_music_handoff(task.id))
+
+    assert error.value.status_code == 503
+    assert task.apple_music_status == "failed"
+    assert "转换成品不存在" in (task.apple_music_error or "")
