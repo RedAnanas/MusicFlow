@@ -309,6 +309,35 @@ async def submit_retry(task: TaskResponse) -> TaskResponse:
     return new_task
 
 
+def retry_apple_music_handoff(task: TaskResponse) -> TaskResponse:
+    """仅重新交接已完成的转换成品，不重复执行编码。"""
+    from app.services.apple_music_handoff import apple_music_handoff_service
+    from app.services.profile_manager import profile_manager
+
+    profile = profile_manager.get_profile(task.profile_id)
+    if not profile or not profile.apple_music_handoff_enabled:
+        raise HTTPException(status_code=400, detail="原转换方案未启用 Apple Music 自动交接")
+    if not profile.apple_music_import_dir:
+        raise HTTPException(status_code=400, detail="原转换方案未配置 Apple Music 自动导入目录")
+
+    try:
+        task.apple_music_import_file = apple_music_handoff_service.handoff(
+            task.output_file,
+            profile.apple_music_import_dir,
+        )
+        task.apple_music_status = "waiting"
+        task.apple_music_error = None
+        logger.info(f"已重新交接 Apple Music 文件：{task.id}")
+    except Exception as exc:
+        task.apple_music_status = "failed"
+        task.apple_music_error = str(exc)
+        logger.error(f"重新交接 Apple Music 失败：{task.id}: {exc}")
+        raise HTTPException(status_code=503, detail=f"Apple Music 交接失败：{exc}") from exc
+
+    save_tasks()
+    return task
+
+
 @router.post("/batch-retry", response_model=List[TaskResponse])
 async def batch_retry_tasks(action: TaskBatchAction):
     """批量重试失败任务。"""
@@ -358,6 +387,19 @@ async def retry_task(task_id: str):
         raise HTTPException(status_code=400, detail="Only failed tasks can be retried")
 
     return await submit_retry(task)
+
+
+@router.post("/{task_id}/retry-apple-music", response_model=TaskResponse)
+async def retry_task_apple_music_handoff(task_id: str):
+    """重试 Apple Music 交接，不重新转换文件。"""
+    if task_id not in tasks_cache:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    task = tasks_cache[task_id]
+    if task.apple_music_status != "failed":
+        raise HTTPException(status_code=400, detail="Only failed Apple Music handoffs can be retried")
+
+    return retry_apple_music_handoff(task)
 
 
 @router.get("/stats/summary")

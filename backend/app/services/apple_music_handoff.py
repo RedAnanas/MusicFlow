@@ -12,8 +12,9 @@ class AppleMusicHandoffService:
         target_dir = Path(import_dir)
         if not source_path.is_file():
             raise FileNotFoundError(f"转换成品不存在：{source_file}")
+        if not target_dir.is_dir():
+            raise FileNotFoundError(f"Apple Music 自动导入目录不可访问：{import_dir}")
 
-        target_dir.mkdir(parents=True, exist_ok=True)
         target_path = target_dir / source_path.name
         if target_path.exists():
             if target_path.stat().st_size == source_path.stat().st_size:
