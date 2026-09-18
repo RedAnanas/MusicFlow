@@ -85,5 +85,11 @@ const selectAppleMusicDirectory = (paths: string[]) => {
 .two-column { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }.editor-form :deep(.el-select) { width: 100%; }.field-tip { color: #a37b2d; font-size: 10px; }.form-callout, .quality-summary { display: flex; align-items: center; gap: 9px; padding: 13px; color: #61716a; background: #f2f6f4; border-radius: 9px; font-size: 11px; }.form-callout .el-icon { color: #0c9c68; }.quality-summary { justify-content: space-between; }.quality-summary strong { color: #26342e; }
 .token-row { display: flex; gap: 6px; margin-top: 8px; }.switch-row { display: flex; align-items: flex-start; justify-content: space-between; padding: 15px; margin-bottom: 20px; background: #f7f9f8; border-radius: 10px; }.switch-row > div { display: flex; flex-direction: column; gap: 5px; }.switch-row strong { font-size: 13px; }.switch-row span { color: #87928d; font-size: 11px; }
 .dialog-footer { display: flex; align-items: center; justify-content: space-between; }.dialog-footer > span { color: #8d9793; font-size: 11px; }
+html.dark .editor-steps, html.dark .switch-row { background: #252b39; border-color: #3d4557; }
+html.dark .editor-steps button, html.dark .switch-row span, html.dark .section-heading p, html.dark .dialog-footer > span { color: #aeb8c9; }
+html.dark .editor-form section { background: #293142; border-color: #465066; }
+html.dark .section-heading { border-color: #465066; }
+html.dark .section-heading h3, html.dark .switch-row strong, html.dark .quality-summary strong { color: #f0f3f8; }
+html.dark .form-callout, html.dark .quality-summary { color: #b8d8ca; background: #20342e; }
 @media (max-width: 700px) { .editor-steps { grid-template-columns: repeat(3, 1fr); }.editor-form { padding: 24px; }.two-column { grid-template-columns: 1fr; } }
 </style>

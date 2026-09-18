@@ -54,5 +54,12 @@ const selectDirectory = (paths: string[]) => { const path = paths[0] || ''; if (
 .switch-card small { color:#87928d; font-size:11px; }
 .dialog-footer { display:flex; align-items:center; justify-content:space-between; }
 .dialog-footer>span { color:#8d9793; font-size:11px; }
+html.dark .editor-form section { background:#293142; border-color:#465066; }
+html.dark .section-heading, html.dark .rule-card { border-color:#465066; }
+html.dark .section-heading h3, html.dark .rule-card header { color:#f0f3f8; }
+html.dark .section-heading p, html.dark .switch-card small, html.dark .dialog-footer>span { color:#aeb8c9; }
+html.dark .form-callout, html.dark .quality-summary { color:#b8d8ca; background:#20342e; }
+html.dark .quality-summary strong { color:#f0f3f8; }
+html.dark .rule-card, html.dark .switch-card { background:#252b39; }
 @media(max-width:700px){.editor-form{padding:24px}.two-column,.rule-fields,.settings-grid{grid-template-columns:1fr}.dialog-footer>span{display:none}}
 </style>

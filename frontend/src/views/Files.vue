@@ -654,6 +654,18 @@ const selectOutputDirectory = (paths: string[]) => {
 
 :deep(.folder-panel .el-tree) { padding: 2px 5px; color: #778397; background: transparent; }:deep(.folder-panel .el-tree-node__content) { height: 35px; border-radius: 8px; }:deep(.folder-panel .el-tree-node__content:hover), :deep(.folder-panel .is-current > .el-tree-node__content) { color: #7655bf; background: #eee9ff; }:deep(.files-table .el-scrollbar__bar.is-vertical) { display: none; }:deep(.files-table .el-scrollbar__wrap) { overflow-y: hidden; }
 
+html.dark .workbench-shell { background: rgb(29 34 46 / 94%); border-color: #3a4152; box-shadow: 0 16px 35px rgb(0 0 0 / 20%); }
+html.dark .workbench-toolbar, html.dark .folder-panel, html.dark .folder-panel-heading, html.dark .files-table { border-color: #3a4152; }
+html.dark .toolbar-path, html.dark .folder-panel-heading strong, html.dark .file-list-heading span, html.dark .track-copy strong { color: #eef1f7; }
+:global(html.dark) .toolbar-controls :deep(.el-button), :global(html.dark) .toolbar-controls :deep(.el-select__wrapper), :global(html.dark) .toolbar-controls :deep(.el-input__wrapper) { color: #d8deea; background: #262c3a; box-shadow: 0 0 0 1px #41495b inset; border-color: #41495b; }
+html.dark .toolbar-divider, html.dark .folder-panel-heading { border-color: #3a4152; background: #3a4152; }
+html.dark .folder-panel-heading { background: transparent; }
+html.dark .library-source, html.dark .track-copy small, html.dark .folder-panel-heading span { color: #aeb8c9; }
+:global(html.dark) .library-source:hover, :global(html.dark) .folder-panel :deep(.el-tree-node__content:hover), :global(html.dark) .folder-panel :deep(.is-current > .el-tree-node__content) { background: #302c44; }
+html.dark .library-source em { color: #c4ccda; background: #2a303f; }
+html.dark .workbench-actions { background: rgb(37 43 57 / 96%); border-color: #41495b; box-shadow: 0 12px 28px rgb(0 0 0 / 28%); }
+:global(html.dark) .workbench-actions :deep(.el-button) { color: #b9c3d3; background: #262c3a; border-color: #41495b; }
+
 @media (max-width: 1180px) { .folder-panel { flex-basis: 285px; }.toolbar-controls :deep(.el-input) { width: 200px; } }
 @media (max-width: 820px) { .files-page { padding: 6px; }.workbench-toolbar { height: auto; min-height: 64px; gap: 8px; flex-wrap: wrap; padding: 10px; }.toolbar-controls { width: 100%; justify-content: flex-end; }.toolbar-controls :deep(.el-input) { width: min(100%, 230px); }.toolbar-controls :deep(.el-select) { width: 94px; }.workbench-layout { display: block; }.folder-panel { max-height: 220px; border-right: 0; border-bottom: 1px solid #e7ebf1; }.workbench-content { min-height: 520px; padding: 18px; }.workbench-actions { gap: 6px; max-width: calc(100% - 20px); overflow-x: auto; }.workbench-actions :deep(.el-button) { width: 44px; height: 44px; flex: 0 0 auto; } }
 
