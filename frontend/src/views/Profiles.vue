@@ -216,7 +216,7 @@ const handleDelete = async (id: string) => {
       </el-button>
     </div>
 
-    <div class="profile-workspace" v-loading="store.loading">
+    <div class="profile-workspace" v-loading="store.profilesLoading">
       <aside class="profile-list-panel">
         <div class="panel-heading"><span>全部方案</span><span class="panel-count">{{ store.profiles.length }}</span></div>
         <div class="profile-table-head"><span class="profile-head-name">方案</span><span>格式 / 编码</span><span>操作</span></div>

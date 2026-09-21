@@ -1,4 +1,5 @@
 import asyncio
+import time
 
 import pytest
 from fastapi import HTTPException
@@ -175,6 +176,27 @@ def test_get_files_reuses_scan_result_until_refresh(monkeypatch):
     assert len(scan_calls) == 2
 
 
+def test_get_files_scan_does_not_block_other_async_work(monkeypatch):
+    """慢扫描应在工作线程运行，不得占用 API 事件循环。"""
+    def slow_scan():
+        time.sleep(0.08)
+        return []
+
+    monkeypatch.setattr(files_api, "_scan_files", slow_scan)
+
+    async def run_scenario():
+        scan_task = asyncio.create_task(files_api.get_files(
+            search=None,
+            format=None,
+            refresh=False,
+            limit=100,
+        ))
+        await asyncio.wait_for(asyncio.sleep(0.01), timeout=0.04)
+        await scan_task
+
+    asyncio.run(run_scenario())
+
+
 def test_import_files_adds_server_audio_and_persists_source(monkeypatch, tmp_path):
     """导入服务器文件应加入音乐库并保存来源，不复制源文件。"""
     source_file = tmp_path / "歌曲.flac"
@@ -196,6 +218,28 @@ def test_import_files_adds_server_audio_and_persists_source(monkeypatch, tmp_pat
     assert result["imported"][0]["path"] == str(source_file)
     assert saved == [str(source_file)]
     assert source_file.read_bytes() == b"audio"
+
+
+def test_import_files_scan_does_not_block_other_async_work(monkeypatch, tmp_path):
+    """导入大型文件夹时，其他页面的 API 仍应能继续运行。"""
+    source_dir = tmp_path / "music"
+    source_dir.mkdir()
+
+    def slow_collect(_paths):
+        time.sleep(0.08)
+        return [str(source_dir)], [], []
+
+    monkeypatch.setattr(files_api, "_collect_imported_files", slow_collect)
+    monkeypatch.setattr(files_api, "_save_library_sources", lambda _paths: None)
+
+    async def run_scenario():
+        import_task = asyncio.create_task(files_api.import_files(
+            files_api.FileImportRequest(paths=[str(source_dir)]),
+        ))
+        await asyncio.wait_for(asyncio.sleep(0.01), timeout=0.04)
+        await import_task
+
+    asyncio.run(run_scenario())
 
 
 def test_remove_library_source_only_stops_reading(monkeypatch, tmp_path):

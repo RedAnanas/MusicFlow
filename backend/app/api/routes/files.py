@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 files_cache: dict = {}
 file_list_cache: List[dict] = []
 file_list_loaded = False
+file_scan_lock = asyncio.Lock()
 
 
 class FileResponse(BaseModel):
@@ -91,8 +92,10 @@ async def get_files(
     global file_list_cache, file_list_loaded
 
     if refresh or not file_list_loaded:
-        file_list_cache = _scan_files()
-        file_list_loaded = True
+        async with file_scan_lock:
+            if refresh or not file_list_loaded:
+                file_list_cache = await asyncio.to_thread(_scan_files)
+                file_list_loaded = True
 
     files = list(file_list_cache)
 
@@ -170,11 +173,12 @@ async def remove_library_source(source_id: str):
     if not removed:
         raise HTTPException(status_code=404, detail="音乐库来源不存在")
 
-    _save_library_sources([path for path in sources if path != removed])
-    global file_list_cache, file_list_loaded
-    files_cache.clear()
-    file_list_cache = _scan_files()
-    file_list_loaded = True
+    async with file_scan_lock:
+        await asyncio.to_thread(_save_library_sources, [path for path in sources if path != removed])
+        global file_list_cache, file_list_loaded
+        files_cache.clear()
+        file_list_cache = await asyncio.to_thread(_scan_files)
+        file_list_loaded = True
     return {"status": "success", "removed": removed, "deleted_from_disk": False}
 
 
@@ -222,10 +226,27 @@ async def import_files(request: FileImportRequest):
     if not request.paths:
         raise HTTPException(status_code=400, detail="至少选择一个文件或目录")
 
+    async with file_scan_lock:
+        existing_sources, imported, errors = await asyncio.to_thread(
+            _collect_imported_files,
+            request.paths,
+        )
+        await asyncio.to_thread(_save_library_sources, existing_sources)
+        global file_list_cache, file_list_loaded
+        merged = {item["id"]: item for item in file_list_cache}
+        merged.update({item["id"]: item for item in imported})
+        file_list_cache = list(merged.values())
+        files_cache.update({item["id"]: item for item in imported})
+        file_list_loaded = True
+    return {"imported": imported, "errors": errors}
+
+
+def _collect_imported_files(raw_paths: List[str]):
+    """在工作线程中扫描导入路径，避免大型音乐库阻塞 API 事件循环。"""
     existing_sources = _load_library_sources()
     imported = []
     errors = []
-    for raw_path in request.paths:
+    for raw_path in raw_paths:
         path = Path(raw_path).expanduser()
         if not path.is_absolute() or not path.exists():
             errors.append({"path": raw_path, "error": "路径不存在或不是绝对路径"})
@@ -238,18 +259,9 @@ async def import_files(request: FileImportRequest):
             existing_sources.append(normalized)
         for file_path in _iter_audio_files(path):
             file_data = _read_file(file_path)
-            if not file_data:
-                continue
-            files_cache[file_data["id"]] = file_data
-            imported.append(file_data)
-
-    _save_library_sources(existing_sources)
-    global file_list_cache, file_list_loaded
-    merged = {item["id"]: item for item in file_list_cache}
-    merged.update({item["id"]: item for item in imported})
-    file_list_cache = list(merged.values())
-    file_list_loaded = True
-    return {"imported": imported, "errors": errors}
+            if file_data:
+                imported.append(file_data)
+    return existing_sources, imported, errors
 
 
 @router.get("/{file_id}", response_model=FileResponse)
