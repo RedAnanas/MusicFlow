@@ -63,7 +63,7 @@ const copyDetails = async () => {
     <div class="level-summary">
       <button v-for="item in [{ key: '', label: '全部', count: levelCounts.ALL }, { key: 'ERROR', label: '错误', count: levelCounts.ERROR }, { key: 'WARNING', label: '警告', count: levelCounts.WARNING }, { key: 'INFO', label: '信息', count: levelCounts.INFO }, { key: 'DEBUG', label: '调试', count: levelCounts.DEBUG }]" :key="item.label" type="button" :class="[item.key.toLowerCase(), { active: levelFilter === item.key }]" @click="levelFilter = item.key"><span>{{ item.label }}</span><strong>{{ item.count }}</strong></button>
     </div>
-    <div class="logs-workspace" v-loading="store.loading">
+    <div class="logs-workspace" v-loading="store.logsLoading">
       <section class="log-table-panel">
         <div class="table-caption"><strong>系统日志</strong><span>显示 {{ filteredLogs.length }} / {{ store.logs.length }} 条记录</span></div>
         <el-table :data="filteredLogs" highlight-current-row height="548" @current-change="(row: LogEntry) => selectedLog = row">

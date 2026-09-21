@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import axios from 'axios'
 import type {
   FileItem,
@@ -82,22 +82,36 @@ export const useAppStore = defineStore('app', () => {
   })
   const logs = ref<LogEntry[]>([])
 
-  // 加载状态
-  const loading = ref(false)
+  // 各类数据独立记录加载状态，避免切换页面时相互显示遮罩。
+  const filesLoading = ref(false)
+  const tasksLoading = ref(false)
+  const profilesLoading = ref(false)
+  const watchFoldersLoading = ref(false)
+  const settingsLoading = ref(false)
+  const logsLoading = ref(false)
+  const loading = computed(() => filesLoading.value || tasksLoading.value || profilesLoading.value ||
+    watchFoldersLoading.value || settingsLoading.value || logsLoading.value)
+  let filesRequest: Promise<void> | null = null
 
   // 文件操作
-  async function fetchFiles(refresh: boolean = false) {
-    if (filesLoaded.value && !refresh) return
-    loading.value = true
-    try {
-      const response = await axios.get('/api/files/', { params: { limit: 1000, refresh } })
-      files.value = response.data.map(mapFile)
-      filesLoaded.value = true
-    } catch (error) {
-      console.error('Failed to fetch files:', error)
-    } finally {
-      loading.value = false
-    }
+  function fetchFiles(refresh: boolean = false) {
+    if (filesLoaded.value && !refresh) return Promise.resolve()
+    if (filesRequest) return filesRequest
+
+    filesLoading.value = true
+    filesRequest = axios.get('/api/files/', { params: { limit: 1000, refresh } })
+      .then(response => {
+        files.value = response.data.map(mapFile)
+        filesLoaded.value = true
+      })
+      .catch(error => {
+        console.error('Failed to fetch files:', error)
+      })
+      .finally(() => {
+        filesLoading.value = false
+        filesRequest = null
+      })
+    return filesRequest
   }
 
   async function deleteFile(id: string) {
@@ -130,20 +144,20 @@ export const useAppStore = defineStore('app', () => {
 
   // 任务操作
   async function fetchTasks() {
-    loading.value = true
+    tasksLoading.value = true
     try {
       const response = await axios.get('/api/tasks/', { params: { limit: 1000 } })
       tasks.value = response.data
     } catch (error) {
       console.error('Failed to fetch tasks:', error)
     } finally {
-      loading.value = false
+      tasksLoading.value = false
     }
   }
 
   // Profile 操作
   async function fetchProfiles() {
-    loading.value = true
+    profilesLoading.value = true
     try {
       const response = await axios.get('/api/profiles/')
       // 转换字段名从下划线到驼峰格式
@@ -169,7 +183,7 @@ export const useAppStore = defineStore('app', () => {
     } catch (error) {
       console.error('Failed to fetch profiles:', error)
     } finally {
-      loading.value = false
+      profilesLoading.value = false
     }
   }
 
@@ -295,14 +309,14 @@ export const useAppStore = defineStore('app', () => {
 
   // 监控目录操作
   async function fetchWatchFolders(silent: boolean = false) {
-    if (!silent) loading.value = true
+    if (!silent) watchFoldersLoading.value = true
     try {
       const response = await axios.get<WatchFolderApiResponse[]>('/api/watch-folders/')
       watchFolders.value = response.data.map(mapWatchFolder)
     } catch (error) {
       console.error('Failed to fetch watch folders:', error)
     } finally {
-      if (!silent) loading.value = false
+      if (!silent) watchFoldersLoading.value = false
     }
   }
 
@@ -417,14 +431,14 @@ export const useAppStore = defineStore('app', () => {
 
   // 设置操作
   async function fetchSettings() {
-    loading.value = true
+    settingsLoading.value = true
     try {
       const response = await axios.get('/api/settings/')
       settings.value = response.data
     } catch (error) {
       console.error('Failed to fetch settings:', error)
     } finally {
-      loading.value = false
+      settingsLoading.value = false
     }
   }
 
@@ -441,14 +455,14 @@ export const useAppStore = defineStore('app', () => {
 
   // 日志操作
   async function fetchLogs(limit: number = 100) {
-    loading.value = true
+    logsLoading.value = true
     try {
       const response = await axios.get('/api/logs/', { params: { limit } })
       logs.value = response.data
     } catch (error) {
       console.error('Failed to fetch logs:', error)
     } finally {
-      loading.value = false
+      logsLoading.value = false
     }
   }
 
@@ -461,6 +475,12 @@ export const useAppStore = defineStore('app', () => {
     settings,
     logs,
     loading,
+    filesLoading,
+    tasksLoading,
+    profilesLoading,
+    watchFoldersLoading,
+    settingsLoading,
+    logsLoading,
     fetchFiles,
     importFiles,
     fetchLibrarySources,

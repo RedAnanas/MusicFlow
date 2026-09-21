@@ -385,7 +385,7 @@ const selectOutputDirectory = (paths: string[]) => {
           <strong>{{ selectedFolder ? selectedFolder.split('/').filter(Boolean).pop() : '根目录' }}</strong>
         </div>
         <div class="toolbar-controls">
-          <el-button circle text aria-label="刷新文件" :loading="store.loading" @click="store.fetchFiles(true)"><el-icon><Refresh /></el-icon></el-button>
+          <el-button circle text aria-label="刷新文件" :loading="store.filesLoading" @click="store.fetchFiles(true)"><el-icon><Refresh /></el-icon></el-button>
           <el-button circle text aria-label="重置清单视图" @click="currentPage = 1"><el-icon><Operation /></el-icon></el-button>
           <el-select v-model="formatFilter" clearable placeholder="筛选" aria-label="按格式筛选">
             <el-option v-for="format in formats" :key="format" :label="format.toUpperCase()" :value="format" />
@@ -428,7 +428,7 @@ const selectOutputDirectory = (paths: string[]) => {
             :data="paginatedFiles"
             style="width: 100%"
             @selection-change="handleSelectionChange"
-            v-loading="store.loading"
+            v-loading="store.filesLoading"
           >
             <el-table-column v-if="!isMobile" type="selection" width="55" />
 
