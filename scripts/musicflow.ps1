@@ -178,7 +178,7 @@ function Start-MusicFlowService {
     }
     else {
         $process = Start-Process -FilePath "npm.cmd" `
-            -ArgumentList @("run", "dev", "--", "--host", $bindAddress, "--port", "3000") `
+            -ArgumentList @("run", "dev", "--", "--host", "0.0.0.0", "--port", "3000") `
             -WorkingDirectory (Join-Path $projectRoot "frontend") `
             -RedirectStandardOutput (Join-Path $logDir "frontend-dev.out.log") `
             -RedirectStandardError (Join-Path $logDir "frontend-dev.err.log") `

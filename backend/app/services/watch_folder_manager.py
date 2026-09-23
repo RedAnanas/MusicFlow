@@ -261,16 +261,27 @@ class WatchFolderManager:
                 output_file = self._build_output_path(folder, source_path, target)
                 if await asyncio.to_thread(self._copy_file, source_path, output_file):
                     copied += 1
+                    from app.api.routes import discovery
+                    from app.services.acquisition_service import acquisition_service
+                    from app.services.media_library_service import media_library_service
+
+                    if await asyncio.to_thread(media_library_service.index_output, output_file):
+                        discovery.invalidate_presence_index()
+                        await asyncio.to_thread(
+                            acquisition_service.mark_nas_delivered,
+                            str(source_path),
+                            output_file,
+                        )
                     self._record_event(
                         folder.id,
                         "copied",
-                        f"{trigger} 原样复制到飞牛音乐：{source_path.name} -> {output_file}",
+                        f"{trigger} 原样复制到本地音乐：{source_path.name} -> {output_file}",
                     )
                 else:
                     self._record_event(
                         folder.id,
                         "skipped",
-                        f"飞牛音乐目标已存在同名文件，已跳过：{output_file}",
+                        f"本地音乐目标已存在同名文件，已跳过：{output_file}",
                     )
 
         status = self._ensure_runtime(folder.id)

@@ -71,7 +71,7 @@ async def get_entries(
     except NotADirectoryError as exc:
         raise HTTPException(status_code=400, detail="路径不是目录") from exc
     except PermissionError as exc:
-        raise HTTPException(status_code=403, detail="没有权限读取该目录，请先连接飞牛共享") from exc
+        raise HTTPException(status_code=403, detail="没有权限读取该目录，请先连接本地共享") from exc
     except OSError as exc:
         raise HTTPException(status_code=400, detail=f"无法读取目录：{exc}") from exc
 

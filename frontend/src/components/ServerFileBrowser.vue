@@ -67,7 +67,7 @@ const openDirectory = async (path: string) => {
 const openInputPath = () => {
   const path = pathInput.value.trim()
   if (!path) {
-    ElMessage.warning('请输入飞牛网络路径或服务器绝对路径')
+    ElMessage.warning('请输入本地网络路径或服务器绝对路径')
     return
   }
   openDirectory(path)
@@ -107,10 +107,10 @@ watch(() => props.modelValue, visible => {
     <div class="browser-toolbar">
       <el-button :disabled="!currentPath" @click="loadRoots"><el-icon><HomeFilled /></el-icon>入口</el-button>
       <el-button :disabled="!parentPath" @click="parentPath && openDirectory(parentPath)"><el-icon><Back /></el-icon>上一级</el-button>
-      <el-input v-model="pathInput" placeholder="输入飞牛网络路径或服务器绝对路径" @keyup.enter="openInputPath" />
+      <el-input v-model="pathInput" placeholder="输入本地网络路径或服务器绝对路径" @keyup.enter="openInputPath" />
       <el-button :disabled="!pathInput.trim()" @click="openInputPath">打开</el-button>
     </div>
-    <p class="network-path-hint">Windows 可输入 \\飞牛IP\共享名\音乐；Docker 请先挂载飞牛共享，再输入容器内路径。</p>
+    <p class="network-path-hint">Windows 可输入 \\服务器IP\共享名\音乐；Docker 请先挂载共享目录，再输入容器内路径。</p>
 
     <div v-loading="loading" class="browser-list">
       <template v-if="!currentPath">

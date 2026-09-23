@@ -20,7 +20,7 @@ from app.services.watch_folder_manager import watch_folder_manager
 
 
 class AcquisitionService:
-    """持久化并执行 musicdl 下载、飞牛写入和 Apple Music 交接任务。"""
+    """持久化并执行 musicdl 下载、本地写入和 Apple Music 交接任务。"""
 
     def __init__(self, database_path: Optional[Path] = None):
         self.database_path = database_path or Path(settings.DATA_DIR) / "musicflow.db"
@@ -138,11 +138,11 @@ class AcquisitionService:
                         source_path,
                         job_id,
                         target_config["nas_watch_folder_id"],
-                        "飞牛",
+                        "本地",
                     )
                     self._update(job_id, nas_path=str(watch_path), nas_status="submitted")
                 except Exception as exc:
-                    errors.append(f"提交飞牛监控目录失败：{exc}")
+                    errors.append(f"提交本地监控目录失败：{exc}")
                     self._update(job_id, nas_status="failed")
             if needs_apple:
                 try:
@@ -235,11 +235,25 @@ class AcquisitionService:
         try:
             shutil.copy2(source_path, temp_path)
             if self._sha256(temp_path) != source_checksum:
-                raise IOError("飞牛目标文件校验失败")
+                raise IOError("本地目标文件校验失败")
             os.replace(temp_path, target_path)
         finally:
             temp_path.unlink(missing_ok=True)
         return target_path
+
+    def mark_nas_delivered(self, source_path: str, output_path: Path) -> None:
+        """本地成品进入整理媒体库后，再将对应任务标记为已入库。"""
+        if not output_path.is_file():
+            return
+        with self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE acquisition_jobs
+                SET nas_status = 'success', updated_at = ?
+                WHERE nas_path = ? AND nas_status = 'submitted'
+                """,
+                (datetime.now(timezone.utc).isoformat(), source_path),
+            )
 
     @staticmethod
     def _sha256(path: Path) -> str:

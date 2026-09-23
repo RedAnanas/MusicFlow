@@ -152,6 +152,12 @@ class DualLibraryService:
                     ON apple_incremental_entries(normalized_title, normalized_artist, normalized_album);
                 """
             )
+            columns = {row["name"] for row in connection.execute("PRAGMA table_info(apple_incremental_entries)")}
+            if "manual_confirmed_at" not in columns:
+                connection.execute("ALTER TABLE apple_incremental_entries ADD COLUMN manual_confirmed_at TEXT")
+                connection.execute(
+                    "UPDATE apple_incremental_entries SET manual_confirmed_at = confirmed_at WHERE verification_status = 'manual_confirmed'"
+                )
 
     def get_cached_reconciliation(self, snapshot_id: str, local_index_version: int) -> Optional[dict]:
         self.initialize()
@@ -217,7 +223,7 @@ class DualLibraryService:
         )
         return hashlib.sha256(identity.encode("utf-8")).hexdigest()
 
-    def import_snapshot(self, filename: str, content: bytes) -> tuple[dict, bool]:
+    def import_snapshot(self, filename: str, content: bytes, replace_snapshot_id: Optional[str] = None) -> tuple[dict, bool]:
         if not content:
             raise ValueError("CSV 文件为空")
         if len(content) > 10 * 1024 * 1024:
@@ -250,13 +256,24 @@ class DualLibraryService:
         source_sha256 = hashlib.sha256(
             "\n".join(sorted(track_key for _, _, track_key, _ in rows)).encode("utf-8")
         ).hexdigest()
+        duplicate_snapshot_id = None
         with self._connect() as connection:
             existing = connection.execute(
                 "SELECT * FROM apple_library_snapshots WHERE source_sha256 = ?",
                 (source_sha256,),
             ).fetchone()
             if existing:
-                return dict(existing), False
+                if replace_snapshot_id and existing["id"] != replace_snapshot_id:
+                    duplicate_snapshot_id = existing["id"]
+                elif replace_snapshot_id:
+                    latest = connection.execute(
+                        "SELECT id FROM apple_library_snapshots ORDER BY imported_at DESC LIMIT 1"
+                    ).fetchone()
+                    if not latest or latest["id"] != replace_snapshot_id:
+                        raise ValueError("当前快照已变化，请刷新后重试")
+                    return dict(existing), False
+                else:
+                    return dict(existing), False
 
         snapshot_id = str(uuid.uuid4())
         imported_at = datetime.now(timezone.utc).isoformat()
@@ -268,6 +285,14 @@ class DualLibraryService:
         }
 
         with self._connect() as connection:
+            if replace_snapshot_id:
+                latest = connection.execute(
+                    "SELECT id FROM apple_library_snapshots ORDER BY imported_at DESC LIMIT 1"
+                ).fetchone()
+                if not latest or latest["id"] != replace_snapshot_id:
+                    raise ValueError("当前快照已变化，请刷新后重试")
+                if duplicate_snapshot_id:
+                    self._delete_snapshot_in_connection(connection, duplicate_snapshot_id)
             connection.execute(
                 """
                 INSERT INTO apple_library_snapshots (
@@ -337,28 +362,9 @@ class DualLibraryService:
                     ),
                 )
 
-            for _, row, _, _ in rows:
-                conditions = ["apple_id = ?"]
-                parameters: list[str] = [row["Apple - id"]]
-                if row["ISRC"]:
-                    conditions.append("isrc = ?")
-                    parameters.append(row["ISRC"])
-                conditions.append(
-                    "(normalized_title = ? AND normalized_artist = ? AND normalized_album = ?)"
-                )
-                parameters.extend([
-                    normalize_text(row["Track name"]),
-                    normalize_text(row["Artist name"]),
-                    normalize_text(row["Album"]),
-                ])
-                connection.execute(
-                    f"""
-                    UPDATE apple_incremental_entries
-                    SET verification_status = 'confirmed', confirmed_at = ?, updated_at = ?
-                    WHERE {' OR '.join(conditions)}
-                    """,
-                    (imported_at, imported_at, *parameters),
-                )
+            if replace_snapshot_id:
+                self._delete_snapshot_in_connection(connection, replace_snapshot_id)
+            self._sync_incremental_confirmations(connection)
 
         return self.get_snapshot(snapshot_id), True
 
@@ -385,18 +391,65 @@ class DualLibraryService:
         """删除指定快照及其孤立曲目、人工匹配决策。"""
         self.initialize()
         with self._connect() as connection:
-            exists = connection.execute(
-                "SELECT 1 FROM apple_library_snapshots WHERE id = ?", (snapshot_id,)
-            ).fetchone()
-            if not exists:
-                raise ValueError("Apple Music 快照不存在")
-            connection.execute("DELETE FROM apple_library_snapshots WHERE id = ?", (snapshot_id,))
-            connection.execute(
-                "DELETE FROM library_matches WHERE apple_track_key NOT IN (SELECT DISTINCT track_key FROM apple_snapshot_rows)"
+            self._delete_snapshot_in_connection(connection, snapshot_id)
+            self._sync_incremental_confirmations(connection)
+
+    @staticmethod
+    def _delete_snapshot_in_connection(connection: sqlite3.Connection, snapshot_id: str) -> None:
+        exists = connection.execute(
+            "SELECT 1 FROM apple_library_snapshots WHERE id = ?", (snapshot_id,)
+        ).fetchone()
+        if not exists:
+            raise ValueError("Apple Music 快照不存在")
+        connection.execute("DELETE FROM apple_library_snapshots WHERE id = ?", (snapshot_id,))
+        connection.execute(
+            "DELETE FROM library_matches WHERE apple_track_key NOT IN (SELECT DISTINCT track_key FROM apple_snapshot_rows)"
+        )
+        connection.execute(
+            "DELETE FROM apple_tracks WHERE track_key NOT IN (SELECT DISTINCT track_key FROM apple_snapshot_rows)"
+        )
+
+    @staticmethod
+    def _sync_incremental_confirmations(connection: sqlite3.Connection) -> None:
+        """只用当前快照标记 CSV 确认，并保留独立的手动确认。"""
+        snapshot = connection.execute(
+            "SELECT id, imported_at FROM apple_library_snapshots ORDER BY imported_at DESC LIMIT 1"
+        ).fetchone()
+        tracks = connection.execute(
+            """
+            SELECT t.apple_id, t.isrc, t.normalized_title, t.normalized_artist, t.normalized_album
+            FROM apple_snapshot_rows r JOIN apple_tracks t ON t.track_key = r.track_key
+            WHERE r.snapshot_id = ?
+            """,
+            (snapshot["id"] if snapshot else "",),
+        ).fetchall()
+        apple_ids = {track["apple_id"] for track in tracks if track["apple_id"]}
+        isrcs = {track["isrc"] for track in tracks if track["isrc"]}
+        metadata = {
+            (track["normalized_title"], track["normalized_artist"], track["normalized_album"])
+            for track in tracks
+        }
+        now = datetime.now(timezone.utc).isoformat()
+        for entry in connection.execute("SELECT * FROM apple_incremental_entries").fetchall():
+            matched = (
+                bool(entry["apple_id"] and entry["apple_id"] in apple_ids)
+                or bool(entry["isrc"] and entry["isrc"] in isrcs)
+                or (entry["normalized_title"], entry["normalized_artist"], entry["normalized_album"]) in metadata
             )
-            connection.execute(
-                "DELETE FROM apple_tracks WHERE track_key NOT IN (SELECT DISTINCT track_key FROM apple_snapshot_rows)"
-            )
+            if matched:
+                status, confirmed_at = "confirmed", snapshot["imported_at"]
+            elif snapshot and entry["manual_confirmed_at"] and entry["manual_confirmed_at"] > snapshot["imported_at"]:
+                status, confirmed_at = "manual_confirmed", entry["manual_confirmed_at"]
+            elif snapshot and entry["created_at"] <= snapshot["imported_at"]:
+                status, confirmed_at = "absent", None
+            else:
+                status = "manual_confirmed" if entry["manual_confirmed_at"] else "pending"
+                confirmed_at = entry["manual_confirmed_at"]
+            if status != entry["verification_status"] or confirmed_at != entry["confirmed_at"]:
+                connection.execute(
+                    "UPDATE apple_incremental_entries SET verification_status = ?, confirmed_at = ?, updated_at = ? WHERE id = ?",
+                    (status, confirmed_at, now, entry["id"]),
+                )
 
     @staticmethod
     def _incremental_identity(track: dict) -> tuple[str, dict]:
@@ -452,6 +505,9 @@ class DualLibraryService:
                     album = excluded.album,
                     isrc = COALESCE(excluded.isrc, apple_incremental_entries.isrc),
                     source = excluded.source,
+                    verification_status = CASE WHEN apple_incremental_entries.verification_status = 'absent' THEN 'pending' ELSE apple_incremental_entries.verification_status END,
+                    confirmed_at = CASE WHEN apple_incremental_entries.verification_status = 'absent' THEN NULL ELSE apple_incremental_entries.confirmed_at END,
+                    created_at = CASE WHEN apple_incremental_entries.verification_status = 'absent' THEN excluded.created_at ELSE apple_incremental_entries.created_at END,
                     acquisition_job_id = COALESCE(excluded.acquisition_job_id, apple_incremental_entries.acquisition_job_id),
                     updated_at = excluded.updated_at
                 """,
@@ -481,10 +537,30 @@ class DualLibraryService:
     def list_incremental_tracks(self) -> list[dict]:
         self.initialize()
         with self._connect() as connection:
+            self._sync_incremental_confirmations(connection)
             rows = connection.execute(
                 "SELECT * FROM apple_incremental_entries ORDER BY updated_at DESC"
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def confirm_incremental_track(self, entry_id: str) -> dict:
+        """将增量记录标记为人工确认，保留后续 CSV 确认的独立状态。"""
+        self.initialize()
+        now = datetime.now(timezone.utc).isoformat()
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM apple_incremental_entries WHERE id = ?", (entry_id,)
+            ).fetchone()
+            if row is None:
+                raise ValueError("Apple Music 增量记录不存在")
+            if row["verification_status"] in {"pending", "absent"}:
+                connection.execute(
+                    "UPDATE apple_incremental_entries SET verification_status = 'manual_confirmed', confirmed_at = ?, manual_confirmed_at = ?, updated_at = ? WHERE id = ?",
+                    (now, now, now, entry_id),
+                )
+            return dict(connection.execute(
+                "SELECT * FROM apple_incremental_entries WHERE id = ?", (entry_id,)
+            ).fetchone())
 
     def delete_incremental_track(self, entry_id: str) -> None:
         self.initialize()
@@ -717,11 +793,12 @@ class DualLibraryService:
         self.initialize()
         local = self._prepare_local_tracks(local_tracks)
         with self._connect() as connection:
+            self._sync_incremental_confirmations(connection)
             apple = self._latest_tracks(connection)
             incremental = [
                 dict(row)
                 for row in connection.execute(
-                    "SELECT * FROM apple_incremental_entries WHERE verification_status IN ('pending', 'confirmed')"
+                    "SELECT * FROM apple_incremental_entries WHERE verification_status IN ('pending', 'manual_confirmed', 'confirmed')"
                 ).fetchall()
             ]
         pending = [track for track in incremental if track["verification_status"] == "pending"]
