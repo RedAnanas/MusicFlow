@@ -342,7 +342,18 @@ const handleImportPaths = async (paths: string[]) => {
   importing.value = true
   try {
     const result = await store.importFiles(paths)
-    if (result.imported.length) ElMessage.success(`已加入 ${result.imported.length} 个音频文件`)
+    if (result.jobId) {
+      ElMessage.info('文件夹已添加，正在后台扫描音乐文件')
+      let status = await store.fetchImportJob(result.jobId)
+      while (status.status === 'scanning') {
+        await new Promise(resolve => window.setTimeout(resolve, 1000))
+        status = await store.fetchImportJob(result.jobId)
+      }
+      await store.fetchFiles(true)
+      if (status.status === 'completed') ElMessage.success(`扫描完成，新增 ${status.imported} 个音频文件`)
+      else ElMessage.error(`文件夹扫描失败：${status.error || '未知错误'}`)
+      if (status.errors?.length) ElMessage.warning(`${status.errors.length} 个路径无法加入`)
+    } else if (result.imported.length) ElMessage.success(`已加入 ${result.imported.length} 个音频文件`)
     else ElMessage.info('所选位置没有发现新的支持格式音频')
     if (result.errors.length) ElMessage.warning(`${result.errors.length} 个路径无法加入`)
   } catch (error) {

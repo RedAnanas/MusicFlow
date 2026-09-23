@@ -32,6 +32,12 @@ class Settings(BaseSettings):
     FILE_STABLE_SECONDS: int = 30
     APPLE_MUSIC_REQUIRE_NETWORK_MOUNT: bool = False
 
+    # 双音乐库与 musicdl 集成
+    MUSICDL_BASE_URL: str = "http://127.0.0.1:5000"
+    MUSICDL_SERVICE_TOKEN: str = ""
+    DUAL_LIBRARY_NAS_DIR: str = ""
+    DUAL_LIBRARY_APPLE_IMPORT_DIR: str = ""
+
     # 支持的音频格式
     SUPPORTED_FORMATS: List[str] = ["mp3", "flac", "m4a", "aac", "alac", "wav", "ape", "ogg", "opus", "wma"]
 
@@ -54,6 +60,7 @@ def ensure_directories():
         settings.CONFIG_DIR,
         settings.LOGS_DIR,
         settings.TEMP_DIR,
+        settings.DUAL_LIBRARY_NAS_DIR,
     ]
 
     for dir_path in directories:

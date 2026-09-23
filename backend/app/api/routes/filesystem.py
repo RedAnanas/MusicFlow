@@ -1,3 +1,4 @@
+import asyncio
 import os
 import string
 from pathlib import Path
@@ -61,40 +62,50 @@ async def get_entries(
     limit: int = Query(1000, ge=1, le=5000),
 ):
     """列出目录内容，文件始终由服务器读取，不经浏览器上传。"""
-    directory = Path(path).expanduser()
-    if not directory.is_absolute():
-        raise HTTPException(status_code=400, detail="路径必须为绝对路径")
-    if not directory.exists():
-        raise HTTPException(status_code=404, detail="目录不存在")
-    if not directory.is_dir():
-        raise HTTPException(status_code=400, detail="路径不是目录")
-
-    entries: List[FileSystemEntry] = []
     try:
-        children = sorted(directory.iterdir(), key=lambda item: (not item.is_dir(), item.name.lower()))
-        for child in children:
-            if child.name.startswith("."):
-                continue
-            is_directory = child.is_dir()
-            if not is_directory and audio_only and child.suffix.lower()[1:] not in settings.SUPPORTED_FORMATS:
-                continue
-            try:
-                size = None if is_directory else child.stat().st_size
-            except OSError:
-                size = None
-            entries.append(FileSystemEntry(
-                name=child.name,
-                path=str(child),
-                is_directory=is_directory,
-                size=size,
-            ))
-            if len(entries) > limit:
-                break
+        return await asyncio.to_thread(_list_directory, path, audio_only, limit)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="目录不存在，或网络共享尚未连接") from exc
+    except NotADirectoryError as exc:
+        raise HTTPException(status_code=400, detail="路径不是目录") from exc
     except PermissionError as exc:
-        raise HTTPException(status_code=403, detail="没有权限读取该目录") from exc
+        raise HTTPException(status_code=403, detail="没有权限读取该目录，请先连接飞牛共享") from exc
     except OSError as exc:
         raise HTTPException(status_code=400, detail=f"无法读取目录：{exc}") from exc
 
+
+def _list_directory(path: str, audio_only: bool, limit: int) -> DirectoryListing:
+    """同步读取目录，由接口放入工作线程以隔离本地及网络磁盘 I/O。"""
+    directory = Path(path).expanduser()
+    if not directory.is_absolute():
+        raise ValueError("路径必须为绝对路径")
+    if not directory.exists():
+        raise FileNotFoundError(path)
+    if not directory.is_dir():
+        raise NotADirectoryError(path)
+
+    entries: List[FileSystemEntry] = []
+    children = sorted(directory.iterdir(), key=lambda item: (not item.is_dir(), item.name.lower()))
+    for child in children:
+        if child.name.startswith("."):
+            continue
+        is_directory = child.is_dir()
+        if not is_directory and audio_only and child.suffix.lower()[1:] not in settings.SUPPORTED_FORMATS:
+            continue
+        try:
+            size = None if is_directory else child.stat().st_size
+        except OSError:
+            size = None
+        entries.append(FileSystemEntry(
+            name=child.name,
+            path=str(child),
+            is_directory=is_directory,
+            size=size,
+        ))
+        if len(entries) > limit:
+            break
     parent = directory.parent if directory.parent != directory else None
     return DirectoryListing(
         path=str(directory),

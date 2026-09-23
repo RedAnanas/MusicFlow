@@ -13,6 +13,16 @@ const routes: RouteRecordRaw[] = [
     component: () => import('../views/Files.vue'),
   },
   {
+    path: '/library-reconciliation',
+    name: 'LibraryReconciliation',
+    component: () => import('../views/LibraryReconciliation.vue'),
+  },
+  {
+    path: '/discovery',
+    name: 'Discovery',
+    component: () => import('../views/Discovery.vue'),
+  },
+  {
     path: '/tasks',
     name: 'Tasks',
     component: () => import('../views/Tasks.vue'),

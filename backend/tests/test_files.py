@@ -11,7 +11,7 @@ from app.services.profile_manager import profile_manager
 
 
 @pytest.fixture(autouse=True)
-def restore_files_cache():
+def restore_files_cache(monkeypatch):
     """隔离每个测试使用的文件缓存。"""
     original_files = dict(files_api.files_cache)
     original_file_list = list(files_api.file_list_cache)
@@ -19,6 +19,11 @@ def restore_files_cache():
     files_api.files_cache.clear()
     files_api.file_list_cache = []
     files_api.file_list_loaded = False
+    monkeypatch.setattr(files_api.file_index_service, "has_snapshot", lambda _scope: False)
+    monkeypatch.setattr(files_api.file_index_service, "load", lambda _scope: [])
+    monkeypatch.setattr(files_api.file_index_service, "upsert", lambda *_args: None)
+    monkeypatch.setattr(files_api.file_index_service, "remove_path", lambda *_args: None)
+    monkeypatch.setattr(files_api.file_index_service, "remove_source", lambda *_args: None)
     yield
     files_api.files_cache.clear()
     files_api.files_cache.update(original_files)

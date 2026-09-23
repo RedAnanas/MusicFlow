@@ -55,6 +55,7 @@ def test_copy_flac_metadata_and_cover_to_m4a(tmp_path: Path) -> None:
     source["album"] = "测试专辑"
     source["date"] = "2026"
     source["tracknumber"] = "3"
+    source["isrc"] = "CNABC1234567"
     picture = Picture()
     picture.type = 3
     picture.mime = "image/png"
@@ -65,6 +66,7 @@ def test_copy_flac_metadata_and_cover_to_m4a(tmp_path: Path) -> None:
     service = MetadataService()
     metadata = service.read_metadata(str(source_path))
     assert metadata is not None
+    assert metadata["isrc"] == "CNABC1234567"
     assert service.write_metadata(str(output_path), metadata)
 
     result = MP4(output_path)

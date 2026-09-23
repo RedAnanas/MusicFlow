@@ -103,6 +103,7 @@ class MetadataService:
                     "disc": "discnumber",
                     "genre": "genre",
                     "comment": "comment",
+                    "isrc": "isrc",
                 }
                 for tag_key, mutagen_key in flac_tags.items():
                     try:
@@ -114,6 +115,10 @@ class MetadataService:
                                 metadata[tag_key] = str(value)
                     except (ValueError, TypeError) as e:
                         pass
+
+                isrc = self._extract_isrc(audio)
+                if isrc:
+                    metadata["isrc"] = isrc
 
             cover = self._extract_cover(audio)
             if cover:
@@ -199,6 +204,36 @@ class MetadataService:
                 return str(value)
         except Exception:
             pass
+        return None
+
+    def _extract_isrc(self, audio) -> Optional[str]:
+        """读取 MP3、FLAC、Ogg 和 M4A 中常见的 ISRC 标签。"""
+        try:
+            if isinstance(audio, MP3) and audio.tags:
+                frames = audio.tags.getall("TSRC")
+                if frames and frames[0].text:
+                    return str(frames[0].text[0]).strip().upper() or None
+
+            if isinstance(audio, MP4) and audio.tags:
+                for key in ("----:com.apple.iTunes:ISRC", "----:com.apple.iTunes:isrc"):
+                    values = audio.tags.get(key, [])
+                    if values:
+                        value = values[0]
+                        if isinstance(value, bytes):
+                            value = value.decode("utf-8", errors="replace")
+                        return str(value).strip().upper() or None
+
+            if hasattr(audio, "tags") and audio.tags:
+                for key in ("isrc", "ISRC"):
+                    try:
+                        values = audio.tags.get(key, [])
+                        if values:
+                            value = values[0] if isinstance(values, list) else values
+                            return str(value).strip().upper() or None
+                    except (AttributeError, KeyError, TypeError, ValueError):
+                        continue
+        except (AttributeError, UnicodeDecodeError, ValueError, TypeError):
+            return None
         return None
 
     def _extract_cover(self, audio) -> Optional[Dict]:

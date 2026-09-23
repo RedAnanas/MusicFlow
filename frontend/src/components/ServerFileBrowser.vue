@@ -19,6 +19,7 @@ const emit = defineEmits<{
 const roots = ref<FileSystemEntry[]>([])
 const entries = ref<FileSystemEntry[]>([])
 const currentPath = ref('')
+const pathInput = ref('')
 const parentPath = ref<string | null>(null)
 const selectedPaths = ref<string[]>([])
 const loading = ref(false)
@@ -34,6 +35,7 @@ const loadRoots = async () => {
     roots.value = response.data
     entries.value = []
     currentPath.value = ''
+    pathInput.value = ''
     parentPath.value = null
   } catch {
     ElMessage.error('读取服务器文件系统入口失败')
@@ -50,6 +52,7 @@ const openDirectory = async (path: string) => {
       params: { path, audio_only: true },
     })
     currentPath.value = response.data.path
+    pathInput.value = response.data.path
     parentPath.value = response.data.parent
     entries.value = response.data.entries
     truncated.value = response.data.truncated
@@ -59,6 +62,15 @@ const openDirectory = async (path: string) => {
   } finally {
     loading.value = false
   }
+}
+
+const openInputPath = () => {
+  const path = pathInput.value.trim()
+  if (!path) {
+    ElMessage.warning('请输入飞牛网络路径或服务器绝对路径')
+    return
+  }
+  openDirectory(path)
 }
 
 const handleEntryClick = (entry: FileSystemEntry) => {
@@ -95,8 +107,10 @@ watch(() => props.modelValue, visible => {
     <div class="browser-toolbar">
       <el-button :disabled="!currentPath" @click="loadRoots"><el-icon><HomeFilled /></el-icon>入口</el-button>
       <el-button :disabled="!parentPath" @click="parentPath && openDirectory(parentPath)"><el-icon><Back /></el-icon>上一级</el-button>
-      <el-input :model-value="currentPath" readonly placeholder="请选择文件系统入口" />
+      <el-input v-model="pathInput" placeholder="输入飞牛网络路径或服务器绝对路径" @keyup.enter="openInputPath" />
+      <el-button :disabled="!pathInput.trim()" @click="openInputPath">打开</el-button>
     </div>
+    <p class="network-path-hint">Windows 可输入 \\飞牛IP\共享名\音乐；Docker 请先挂载飞牛共享，再输入容器内路径。</p>
 
     <div v-loading="loading" class="browser-list">
       <template v-if="!currentPath">
@@ -141,8 +155,8 @@ watch(() => props.modelValue, visible => {
 
 <style scoped>
 :global(.server-file-browser) { display: flex; max-height: calc(100dvh - 32px); flex-direction: column; margin: 16px auto !important; border-radius: 20px; }.server-file-browser :deep(.el-dialog__header), .server-file-browser :deep(.el-dialog__footer) { flex: 0 0 auto; }.server-file-browser :deep(.el-dialog__body) { min-height: 0; overflow: auto; }.server-file-browser :deep(.el-dialog__footer) { border-top: 1px solid #ececf2; }
-.browser-toolbar { display: grid; grid-template-columns: auto auto minmax(0, 1fr); gap: 8px; margin-bottom: 14px; }.browser-toolbar :deep(.el-button) { border-radius: 10px; }.browser-toolbar :deep(.el-input__wrapper) { min-height: 38px; background: #fbfcfe; box-shadow: 0 0 0 1px #e3e5ec inset; border-radius: 10px; }
+.browser-toolbar { display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; gap: 8px; }.browser-toolbar :deep(.el-button) { border-radius: 10px; }.browser-toolbar :deep(.el-input__wrapper) { min-height: 38px; background: #fbfcfe; box-shadow: 0 0 0 1px #e3e5ec inset; border-radius: 10px; }.network-path-hint { margin: 7px 2px 14px; color: #8a93a3; font-size: 12px; }
 .browser-list { min-height: 360px; max-height: 55vh; overflow: auto; border: 1px solid #ebe8f3; border-radius: 14px; }.browser-entry { display: grid; width: 100%; grid-template-columns: 24px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 13px 15px; color: #4b566b; background: #fff; border: 0; border-bottom: 1px solid #f0eef5; text-align: left; cursor: pointer; }.browser-entry:last-child { border-bottom: 0; }
 .browser-entry:hover, .browser-entry.selected { color: #815fd0; background: #f4f0ff; }.browser-entry .el-icon { color: #9a73ee; font-size: 18px; }.browser-entry span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 650; }.browser-entry small { color: #98a0af; }.browser-warning { padding: 10px 12px; margin: 12px 0 0; color: #a2772d; background: #fff8e9; border: 1px solid #f4e2bd; border-radius: 10px; font-size: 12px; }.browser-footer { display: flex; align-items: center; justify-content: space-between; color: #7e8a93; font-size: 12px; }
-@media (max-width: 700px) { :global(.server-file-browser) { width: calc(100vw - 24px) !important; max-width: calc(100vw - 24px); max-height: calc(100dvh - 24px); margin: 12px auto !important; border-radius: 18px; }.server-file-browser :deep(.el-dialog__header) { padding: 18px 18px 14px; margin-right: 0; }.server-file-browser :deep(.el-dialog__body) { padding: 0 16px; }.server-file-browser :deep(.el-dialog__footer) { padding: 12px 16px calc(12px + env(safe-area-inset-bottom)); }.browser-toolbar { grid-template-columns: 1fr 1fr; }.browser-toolbar :deep(.el-input) { grid-column: 1 / -1; }.browser-list { min-height: 0; max-height: calc(100dvh - 300px); }.browser-entry { grid-template-columns: 22px minmax(0, 1fr); padding: 13px 12px; }.browser-entry small { grid-column: 2; }.browser-footer > span { display: none; }.browser-footer > div { display: flex; width: 100%; gap: 8px; }.browser-footer :deep(.el-button) { flex: 1; margin: 0; } }
+@media (max-width: 700px) { :global(.server-file-browser) { width: calc(100vw - 24px) !important; max-width: calc(100vw - 24px); max-height: calc(100dvh - 24px); margin: 12px auto !important; border-radius: 18px; }.server-file-browser :deep(.el-dialog__header) { padding: 18px 18px 14px; margin-right: 0; }.server-file-browser :deep(.el-dialog__body) { padding: 0 16px; }.server-file-browser :deep(.el-dialog__footer) { padding: 12px 16px calc(12px + env(safe-area-inset-bottom)); }.browser-toolbar { grid-template-columns: 1fr 1fr auto; }.browser-toolbar :deep(.el-input) { grid-column: 1 / 3; }.browser-list { min-height: 0; max-height: calc(100dvh - 320px); }.browser-entry { grid-template-columns: 22px minmax(0, 1fr); padding: 13px 12px; }.browser-entry small { grid-column: 2; }.browser-footer > span { display: none; }.browser-footer > div { display: flex; width: 100%; gap: 8px; }.browser-footer :deep(.el-button) { flex: 1; margin: 0; } }
 </style>
