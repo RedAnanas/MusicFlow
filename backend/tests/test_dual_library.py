@@ -96,6 +96,125 @@ def test_deleting_snapshot_keeps_manual_incremental_tracks(tmp_path: Path) -> No
     assert entries[0]["title"] == "手工歌曲"
 
 
+def test_manual_confirmation_is_distinct_from_csv_confirmation(tmp_path: Path) -> None:
+    """手动确认后参与查重，后续 CSV 匹配才标记为快照确认。"""
+    service = DualLibraryService(tmp_path / "musicflow.db")
+    entry = service.upsert_incremental_track(
+        {"apple_id": "12345", "title": "新歌", "artist": "歌手", "album": "新专辑"}, "manual"
+    )
+
+    confirmed = service.confirm_incremental_track(entry["id"])
+    assert confirmed["verification_status"] == "manual_confirmed"
+    index = service.build_presence_index([])
+    presence = service.lookup_presence(
+        {"song_name": "新歌", "singers": "歌手", "album": "新专辑"}, index
+    )
+    assert presence["apple_present"] is True
+    assert presence["apple_pending"] is False
+
+    service.import_snapshot(
+        "library.csv",
+        (
+            "Track name,Artist name,Album,Playlist name,Type,ISRC,Apple - id\n"
+            "新歌,歌手,新专辑,资料库,Apple Music,,12345\n"
+        ).encode("utf-8"),
+    )
+    assert service.list_incremental_tracks()[0]["verification_status"] == "confirmed"
+
+
+def test_replacing_snapshot_rechecks_incremental_evidence(tmp_path: Path) -> None:
+    """A 被 B 更新后，只有 B 中的曲目保留快照确认，人工确认仍独立有效。"""
+    service = DualLibraryService(tmp_path / "musicflow.db")
+    manual = service.upsert_incremental_track(
+        {"apple_id": "100", "title": "手动曲目", "artist": "歌手", "album": "专辑"}, "manual"
+    )
+    service.confirm_incremental_track(manual["id"])
+    automatic = service.upsert_incremental_track(
+        {"apple_id": "200", "title": "自动曲目", "artist": "歌手", "album": "专辑"}, "handoff"
+    )
+    first, _ = service.import_snapshot(
+        "a.csv",
+        (CSV_HEADER + "手动曲目,歌手,专辑,资料库,Apple Music,,100\n自动曲目,歌手,专辑,资料库,Apple Music,,200\n").encode(),
+    )
+    assert {entry["verification_status"] for entry in service.list_incremental_tracks()} == {"confirmed"}
+
+    second, created = service.import_snapshot(
+        "b.csv", (CSV_HEADER + "另一首,歌手,,资料库,Apple Music,,300\n").encode(), first["id"]
+    )
+    assert created is True
+    assert service.get_latest_snapshot()["id"] == second["id"]
+    assert {entry["title"]: entry["verification_status"] for entry in service.list_incremental_tracks()} == {
+        "手动曲目": "absent", "自动曲目": "absent"
+    }
+    index = service.build_presence_index([])
+    presence = service.lookup_presence({"song_name": "自动曲目", "singers": "歌手", "album": "专辑"}, index)
+    assert presence["apple_present"] is False
+    assert presence["apple_pending"] is False
+    service.confirm_incremental_track(manual["id"])
+    assert service.list_incremental_tracks()[0]["verification_status"] == "manual_confirmed"
+    service.delete_snapshot(second["id"])
+    assert service.get_latest_snapshot() is None
+    assert {entry["title"]: entry["verification_status"] for entry in service.list_incremental_tracks()} == {
+        "手动曲目": "manual_confirmed", "自动曲目": "pending"
+    }
+
+
+def test_delete_a_then_import_unrelated_b_drops_a_confirmation(tmp_path: Path) -> None:
+    """删除 A 后导入完全不同的 B，旧 CSV 确认不能继续参与查重。"""
+    service = DualLibraryService(tmp_path / "musicflow.db")
+    entry = service.upsert_incremental_track(
+        {"apple_id": "100", "title": "旧歌曲", "artist": "歌手", "album": "旧专辑"}, "catalog"
+    )
+    first, _ = service.import_snapshot(
+        "a.csv", (CSV_HEADER + "旧歌曲,歌手,旧专辑,资料库,Apple Music,,100\n").encode()
+    )
+    assert service.list_incremental_tracks()[0]["verification_status"] == "confirmed"
+
+    service.delete_snapshot(first["id"])
+    assert service.list_incremental_tracks()[0]["verification_status"] == "pending"
+    service.import_snapshot(
+        "b.csv", (CSV_HEADER + "新歌曲,歌手,新专辑,资料库,Apple Music,,200\n").encode()
+    )
+    assert service.list_incremental_tracks()[0]["verification_status"] == "absent"
+    assert service.lookup_presence(
+        {"song_name": "旧歌曲", "singers": "歌手", "album": "旧专辑"},
+        service.build_presence_index([]),
+    )["apple_present"] is False
+
+
+def test_update_can_reuse_an_older_snapshot_csv(tmp_path: Path) -> None:
+    """历史 CSV 内容已存在时，仍能用它更新当前快照。"""
+    service = DualLibraryService(tmp_path / "musicflow.db")
+    a_csv = (CSV_HEADER + "旧歌曲,歌手,旧专辑,资料库,Apple Music,,100\n").encode()
+    b_csv = (CSV_HEADER + "新歌曲,歌手,新专辑,资料库,Apple Music,,200\n").encode()
+    first, _ = service.import_snapshot("a.csv", a_csv)
+    second, _ = service.import_snapshot("b.csv", b_csv)
+
+    updated, created = service.import_snapshot("a.csv", a_csv, second["id"])
+
+    assert created is True
+    assert updated["id"] not in {first["id"], second["id"]}
+    assert service.get_latest_snapshot()["id"] == updated["id"]
+
+
+def test_listing_corrects_confirmation_left_by_an_older_version(tmp_path: Path) -> None:
+    """旧版本遗留的快照确认在读取时按当前快照重新核对。"""
+    service = DualLibraryService(tmp_path / "musicflow.db")
+    entry = service.upsert_incremental_track(
+        {"apple_id": "100", "title": "旧歌曲", "artist": "歌手", "album": "旧专辑"}, "catalog"
+    )
+    service.import_snapshot(
+        "b.csv", (CSV_HEADER + "新歌曲,歌手,新专辑,资料库,Apple Music,,200\n").encode()
+    )
+    with service._connect() as connection:
+        connection.execute(
+            "UPDATE apple_incremental_entries SET verification_status = 'confirmed' WHERE id = ?",
+            (entry["id"],),
+        )
+
+    assert service.list_incremental_tracks()[0]["verification_status"] == "absent"
+
+
 def test_import_snapshot_deduplicates_same_track_from_multiple_playlists(tmp_path: Path) -> None:
     """同一曲目出现在多个歌单时，快照只保留一条曲目记录。"""
     service = create_service(tmp_path)

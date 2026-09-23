@@ -139,7 +139,7 @@ async def update_dual_library_config(request: DualLibraryConfigRequest):
     if len(apple_storefront) != 2 or not apple_storefront.isalpha():
         raise HTTPException(status_code=400, detail="Apple 曲库地区必须是两位国家或地区代码")
     if nas_watch_folder_id and apple_watch_folder_id == nas_watch_folder_id:
-        raise HTTPException(status_code=400, detail="飞牛和 Apple Music 必须使用独立监控目录")
+        raise HTTPException(status_code=400, detail="本地和 Apple Music 必须使用独立监控目录")
 
     def validate_folder(folder_id: str, target: str) -> None:
         if not folder_id:
@@ -158,7 +158,7 @@ async def update_dual_library_config(request: DualLibraryConfigRequest):
             for item in folder.targets
         )
         if target == "nas" and (not has_copy or has_apple):
-            raise HTTPException(status_code=400, detail="飞牛补齐目录必须仅配置飞牛复制输出")
+            raise HTTPException(status_code=400, detail="本地补齐目录必须仅配置本地复制输出")
         if target == "apple" and (not has_apple or has_copy):
             raise HTTPException(status_code=400, detail="Apple Music 补齐目录必须仅配置 Apple Music 交接输出")
 

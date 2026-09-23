@@ -295,7 +295,7 @@ def _prepare_import_paths(raw_paths: List[str]):
             else:
                 valid_paths.append(str(path))
         except PermissionError:
-            errors.append({"path": raw_path, "error": "没有权限读取该目录，请先连接飞牛共享"})
+            errors.append({"path": raw_path, "error": "没有权限读取该目录，请先连接本地共享"})
         except OSError as exc:
             errors.append({"path": raw_path, "error": f"无法读取目录：{exc}"})
     return valid_paths, errors
@@ -351,7 +351,7 @@ def _collect_imported_files(raw_paths: List[str]):
                 if file_data:
                     imported.append(file_data)
         except PermissionError:
-            errors.append({"path": raw_path, "error": "没有权限读取该目录，请先连接飞牛共享"})
+            errors.append({"path": raw_path, "error": "没有权限读取该目录，请先连接本地共享"})
         except OSError as exc:
             errors.append({"path": raw_path, "error": f"无法读取目录：{exc}"})
             continue

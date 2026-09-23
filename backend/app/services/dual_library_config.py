@@ -2,7 +2,7 @@ from app.services.config_manager import config_manager
 
 
 class DualLibraryConfigService:
-    """分别保存飞牛与 Apple Music 补齐使用的监控目录。"""
+    """分别保存本地音乐库与 Apple Music 补齐使用的监控目录。"""
 
     FILE_NAME = "dual_library.json"
 
