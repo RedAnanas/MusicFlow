@@ -241,6 +241,20 @@ class AcquisitionService:
             temp_path.unlink(missing_ok=True)
         return target_path
 
+    def mark_nas_delivered(self, source_path: str, output_path: Path) -> None:
+        """飞牛成品进入整理媒体库后，再将对应任务标记为已入库。"""
+        if not output_path.is_file():
+            return
+        with self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE acquisition_jobs
+                SET nas_status = 'success', updated_at = ?
+                WHERE nas_path = ? AND nas_status = 'submitted'
+                """,
+                (datetime.now(timezone.utc).isoformat(), source_path),
+            )
+
     @staticmethod
     def _sha256(path: Path) -> str:
         digest = hashlib.sha256()

@@ -33,3 +33,31 @@ def test_media_library_scan_deduplicates_tracks_across_sources(monkeypatch, tmp_
     tracks = service.load_tracks(refresh=True)
 
     assert [track["id"] for track in tracks] == ["first"]
+
+
+def test_index_output_updates_loaded_tracks_without_full_scan(monkeypatch, tmp_path: Path) -> None:
+    """新成品入库时只索引该文件，搜索查重可立即读取。"""
+    source = tmp_path / "library"
+    source.mkdir()
+    outside = tmp_path / "download.flac"
+    outside.write_bytes(b"audio")
+    service = MediaLibraryService(FileIndexService(tmp_path / "musicflow.db"))
+    monkeypatch.setattr(service, "get_sources", lambda: [str(source)])
+    monkeypatch.setattr(service, "_read_track", lambda path: {
+        "id": path.stem,
+        "path": str(path),
+        "filename": path.name,
+        "title": "新歌曲",
+        "artist": "歌手",
+        "album": "专辑",
+        "isrc": None,
+    })
+    assert service.load_tracks(refresh=True) == []
+    version = service.get_index_version()
+    output = source / "song.flac"
+    output.write_bytes(b"audio")
+
+    assert service.index_output(outside) is False
+    assert service.index_output(output) is True
+    assert service.get_index_version() == version + 1
+    assert [track["title"] for track in service.load_tracks()] == ["新歌曲"]

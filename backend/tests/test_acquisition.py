@@ -46,6 +46,32 @@ def test_local_job_submits_source_to_watch_folder(monkeypatch, tmp_path: Path) -
     assert (target_dir / "source.flac").read_bytes() == b"audio"
 
 
+def test_nas_job_becomes_present_only_after_copy_output(monkeypatch, tmp_path: Path) -> None:
+    """提交监控目录不能算已入库，复制到整理媒体库后才更新飞牛状态。"""
+    service = AcquisitionService(tmp_path / "musicflow.db")
+    source = tmp_path / "source.flac"
+    source.write_bytes(b"audio")
+    target_dir = tmp_path / "downloads"
+    target_dir.mkdir()
+    folder = WatchFolder(id="downloads", name="下载目录", input_dir=str(target_dir))
+    monkeypatch.setattr(dual_library_config, "resolve", lambda: {
+        "nas_watch_folder_id": folder.id,
+        "apple_watch_folder_id": "",
+    })
+    monkeypatch.setattr(watch_folder_manager, "get_watch_folder", lambda _folder_id: folder)
+    monkeypatch.setattr(service, "start", lambda _job_id: None)
+    job = service.create_job(None, "local-1", str(source), True, False)
+    service._run(job["id"])
+    submitted = service.get_job(job["id"])
+    output = tmp_path / "library" / "source.flac"
+    output.parent.mkdir()
+    output.write_bytes(b"audio")
+
+    assert submitted["nas_status"] == "submitted"
+    service.mark_nas_delivered(submitted["nas_path"], output)
+    assert service.get_job(job["id"])["nas_status"] == "success"
+
+
 def test_job_routes_each_missing_library_to_its_own_watch_folder(monkeypatch, tmp_path: Path) -> None:
     """双库都缺失时应只下载一次，并分别投递到两个独立监控目录。"""
     service = AcquisitionService(tmp_path / "musicflow.db")

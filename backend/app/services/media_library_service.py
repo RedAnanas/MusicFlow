@@ -82,6 +82,25 @@ class MediaLibraryService:
     def get_index_version(self) -> int:
         return self._index_service.get_version(self.INDEX_SCOPE)
 
+    def index_output(self, path: Path) -> bool:
+        """仅将落在整理媒体库中的新成品增量写入索引。"""
+        source = next(
+            (source for source in self.get_sources() if Path(source) in path.parents),
+            None,
+        )
+        if source is None or not path.is_file():
+            return False
+        track = self._read_track(path)
+        if track is None:
+            return False
+        with self._lock:
+            self._index_service.upsert(self.INDEX_SCOPE, source, track)
+            if self._loaded:
+                self._tracks = self._deduplicate(
+                    [item for item in self._tracks if item["path"] != str(path)] + [track]
+                )
+        return True
+
     def _scan_tracks(self) -> list[dict]:
         tracks = self._index_service.refresh(
             self.INDEX_SCOPE,
