@@ -2,6 +2,7 @@ from pathlib import Path
 
 from app.services.file_index_service import FileIndexService
 from app.services.media_library_service import MediaLibraryService
+from app.services.config_manager import config_manager
 
 
 def test_media_library_scan_deduplicates_tracks_across_sources(monkeypatch, tmp_path: Path) -> None:
@@ -61,3 +62,21 @@ def test_index_output_updates_loaded_tracks_without_full_scan(monkeypatch, tmp_p
     assert service.index_output(output) is True
     assert service.get_index_version() == version + 1
     assert [track["title"] for track in service.load_tracks()] == ["新歌曲"]
+
+
+def test_named_sources_preserve_legacy_paths_and_allow_rename(monkeypatch, tmp_path: Path) -> None:
+    """旧路径配置自动显示目录名，新增和修改名称不影响扫描路径。"""
+    monkeypatch.setattr(config_manager, "config_dir", tmp_path)
+    first = tmp_path / "旧目录"
+    second = tmp_path / "第二目录"
+    first.mkdir()
+    second.mkdir()
+    config_manager.save("media_library_sources.json", {"paths": [str(first)]})
+    service = MediaLibraryService(FileIndexService(tmp_path / "musicflow.db"))
+
+    assert service.get_named_sources() == [{"name": "旧目录", "path": str(first)}]
+    added = service.add_source("我的收藏", str(second))
+    assert added == {"name": "我的收藏", "path": str(second)}
+    service.update_source(service.source_id(str(second)), "珍藏", str(second))
+    assert service.get_sources() == [str(first), str(second)]
+    assert service.get_named_sources()[1]["name"] == "珍藏"

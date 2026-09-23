@@ -24,32 +24,57 @@ class MediaLibraryService:
         self._lock = threading.RLock()
 
     def get_sources(self) -> list[str]:
-        data = config_manager.load(self.FILE_NAME) or {}
-        return [str(path) for path in data.get("paths", [])]
+        return [source["path"] for source in self.get_named_sources()]
 
-    def save_sources(self, paths: list[str]) -> list[str]:
+    def get_named_sources(self) -> list[dict[str, str]]:
+        data = config_manager.load(self.FILE_NAME) or {}
+        if "sources" in data:
+            return [dict(source) for source in data["sources"]]
+        return [{"name": Path(path).name or str(path), "path": str(path)} for path in data.get("paths", [])]
+
+    def save_sources(self, sources: list[dict[str, str]]) -> list[dict[str, str]]:
         unique = []
-        for raw_path in paths:
+        for source in sources:
+            raw_path = source["path"]
             path = Path(raw_path).expanduser()
             if not path.is_absolute():
                 raise ValueError("媒体库路径必须是服务器上的绝对路径")
             if not path.exists() or not path.is_dir():
                 raise ValueError(f"媒体库目录不可访问：{raw_path}")
             normalized = str(path)
-            if normalized not in unique:
-                unique.append(normalized)
-        if not config_manager.save(self.FILE_NAME, {"paths": unique}):
+            name = source["name"].strip()
+            if not name:
+                raise ValueError("请填写媒体库目录名称")
+            if normalized not in [item["path"] for item in unique]:
+                unique.append({"name": name, "path": normalized})
+        if not config_manager.save(self.FILE_NAME, {"sources": unique}):
             raise OSError("保存媒体库目录失败")
         self.invalidate()
         return unique
 
-    def add_sources(self, paths: list[str]) -> list[str]:
-        return self.save_sources(self.get_sources() + paths)
+    def add_source(self, name: str, path: str) -> dict[str, str]:
+        sources = self.get_named_sources()
+        if path in [source["path"] for source in sources]:
+            raise ValueError("媒体库目录已添加")
+        return self.save_sources(sources + [{"name": name, "path": path}])[-1]
+
+    def update_source(self, source_id: str, name: str, path: str) -> dict[str, str]:
+        sources = self.get_named_sources()
+        previous = next((source for source in sources if self.source_id(source["path"]) == source_id), None)
+        if previous is None:
+            raise ValueError("媒体库目录不存在")
+        if any(source["path"] == path and source is not previous for source in sources):
+            raise ValueError("媒体库目录已添加")
+        updated = {"name": name, "path": path}
+        self.save_sources([updated if source is previous else source for source in sources])
+        if previous["path"] != path:
+            self._index_service.remove_source(self.INDEX_SCOPE, previous["path"])
+        return updated
 
     def remove_source(self, source_id: str) -> None:
-        sources = self.get_sources()
-        removed = next((path for path in sources if self.source_id(path) == source_id), None)
-        remaining = [path for path in sources if self.source_id(path) != source_id]
+        sources = self.get_named_sources()
+        removed = next((source["path"] for source in sources if self.source_id(source["path"]) == source_id), None)
+        remaining = [source for source in sources if self.source_id(source["path"]) != source_id]
         if len(remaining) == len(sources):
             raise ValueError("媒体库目录不存在")
         self.save_sources(remaining)

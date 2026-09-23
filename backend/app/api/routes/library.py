@@ -26,7 +26,8 @@ class BatchMatchDecisionRequest(BaseModel):
 
 
 class MediaLibrarySourceRequest(BaseModel):
-    paths: list[str]
+    name: str
+    path: str
 
 
 class AppleIncrementalTrackRequest(BaseModel):
@@ -55,25 +56,33 @@ async def get_media_library_sources():
     """返回资料库对账专用的整理后媒体库目录。"""
     return [
         {
-            "id": media_library_service.source_id(path),
-            "path": path,
-            "exists": Path(path).exists(),
-            "is_directory": Path(path).is_dir(),
+            "id": media_library_service.source_id(source["path"]),
+            **source,
+            "exists": Path(source["path"]).exists(),
+            "is_directory": Path(source["path"]).is_dir(),
         }
-        for path in await asyncio.to_thread(media_library_service.get_sources)
+        for source in await asyncio.to_thread(media_library_service.get_named_sources)
     ]
 
 
 @router.post("/library/media-sources")
 async def add_media_library_sources(request: MediaLibrarySourceRequest):
-    if not request.paths:
-        raise HTTPException(status_code=400, detail="至少选择一个媒体库文件夹")
     try:
-        paths = await asyncio.to_thread(media_library_service.add_sources, request.paths)
+        source = await asyncio.to_thread(media_library_service.add_source, request.name, request.path)
     except (ValueError, OSError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     invalidate_reconciliation_cache()
-    return {"paths": paths}
+    return source
+
+
+@router.put("/library/media-sources/{source_id}")
+async def update_media_library_source(source_id: str, request: MediaLibrarySourceRequest):
+    try:
+        source = await asyncio.to_thread(media_library_service.update_source, source_id, request.name, request.path)
+    except (ValueError, OSError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    invalidate_reconciliation_cache()
+    return source
 
 
 @router.delete("/library/media-sources/{source_id}")
@@ -89,6 +98,18 @@ async def remove_media_library_source(source_id: str):
 @router.post("/apple-library/snapshots")
 async def import_apple_library_snapshot(file: UploadFile = File(...)):
     """导入 TuneMyMusic Apple Music CSV 快照。"""
+    if await asyncio.to_thread(dual_library_service.get_latest_snapshot):
+        raise HTTPException(status_code=409, detail="已有快照，请使用更新快照")
+    return await _save_apple_library_snapshot(file)
+
+
+@router.put("/apple-library/snapshots/{snapshot_id}")
+async def update_apple_library_snapshot(snapshot_id: str, file: UploadFile = File(...)):
+    """用新 CSV 原子更新当前快照。"""
+    return await _save_apple_library_snapshot(file, snapshot_id)
+
+
+async def _save_apple_library_snapshot(file: UploadFile, replace_snapshot_id: Optional[str] = None):
     if not file.filename or not file.filename.lower().endswith(".csv"):
         raise HTTPException(status_code=400, detail="请选择 CSV 文件")
     content = await file.read(10 * 1024 * 1024 + 1)
@@ -97,6 +118,7 @@ async def import_apple_library_snapshot(file: UploadFile = File(...)):
             dual_library_service.import_snapshot,
             file.filename,
             content,
+            replace_snapshot_id,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -150,6 +172,16 @@ async def delete_apple_incremental_entry(entry_id: str):
     return {"status": "success"}
 
 
+@router.post("/apple-library/entries/{entry_id}/confirm")
+async def confirm_apple_incremental_entry(entry_id: str):
+    try:
+        entry = await asyncio.to_thread(dual_library_service.confirm_incremental_track, entry_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    invalidate_presence_index()
+    return entry
+
+
 @router.get("/apple-library/status")
 async def get_apple_library_status():
     """返回最新快照及其时效状态。"""
@@ -174,7 +206,7 @@ async def get_library_reconciliation(
     if not snapshot:
         raise HTTPException(status_code=409, detail="请先导入 Apple Music CSV 快照")
     if not await asyncio.to_thread(media_library_service.get_sources):
-        raise HTTPException(status_code=409, detail="请先添加整理后的飞牛媒体库文件夹")
+        raise HTTPException(status_code=409, detail="请先添加本地音乐库文件夹")
     local_tracks = await asyncio.to_thread(media_library_service.load_tracks, refresh_local)
     local_index_version = await asyncio.to_thread(media_library_service.get_index_version)
     global reconciliation_cache
