@@ -127,7 +127,12 @@ export const useAppStore = defineStore('app', () => {
     files.value = [...merged.values()]
     filesLoaded.value = true
     await fetchLibrarySources()
-    return { imported, errors: response.data.errors }
+    return { imported, errors: response.data.errors, jobId: response.data.job_id as string }
+  }
+
+  async function fetchImportJob(jobId: string) {
+    const response = await axios.get(`/api/files/import/${jobId}`)
+    return response.data as { status: string; imported: number; errors: Array<{ path: string; error: string }>; error?: string }
   }
 
   async function fetchLibrarySources() {
@@ -483,6 +488,7 @@ export const useAppStore = defineStore('app', () => {
     logsLoading,
     fetchFiles,
     importFiles,
+    fetchImportJob,
     fetchLibrarySources,
     removeLibrarySource,
     deleteFile,

@@ -45,6 +45,7 @@ export interface FileItem {
   track?: string
   year?: string
   genre?: string
+  isrc?: string
 }
 
 export interface FileSystemEntry {

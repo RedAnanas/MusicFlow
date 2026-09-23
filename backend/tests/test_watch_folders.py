@@ -1,4 +1,5 @@
 import asyncio
+import time
 
 from app.models import DeliveryTarget, DeliveryTargetType, WatchFolder
 from app.api.routes.watch_folders import normalize_targets
@@ -71,6 +72,49 @@ def test_watcher_uses_native_observer(monkeypatch):
     watcher.WatcherService()
 
     assert created == [True]
+
+
+def test_watcher_handles_atomic_move_into_folder(monkeypatch, tmp_path):
+    """下载临时文件原子改名后应按最终音频路径触发处理。"""
+    detected = []
+    audio_file = tmp_path / "song.flac"
+    audio_file.write_bytes(b"audio")
+    handler = watcher.MusicFileHandler(detected.append, {"flac"}, stable_seconds=30)
+    monkeypatch.setattr(handler, "_handle_file", detected.append)
+    event = type("MovedEvent", (), {"is_directory": False, "dest_path": str(audio_file)})()
+
+    handler.on_moved(event)
+
+    assert detected == [str(audio_file)]
+
+
+def test_watcher_ignores_musicdl_metadata_temp_file(tmp_path):
+    """标签写入的随机后缀音频不应进入实时监控队列。"""
+    detected = []
+    temp_file = tmp_path / "song.8k2jxea3.flac"
+    temp_file.write_bytes(b"audio")
+    handler = watcher.MusicFileHandler(detected.append, {"flac"}, stable_seconds=30)
+
+    handler._handle_file(str(temp_file))
+
+    assert handler.pending == {}
+    assert detected == []
+
+
+def test_scan_skips_musicdl_temp_and_recent_audio(monkeypatch, tmp_path):
+    """扫描只返回稳定的正式音频，下载和标签写入期间暂缓处理。"""
+    manager = WatchFolderManager()
+    audio_file = tmp_path / "song.flac"
+    temp_file = tmp_path / "song.8k2jxea3.flac"
+    audio_file.write_bytes(b"audio")
+    temp_file.write_bytes(b"audio")
+    created_at = time.time()
+
+    assert manager._scan_directory(str(tmp_path)) == []
+
+    monkeypatch.setattr("app.services.watch_folder_manager.time.time", lambda: created_at + 31)
+
+    assert manager._scan_directory(str(tmp_path)) == [str(audio_file)]
 
 
 def test_copy_target_preserves_relative_path_and_skips_existing(tmp_path):

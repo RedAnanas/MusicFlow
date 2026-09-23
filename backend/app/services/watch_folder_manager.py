@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from app.config import settings
-from app.core.watcher import watcher_service
+from app.core.watcher import is_metadata_temp_audio, watcher_service
 from app.models import DeliveryTarget, DeliveryTargetType, WatchFolder
 from app.services.config_manager import config_manager
 
@@ -367,11 +367,17 @@ class WatchFolderManager:
 
         pattern = "**/*" if recursive else "*"
         supported = {ext.lower().lstrip(".") for ext in settings.SUPPORTED_FORMATS}
-        files = [
-            str(path)
-            for path in directory_path.glob(pattern)
-            if path.is_file() and path.suffix.lower().lstrip(".") in supported
-        ]
+        files = []
+        stable_before = time.time() - max(settings.FILE_STABLE_SECONDS, 0)
+        for path in directory_path.glob(pattern):
+            if path.suffix.lower().lstrip(".") not in supported or is_metadata_temp_audio(path):
+                continue
+            try:
+                stat = path.stat()
+            except FileNotFoundError:
+                continue
+            if path.is_file() and max(stat.st_mtime, stat.st_ctime) <= stable_before:
+                files.append(str(path))
         logger.info(f"Found {len(files)} files in {directory}")
         return files
 

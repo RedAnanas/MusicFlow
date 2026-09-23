@@ -1,4 +1,5 @@
 import logging
+import re
 import threading
 from pathlib import Path
 from typing import Callable, Dict, Set
@@ -6,6 +7,11 @@ from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
 logger = logging.getLogger(__name__)
+
+
+def is_metadata_temp_audio(path: Path) -> bool:
+    """识别 musicdl 写入音频标签时创建的随机后缀临时文件。"""
+    return re.fullmatch(r".+\.[a-z0-9_]{8}", path.stem) is not None
 
 
 class MusicFileHandler(FileSystemEventHandler):
@@ -36,12 +42,22 @@ class MusicFileHandler(FileSystemEventHandler):
 
         self._handle_file(event.src_path)
 
+    def on_moved(self, event):
+        """识别下载完成后的原子改名。"""
+        if event.is_directory:
+            return
+
+        self._handle_file(event.dest_path)
+
     def _handle_file(self, file_path: str):
         """处理文件事件"""
         try:
             path = Path(file_path)
 
             if path.suffix.lower().lstrip(".") not in self.supported_formats:
+                return
+
+            if is_metadata_temp_audio(path):
                 return
 
             if not path.exists():
