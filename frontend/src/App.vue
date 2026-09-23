@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
-import { Document, Files, FolderOpened, House, Monitor, Moon, Setting, Sunny } from '@element-plus/icons-vue'
+import { Collection, Document, Files, FolderOpened, Headset, House, Monitor, Moon, Setting, Sunny } from '@element-plus/icons-vue'
 import { type ThemeMode, useTheme } from './composables/useTheme'
 
 const route = useRoute()
@@ -10,12 +10,14 @@ const appVersion = __MUSICFLOW_VERSION__
 const navItems = [
   { path: '/', label: '首页', icon: House },
   { path: '/files', label: '操作台', icon: Files },
+  { path: '/library-reconciliation', label: '资料库对账', icon: Collection },
+  { path: '/discovery', label: '发现音乐', icon: Headset },
   { path: '/tasks', label: '操作记录', icon: Document },
   { path: '/profiles', label: '转换方案', icon: Document },
   { path: '/watch-folders', label: '监控目录', icon: FolderOpened },
   { path: '/system', label: '系统设置', icon: Setting },
 ]
-const mobileNavItems = navItems.filter(item => ['/', '/files', '/tasks', '/profiles', '/watch-folders', '/system'].includes(item.path))
+const mobileNavItems = navItems.filter(item => ['/', '/files', '/library-reconciliation', '/discovery', '/tasks', '/profiles', '/watch-folders', '/system'].includes(item.path))
 const themeOptions = [
   { value: 'light' as const, label: '日间模式', icon: Sunny },
   { value: 'dark' as const, label: '夜间模式', icon: Moon },
@@ -95,5 +97,5 @@ html.dark :is(.detail-summary, .conversion-files-panel, .delivery-rule-card, .de
 html.dark :is(.detail-summary, .conversion-files-panel, .delivery-rule-card, .delivery-preview, .naming-preview) :is(span, small, code) { color: #b5bece !important; }
 html.dark .conversion-files-panel .conversion-cover, html.dark .detail-summary .detail-cover { background: #353047 !important; }
 @media (max-width: 1080px) { .topbar { gap: 13px; }.main-nav { max-width: calc(100vw - 280px); overflow-x: auto; }.main-nav a { padding: 0 12px; } }
-@media (max-width: 700px) { .app-shell { padding: 0 0 82px; }.topbar { min-height: 64px; gap: 0; border-width: 0 0 1px; border-radius: 0; padding: 10px 14px; }.brand-mark { width: 38px; height: 38px; border-radius: 11px; font-size: 17px; }.brand { font-size: 17px; }.brand small, .main-nav { display: none; }.top-actions { margin-left: auto; }.service-avatar { display: none; }.app-main { padding: 14px 12px 20px; }.mobile-nav { position: fixed; z-index: 20; right: 0; bottom: 0; left: 0; display: grid; grid-template-columns: repeat(6, 1fr); min-height: 66px; padding: 7px max(8px, env(safe-area-inset-right)) calc(7px + env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left)); background: var(--mf-surface); box-shadow: 0 -8px 24px rgb(40 48 70 / 5%); backdrop-filter: blur(14px); }.mobile-nav a { display: flex; flex-direction: column; gap: 3px; align-items: center; justify-content: center; color: var(--mf-text-muted); font-size: 9px; font-weight: 650; text-decoration: none; }.mobile-nav .el-icon { font-size: 18px; }.mobile-nav a.active { color: #b693ff; }.mobile-nav a.active .el-icon { display: grid; width: 29px; height: 26px; place-items: center; border-radius: 10px; color: #fff; background: #a881f3; box-shadow: 0 5px 12px rgb(157 112 239 / 25%); } }
+@media (max-width: 700px) { .app-shell { padding: 0 0 82px; }.topbar { min-height: 64px; gap: 0; border-width: 0 0 1px; border-radius: 0; padding: 10px 14px; }.brand-mark { width: 38px; height: 38px; border-radius: 11px; font-size: 17px; }.brand { font-size: 17px; }.brand small, .main-nav { display: none; }.top-actions { margin-left: auto; }.service-avatar { display: none; }.app-main { padding: 14px 12px 20px; }.mobile-nav { position: fixed; z-index: 20; right: 0; bottom: 0; left: 0; display: grid; grid-template-columns: repeat(8, 1fr); min-height: 66px; padding: 7px max(5px, env(safe-area-inset-right)) calc(7px + env(safe-area-inset-bottom)) max(5px, env(safe-area-inset-left)); background: var(--mf-surface); box-shadow: 0 -8px 24px rgb(40 48 70 / 5%); backdrop-filter: blur(14px); }.mobile-nav a { display: flex; min-width:0; flex-direction: column; gap: 3px; align-items: center; justify-content: center; color: var(--mf-text-muted); font-size: 8px; font-weight: 650; text-decoration: none; white-space:nowrap; }.mobile-nav .el-icon { font-size: 18px; }.mobile-nav a.active { color: #b693ff; }.mobile-nav a.active .el-icon { display: grid; width: 29px; height: 26px; place-items: center; border-radius: 10px; color: #fff; background: #a881f3; box-shadow: 0 5px 12px rgb(157 112 239 / 25%); } }
 </style>

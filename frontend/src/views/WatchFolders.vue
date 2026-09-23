@@ -217,7 +217,7 @@ const handleEvents = async (folder: WatchFolder) => {
       <div><span>异常目录</span><strong :class="{ 'danger-value': errorCount }">{{ errorCount }}</strong></div>
     </div>
 
-    <div class="watch-workspace" v-loading="store.loading">
+    <div class="watch-workspace" v-loading="store.watchFoldersLoading">
       <section class="watch-table-panel">
         <div class="table-toolbar"><div><strong>目录列表</strong><span>状态每 5 秒自动更新</span></div><el-button @click="store.fetchWatchFolders()"><el-icon><Refresh /></el-icon>刷新</el-button></div>
         <div class="watch-list-head"><span>目录</span><span>状态 / 输出规则</span><span>最近扫描</span><span>操作</span></div>

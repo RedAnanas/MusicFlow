@@ -11,6 +11,7 @@ from app.config import settings
 from app.core import ffprobe_service, metadata_service
 from app.models import DeliveryTarget, DeliveryTargetType
 from app.services.config_manager import config_manager
+from app.services.file_index_service import file_index_service
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -19,6 +20,10 @@ logger = logging.getLogger(__name__)
 files_cache: dict = {}
 file_list_cache: List[dict] = []
 file_list_loaded = False
+file_scan_lock = asyncio.Lock()
+import_jobs: dict[str, dict] = {}
+file_refresh_task: Optional[asyncio.Task] = None
+FILE_INDEX_SCOPE = "workspace"
 
 
 class FileResponse(BaseModel):
@@ -38,6 +43,7 @@ class FileResponse(BaseModel):
     track: Optional[str] = None
     year: Optional[str] = None
     genre: Optional[str] = None
+    isrc: Optional[str] = None
 
 
 class FileConvertRequest(BaseModel):
@@ -88,13 +94,7 @@ async def get_files(
     limit: int = Query(100, ge=1, le=1000, description="返回数量限制")
 ):
     """获取所有音乐文件"""
-    global file_list_cache, file_list_loaded
-
-    if refresh or not file_list_loaded:
-        file_list_cache = _scan_files()
-        file_list_loaded = True
-
-    files = list(file_list_cache)
+    files = await load_library_files(refresh)
 
     # 应用搜索过滤
     if search:
@@ -116,22 +116,54 @@ async def get_files(
     return files[:limit]
 
 
+async def load_library_files(refresh: bool = False) -> List[dict]:
+    """优先返回持久化索引，并在后台执行增量校验。"""
+    global file_list_cache, file_list_loaded
+    if refresh:
+        async with file_scan_lock:
+            _replace_file_cache(await asyncio.to_thread(_scan_files))
+    elif not file_list_loaded:
+        async with file_scan_lock:
+            if not file_list_loaded:
+                has_snapshot = await asyncio.to_thread(file_index_service.has_snapshot, FILE_INDEX_SCOPE)
+                if has_snapshot:
+                    _replace_file_cache(await asyncio.to_thread(file_index_service.load, FILE_INDEX_SCOPE))
+                    _schedule_file_refresh()
+                else:
+                    _replace_file_cache(await asyncio.to_thread(_scan_files))
+    return list(file_list_cache)
+
+
 def _scan_files() -> List[dict]:
-    """扫描源目录并读取音频信息，仅在首次加载或手动刷新时执行。"""
-    files = []
-    seen_ids = set()
+    """增量扫描来源目录，未变化文件直接复用 SQLite 元数据。"""
+    return file_index_service.refresh(
+        FILE_INDEX_SCOPE,
+        _load_library_sources(),
+        _read_file,
+    )
 
-    source_dirs = _load_library_sources()
 
-    for source_dir in source_dirs:
-        for file_path in _iter_audio_files(Path(source_dir)):
-            file_data = _read_file(file_path)
-            if file_data and file_data["id"] not in seen_ids:
-                files.append(file_data)
-                seen_ids.add(file_data["id"])
-                files_cache[file_data["id"]] = file_data
+def _replace_file_cache(files: List[dict]) -> None:
+    global file_list_cache, file_list_loaded
+    file_list_cache = files
+    files_cache.clear()
+    files_cache.update({item["id"]: item for item in files})
+    file_list_loaded = True
 
-    return files
+
+def _schedule_file_refresh() -> None:
+    global file_refresh_task
+    if file_refresh_task and not file_refresh_task.done():
+        return
+
+    async def refresh_index():
+        try:
+            async with file_scan_lock:
+                _replace_file_cache(await asyncio.to_thread(_scan_files))
+        except Exception:
+            logger.exception("后台增量刷新操作台索引失败")
+
+    file_refresh_task = asyncio.create_task(refresh_index())
 
 
 def _load_library_sources() -> List[str]:
@@ -170,11 +202,10 @@ async def remove_library_source(source_id: str):
     if not removed:
         raise HTTPException(status_code=404, detail="音乐库来源不存在")
 
-    _save_library_sources([path for path in sources if path != removed])
-    global file_list_cache, file_list_loaded
-    files_cache.clear()
-    file_list_cache = _scan_files()
-    file_list_loaded = True
+    async with file_scan_lock:
+        await asyncio.to_thread(_save_library_sources, [path for path in sources if path != removed])
+        await asyncio.to_thread(file_index_service.remove_source, FILE_INDEX_SCOPE, removed)
+        _replace_file_cache(await asyncio.to_thread(_scan_files))
     return {"status": "success", "removed": removed, "deleted_from_disk": False}
 
 
@@ -210,6 +241,7 @@ def _read_file(file_path: Path) -> Optional[dict]:
             "track": metadata.get("track") if metadata else None,
             "year": metadata.get("date") if metadata else None,
             "genre": metadata.get("genre") if metadata else None,
+            "isrc": metadata.get("isrc") if metadata else None,
         }
     except (OSError, ValueError) as exc:
         logger.warning(f"Cannot read audio file {file_path}: {exc}")
@@ -218,38 +250,126 @@ def _read_file(file_path: Path) -> Optional[dict]:
 
 @router.post("/import")
 async def import_files(request: FileImportRequest):
-    """将服务器上的文件或目录加入音乐库，不复制源文件。"""
+    """立即保存服务器路径，并在后台扫描音乐文件。"""
     if not request.paths:
         raise HTTPException(status_code=400, detail="至少选择一个文件或目录")
 
+    valid_paths, errors = await asyncio.to_thread(_prepare_import_paths, request.paths)
+    existing_sources = _load_library_sources()
+    for path in valid_paths:
+        if path not in existing_sources:
+            existing_sources.append(path)
+    await asyncio.to_thread(_save_library_sources, existing_sources)
+
+    # 单文件导入保持原有即时返回行为；大目录才转入后台扫描。
+    if valid_paths and all(Path(path).is_file() for path in valid_paths):
+        async with file_scan_lock:
+            _, imported, scan_errors = await asyncio.to_thread(_collect_imported_files, valid_paths)
+            global file_list_cache, file_list_loaded
+            merged = {item["id"]: item for item in file_list_cache}
+            merged.update({item["id"]: item for item in imported})
+            file_list_cache = list(merged.values())
+            files_cache.update({item["id"]: item for item in imported})
+            file_list_loaded = True
+            await asyncio.to_thread(_persist_imported_files, valid_paths, imported)
+        return {"job_id": None, "imported": imported, "errors": errors + scan_errors}
+
+    job_id = str(uuid.uuid4())
+    import_jobs[job_id] = {"id": job_id, "status": "scanning", "progress": 0, "imported": 0, "errors": errors}
+    asyncio.create_task(_run_import_job(job_id, valid_paths))
+    return {"job_id": job_id, "imported": [], "errors": errors}
+
+
+def _prepare_import_paths(raw_paths: List[str]):
+    valid_paths = []
+    errors = []
+    for raw_path in raw_paths:
+        path = Path(raw_path).expanduser()
+        try:
+            if not path.is_absolute():
+                errors.append({"path": raw_path, "error": "路径不是绝对路径"})
+            elif not path.exists():
+                errors.append({"path": raw_path, "error": "路径不存在，或网络共享尚未连接"})
+            elif path.is_file() and path.suffix.lower()[1:] not in settings.SUPPORTED_FORMATS:
+                errors.append({"path": raw_path, "error": "不支持的音频格式"})
+            else:
+                valid_paths.append(str(path))
+        except PermissionError:
+            errors.append({"path": raw_path, "error": "没有权限读取该目录，请先连接飞牛共享"})
+        except OSError as exc:
+            errors.append({"path": raw_path, "error": f"无法读取目录：{exc}"})
+    return valid_paths, errors
+
+
+async def _run_import_job(job_id: str, paths: List[str]):
+    try:
+        async with file_scan_lock:
+            _, imported, errors = await asyncio.to_thread(_collect_imported_files, paths)
+            global file_list_cache, file_list_loaded
+            merged = {item["id"]: item for item in file_list_cache}
+            merged.update({item["id"]: item for item in imported})
+            file_list_cache = list(merged.values())
+            files_cache.update({item["id"]: item for item in imported})
+            file_list_loaded = True
+            await asyncio.to_thread(_persist_imported_files, paths, imported)
+        import_jobs[job_id].update(status="completed", progress=100, imported=len(imported), errors=errors)
+    except Exception as exc:
+        logger.exception("后台导入失败：%s", job_id)
+        import_jobs[job_id].update(status="failed", progress=100, error=str(exc))
+
+
+@router.get("/import/{job_id}")
+async def get_import_job(job_id: str):
+    job = import_jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="导入任务不存在")
+    return job
+
+
+def _collect_imported_files(raw_paths: List[str]):
+    """在工作线程中扫描导入路径，避免大型音乐库阻塞 API 事件循环。"""
     existing_sources = _load_library_sources()
     imported = []
     errors = []
-    for raw_path in request.paths:
+    for raw_path in raw_paths:
         path = Path(raw_path).expanduser()
-        if not path.is_absolute() or not path.exists():
-            errors.append({"path": raw_path, "error": "路径不存在或不是绝对路径"})
+        if not path.is_absolute():
+            errors.append({"path": raw_path, "error": "路径不是绝对路径"})
             continue
-        if path.is_file() and path.suffix.lower()[1:] not in settings.SUPPORTED_FORMATS:
-            errors.append({"path": raw_path, "error": "不支持的音频格式"})
-            continue
-        normalized = str(path)
-        if normalized not in existing_sources:
-            existing_sources.append(normalized)
-        for file_path in _iter_audio_files(path):
-            file_data = _read_file(file_path)
-            if not file_data:
+        try:
+            if not path.exists():
+                errors.append({"path": raw_path, "error": "路径不存在，或网络共享尚未连接"})
                 continue
-            files_cache[file_data["id"]] = file_data
-            imported.append(file_data)
+            if path.is_file() and path.suffix.lower()[1:] not in settings.SUPPORTED_FORMATS:
+                errors.append({"path": raw_path, "error": "不支持的音频格式"})
+                continue
+            normalized = str(path)
+            if normalized not in existing_sources:
+                existing_sources.append(normalized)
+            for file_path in _iter_audio_files(path):
+                file_data = _read_file(file_path)
+                if file_data:
+                    imported.append(file_data)
+        except PermissionError:
+            errors.append({"path": raw_path, "error": "没有权限读取该目录，请先连接飞牛共享"})
+        except OSError as exc:
+            errors.append({"path": raw_path, "error": f"无法读取目录：{exc}"})
+            continue
+    return existing_sources, imported, errors
 
-    _save_library_sources(existing_sources)
-    global file_list_cache, file_list_loaded
-    merged = {item["id"]: item for item in file_list_cache}
-    merged.update({item["id"]: item for item in imported})
-    file_list_cache = list(merged.values())
-    file_list_loaded = True
-    return {"imported": imported, "errors": errors}
+
+def _persist_imported_files(sources: List[str], imported: List[dict]) -> None:
+    for item in imported:
+        item_path = Path(item["path"])
+        source = next(
+            (
+                raw_source
+                for raw_source in sources
+                if item_path == Path(raw_source) or (Path(raw_source).is_dir() and item_path.is_relative_to(Path(raw_source)))
+            ),
+            str(item_path),
+        )
+        file_index_service.upsert(FILE_INDEX_SCOPE, source, item)
 
 
 @router.get("/{file_id}", response_model=FileResponse)
@@ -308,6 +428,7 @@ async def delete_file(file_id: str):
     files_cache.pop(file_id, None)
     global file_list_cache
     file_list_cache = [file_data for file_data in file_list_cache if file_data["id"] != file_id]
+    await asyncio.to_thread(file_index_service.remove_path, FILE_INDEX_SCOPE, file_data["path"])
     logger.info(f"Deleted music file: {file_path}")
     return {"status": "success", "deleted": file_id}
 
@@ -340,6 +461,19 @@ async def update_file_metadata(file_id: str, metadata_update: MetadataUpdate):
 
     if not success:
         raise HTTPException(status_code=500, detail="Failed to update metadata")
+
+    refreshed = await asyncio.to_thread(_read_file, Path(file_data["path"]))
+    if refreshed:
+        files_cache[file_id] = refreshed
+        for index, item in enumerate(file_list_cache):
+            if item["id"] == file_id:
+                file_list_cache[index] = refreshed
+                break
+        source = next(
+            (path for path in _load_library_sources() if Path(file_data["path"]).is_relative_to(Path(path))),
+            file_data["path"],
+        )
+        await asyncio.to_thread(file_index_service.upsert, FILE_INDEX_SCOPE, source, refreshed)
 
     return {"status": "success", "message": "Metadata updated"}
 
