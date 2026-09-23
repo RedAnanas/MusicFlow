@@ -126,7 +126,7 @@ async def get_dual_library_config():
         "nas_watch_folder_input_dir": nas_folder.input_dir if nas_folder else "",
         "apple_watch_folder_name": apple_folder.name if apple_folder else "",
         "apple_watch_folder_input_dir": apple_folder.input_dir if apple_folder else "",
-        "musicdl_base_url": settings.MUSICDL_BASE_URL,
+        "musicdl_base_url": musicdl_client.base_url,
         "musicdl_service_token_configured": bool(settings.MUSICDL_SERVICE_TOKEN),
     }
 

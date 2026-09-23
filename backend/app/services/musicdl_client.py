@@ -7,6 +7,15 @@ from pathlib import Path
 from typing import Iterator, Optional
 
 from app.config import settings
+from app.services.config_manager import config_manager
+
+
+CONNECTION_CONFIG_FILE = "musicdl_connection.json"
+
+
+def configured_musicdl_base_url() -> str:
+    saved = config_manager.load(CONNECTION_CONFIG_FILE) or {}
+    return str(saved.get("base_url") or settings.MUSICDL_BASE_URL).rstrip("/")
 
 
 class MusicdlClientError(RuntimeError):
@@ -16,9 +25,10 @@ class MusicdlClientError(RuntimeError):
 class MusicdlClient:
     """musicdl 内部 HTTP API 客户端，令牌只在服务端使用。"""
 
-    def __init__(self, base_url: Optional[str] = None, service_token: Optional[str] = None):
-        self.base_url = (base_url or settings.MUSICDL_BASE_URL).rstrip("/")
+    def __init__(self, base_url: Optional[str] = None, service_token: Optional[str] = None, timeout: int = 60):
+        self.base_url = (base_url or configured_musicdl_base_url()).rstrip("/")
         self.service_token = service_token if service_token is not None else settings.MUSICDL_SERVICE_TOKEN
+        self.timeout = timeout
 
     def _request(
         self,
@@ -43,7 +53,7 @@ class MusicdlClient:
             method=method,
         )
         try:
-            return urllib.request.urlopen(request, timeout=60)
+            return urllib.request.urlopen(request, timeout=self.timeout)
         except urllib.error.HTTPError as exc:
             message = exc.reason
             try:
@@ -61,6 +71,14 @@ class MusicdlClient:
     def health(self) -> dict:
         version = self._json("/api/version")
         return {"status": "healthy", **version}
+
+    def supports_acquisition(self) -> bool:
+        """检测一键补齐所需的新版下载接口是否存在。"""
+        try:
+            with self._request("/api/v1/downloads", method="OPTIONS"):
+                return True
+        except (MusicdlClientError, OSError):
+            return False
 
     def sources(self) -> list[dict]:
         return self._json("/api/sources")
