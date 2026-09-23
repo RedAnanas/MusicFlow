@@ -261,6 +261,17 @@ class WatchFolderManager:
                 output_file = self._build_output_path(folder, source_path, target)
                 if await asyncio.to_thread(self._copy_file, source_path, output_file):
                     copied += 1
+                    from app.api.routes import discovery
+                    from app.services.acquisition_service import acquisition_service
+                    from app.services.media_library_service import media_library_service
+
+                    if await asyncio.to_thread(media_library_service.index_output, output_file):
+                        discovery.invalidate_presence_index()
+                        await asyncio.to_thread(
+                            acquisition_service.mark_nas_delivered,
+                            str(source_path),
+                            output_file,
+                        )
                     self._record_event(
                         folder.id,
                         "copied",

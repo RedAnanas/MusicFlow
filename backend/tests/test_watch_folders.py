@@ -138,6 +138,37 @@ def test_copy_target_preserves_relative_path_and_skips_existing(tmp_path):
     assert WatchFolderManager._copy_file(source_file, output_file) is False
 
 
+def test_copy_target_updates_media_presence_after_output(monkeypatch, tmp_path):
+    """飞牛成品复制成功后增量更新资料库索引和补齐任务。"""
+    from app.api.routes import discovery
+    from app.services.acquisition_service import acquisition_service
+    from app.services.media_library_service import media_library_service
+
+    source_root = tmp_path / "downloads"
+    source_root.mkdir()
+    source_file = source_root / "song.flac"
+    source_file.write_bytes(b"audio")
+    output_root = tmp_path / "library"
+    folder = WatchFolder(
+        id="copy-folder",
+        name="飞牛音乐",
+        input_dir=str(source_root),
+        targets=[DeliveryTarget(type=DeliveryTargetType.COPY, output_dir=str(output_root))],
+    )
+    indexed = []
+    delivered = []
+    invalidated = []
+    monkeypatch.setattr(media_library_service, "index_output", lambda path: indexed.append(path) or True)
+    monkeypatch.setattr(acquisition_service, "mark_nas_delivered", lambda source, output: delivered.append((source, output)))
+    monkeypatch.setattr(discovery, "invalidate_presence_index", lambda: invalidated.append(True))
+
+    asyncio.run(WatchFolderManager()._process_file(folder, str(source_file), "test"))
+
+    assert indexed == [output_root / "song.flac"]
+    assert delivered == [(str(source_file), output_root / "song.flac")]
+    assert invalidated == [True]
+
+
 def test_legacy_profile_configuration_is_migrated_to_convert_target():
     """已有监控目录应继续作为 Apple Music 转换目标运行。"""
     folder = WatchFolder(
