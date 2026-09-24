@@ -1,3 +1,6 @@
+import csv
+import io
+import json
 from pathlib import Path
 
 from app.services.dual_library_service import DualLibraryService, normalize_text
@@ -20,6 +23,18 @@ def test_reconciliation_result_persists_by_snapshot_and_index_version(tmp_path: 
 
     assert restarted.get_cached_reconciliation("snapshot-1", 3) == result
     assert restarted.get_cached_reconciliation("snapshot-1", 4) is None
+
+
+def test_old_reconciliation_cache_is_recomputed_after_matching_rule_change(tmp_path: Path) -> None:
+    """旧规则缓存不得掩盖升级后的匹配结果。"""
+    service = create_service(tmp_path)
+    service.initialize()
+    with service._connect() as connection:
+        connection.execute(
+            "INSERT INTO reconciliation_results VALUES (?, ?, ?, ?)",
+            ("snapshot-1", 3, json.dumps({"summary": {}, "entries": []}), "2026-09-24T00:00:00+00:00"),
+        )
+    assert service.get_cached_reconciliation("snapshot-1", 3) is None
 
 
 def test_import_snapshot_classifies_rows_and_is_idempotent(tmp_path: Path) -> None:
@@ -314,8 +329,8 @@ def test_reconcile_uses_isrc_metadata_and_manual_decision(tmp_path: Path) -> Non
     assert any(entry["match_reason"] == "manual_confirmed" for entry in confirmed["entries"])
 
 
-def test_reconcile_does_not_offer_same_title_with_unrelated_artist(tmp_path: Path) -> None:
-    """同名但歌手完全不同应分别保留为单库曲目。"""
+def test_reconcile_offers_same_title_with_different_artist_for_review(tmp_path: Path) -> None:
+    """同名不同歌手可能是翻唱，只能交由人工确认。"""
     service = create_service(tmp_path)
     service.import_snapshot(
         "library.csv",
@@ -326,7 +341,10 @@ def test_reconcile_does_not_offer_same_title_with_unrelated_artist(tmp_path: Pat
         {"id": "local", "filename": "a.flac", "title": "同名歌曲", "artist": "飞牛歌手", "album": "专辑", "path": "/music/a.flac"},
     ])
 
-    assert result["summary"] == {"both": 0, "nas_only": 1, "apple_only": 1, "review": 0}
+    assert result["summary"] == {"both": 0, "nas_only": 0, "apple_only": 0, "review": 1}
+    assert result["entries"][0]["match_reason"] == "title_cover_review"
+    service.save_match_decision("local", result["entries"][0]["apple"]["track_key"], "confirmed")
+    assert service.reconcile([{"id": "local", "title": "同名歌曲", "artist": "飞牛歌手"}])["summary"]["both"] == 1
 
 
 def test_reconcile_keeps_fuzzy_title_candidates_for_manual_review(tmp_path: Path) -> None:
@@ -380,6 +398,200 @@ def test_reconcile_does_not_offer_unrelated_live_titles(tmp_path: Path) -> None:
     ])
 
     assert result["summary"] == {"both": 0, "nas_only": 1, "apple_only": 1, "review": 0}
+
+
+def test_manual_incremental_entry_appears_in_reconciliation_and_keeps_decision(tmp_path: Path) -> None:
+    """手动确认的新增 Apple 曲目应进入对账，人工决策应可保存。"""
+    service = create_service(tmp_path)
+    snapshot, _ = service.import_snapshot(
+        "library.csv", (CSV_HEADER + "其他歌曲,其他歌手,专辑,Library Songs,Favorite,,1001\n").encode("utf-8"),
+    )
+    entry = service.upsert_incremental_track(
+        {"title": "甲乙丙丁 (你我怎么两清)", "artist": "李佳薇", "album": "甲乙丙丁"}, "manual",
+    )
+    service.confirm_incremental_track(entry["id"])
+    local = [{"id": "local", "filename": "a.flac", "title": "甲乙丙丁 (你我怎么两清)",
+              "artist": "李佳薇", "album": "甲乙丙丁", "path": "/music/a.flac"}]
+    result = service.reconcile(local)
+    assert result["summary"]["both"] == 1
+    assert next(row for row in result["entries"] if row["local"] and row["local"]["id"] == "local")["apple"]["apple_kind"] == "manual"
+    service.save_match_decision("local", f"incremental:{entry['id']}", "confirmed")
+    service.delete_snapshot(snapshot["id"])
+    with service._connect() as connection:
+        assert connection.execute("SELECT decision FROM library_matches WHERE apple_track_key = ?",
+                                  (f"incremental:{entry['id']}",)).fetchone()[0] == "confirmed"
+
+
+def test_manual_incremental_entry_does_not_duplicate_snapshot_track(tmp_path: Path) -> None:
+    """快照已有同一首歌时，手动确认记录不应让对账数量重复。"""
+    service = create_service(tmp_path)
+    service.import_snapshot("library.csv", (
+        CSV_HEADER + "默,那英,默 - Single,Library Songs,Favorite,,1001\n"
+    ).encode("utf-8"))
+    entry = service.upsert_incremental_track({"title": "默", "artist": "那英", "album": "默 - Single"}, "manual")
+    service.confirm_incremental_track(entry["id"])
+    result = service.reconcile([{"id": "local", "filename": "a.flac", "title": "默", "artist": "那英",
+                                "album": "默 - Single", "path": "/music/a.flac"}])
+    assert result["summary"] == {"both": 1, "nas_only": 0, "apple_only": 0, "review": 0}
+
+
+def test_reconcile_offers_version_and_credit_variants_for_review(tmp_path: Path) -> None:
+    """现场版、合作歌手和跨字段署名只产生待确认候选。"""
+    service = create_service(tmp_path)
+    service.import_snapshot("library.csv", (
+        CSV_HEADER
+        + "そばにいるね (feat. SoulJa),青山テルマ feat. SoulJa,专辑,Library Songs,Favorite,,1001\n"
+        + "海阔天空 (Introduced by Beyond) [Live],Beyond,专辑,Library Songs,Favorite,,1002\n"
+        + "GBL女神殿 - goddess temple,Dungeon and Fighter,BGM,Library Songs,Favorite,,1003\n"
+    ).encode("utf-8"))
+    local = [
+        {"id": "japanese", "filename": "j.flac", "title": "そばにいるね", "artist": "青山テルマ, SoulJa", "album": "本地", "path": "/music/j.flac"},
+        {"id": "live", "filename": "l.flac", "title": "海阔天空", "artist": "Beyond", "album": "本地", "path": "/music/l.flac"},
+        {"id": "game", "filename": "g.flac", "title": "GBL女神殿", "artist": "DNF 地下城与勇士", "album": "Dungeon and Fighter", "path": "/music/g.flac"},
+    ]
+    result = service.reconcile(local)
+    assert result["summary"] == {"both": 0, "nas_only": 0, "apple_only": 0, "review": 3}
+    assert {row["candidates"][0]["id"] for row in result["entries"]} == {"japanese", "live", "game"}
+
+
+def test_reconcile_offers_artist_album_and_alias_variants_for_review(tmp_path: Path) -> None:
+    """同名曲的合作歌手顺序、专辑和常见艺名差异只生成待确认候选。"""
+    service = create_service(tmp_path)
+    service.import_snapshot("library.csv", (
+        CSV_HEADER
+        + "New Soul,Yael Naïm,Yael Naim,Library Songs,Favorite,,1001\n"
+        + "My Heart,Different Heaven & Eh!de,My Heart - Single,Library Songs,Favorite,,1002\n"
+        + "MY ALL,滨崎步,GUILTY,Library Songs,Favorite,,1003\n"
+        + "SAKURA,生物股长,桜咲く街物語,Library Songs,Favorite,,1004\n"
+        + "ピースサイン - Peace Sign,米津玄师,BOOTLEG,Library Songs,Favorite,,1005\n"
+    ).encode("utf-8"))
+    local = [
+        {"id": "new-soul", "filename": "1.flac", "title": "New Soul", "artist": "Yael Naim", "album": "Yael Naim", "path": "/music/1.flac"},
+        {"id": "my-heart", "filename": "2.flac", "title": "My Heart", "artist": "EH!DE、Different Heaven", "album": "My Heart", "path": "/music/2.flac"},
+        {"id": "my-all", "filename": "3.flac", "title": "MY ALL", "artist": "浜崎あゆみ", "album": "GUILTY", "path": "/music/3.flac"},
+        {"id": "sakura", "filename": "4.flac", "title": "SAKURA", "artist": "いきものがかり", "album": "SAKURA", "path": "/music/4.flac"},
+        {"id": "peace", "filename": "5.flac", "title": "ピースサイン", "artist": "米津玄師", "album": "ピースサイン", "path": "/music/5.flac"},
+    ]
+    result = service.reconcile(local)
+    assert result["summary"] == {"both": 0, "nas_only": 0, "apple_only": 0, "review": 5}
+    assert {row["candidates"][0]["id"] for row in result["entries"]} == {track["id"] for track in local}
+
+
+def test_reconcile_keeps_same_title_and_generic_album_as_manual_candidate(tmp_path: Path) -> None:
+    """同名与普通专辑名不能自动合并，但可以展示翻唱候选。"""
+    service = create_service(tmp_path)
+    service.import_snapshot("library.csv", (
+        CSV_HEADER + "同名歌曲,歌手甲,专辑,Library Songs,Favorite,,1001\n"
+    ).encode("utf-8"))
+    result = service.reconcile([{"id": "local", "filename": "a.flac", "title": "同名歌曲",
+                                "artist": "歌手乙", "album": "专辑", "path": "/music/a.flac"}])
+    assert result["summary"] == {"both": 0, "nas_only": 0, "apple_only": 0, "review": 1}
+    assert result["entries"][0]["match_reason"] == "title_cover_review"
+
+
+def test_reconcile_reviews_local_title_with_artist_prefix(tmp_path: Path) -> None:
+    """本地文件把歌手写进歌名时，保留为待确认。"""
+    service = create_service(tmp_path)
+    service.import_snapshot("library.csv", (
+        CSV_HEADER + "50 Ways to Say Goodbye,Train,专辑,Library Songs,Favorite,,1001\n"
+    ).encode("utf-8"))
+    result = service.reconcile([{"id": "local", "title": "Train - 50 Ways to Say Goodbye",
+                                "artist": "", "album": "专辑"}])
+    assert result["summary"]["review"] == 1
+    assert result["entries"][0]["candidates"][0]["id"] == "local"
+
+
+def test_reconcile_reviews_parenthesized_title_segment(tmp_path: Path) -> None:
+    """歌名一侧把上集放在括号中，也应进入人工候选。"""
+    service = create_service(tmp_path)
+    service.import_snapshot("library.csv", (
+        CSV_HEADER + "爱的故事(上集),孙耀威,专辑,Library Songs,Favorite,,1001\n"
+    ).encode("utf-8"))
+    result = service.reconcile([{"id": "local", "title": "爱的故事上集 (BB鼓版)",
+                                "artist": "诗南", "album": "专辑"}])
+    assert result["summary"]["review"] == 1
+
+
+def test_reconcile_keeps_user_rejected_name_similarities_separate(tmp_path: Path) -> None:
+    """用户排除的五组近似名称不能自动匹配或进入待确认。"""
+    service = create_service(tmp_path)
+    apple_tracks = [
+        ("Booty Music 2 (feat. Ace Hood)", "Git Fresh"),
+        ("Seve (Radio Edit)", "Tez Cadey"),
+        ("Loner", "CNBLUE"),
+        ("这,就是爱 (Live)", "张杰"),
+    ]
+    local_tracks = [
+        ("Booty Music", "Deep Side"),
+        ("Seven (Jiaye Reboot)", "Jiaye、Tobu"),
+        ("SEVEN", "蔡依林"),
+        ("Alone", "Alan Walker"),
+        ("就是爱你", "陶喆"),
+    ]
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(("Track name", "Artist name", "Album", "Playlist name", "Type", "ISRC", "Apple - id"))
+    for index, (title, artist) in enumerate(apple_tracks, 1):
+        writer.writerow((title, artist, "专辑", "Library Songs", "Favorite", "", str(index)))
+    service.import_snapshot("library.csv", output.getvalue().encode("utf-8"))
+    result = service.reconcile([
+        {"id": str(index), "title": title, "artist": artist, "album": "专辑"}
+        for index, (title, artist) in enumerate(local_tracks, 1)
+    ])
+    assert result["summary"] == {"both": 0, "nas_only": 5, "apple_only": 4, "review": 0}
+
+
+def test_apple_precheck_includes_pending_incremental_record(tmp_path: Path) -> None:
+    """已记录待确认的 Apple Music 曲目也应阻止静默重复上传。"""
+    service = create_service(tmp_path)
+    service.upsert_incremental_track({"title": "翻唱歌曲", "artist": "歌手甲", "album": "专辑"}, "catalog")
+    candidates = service.find_apple_candidates({"title": "翻唱歌曲", "artist": "歌手乙"})
+    assert len(candidates) == 1
+    assert candidates[0]["verification_status"] == "pending"
+
+
+def test_reconcile_offers_artist_alias_with_guest_and_version_for_review(tmp_path: Path) -> None:
+    """艺名别称及合作歌手、重制版本只能列为候选，优先展示标题完全相同的版本。"""
+    service = create_service(tmp_path)
+    service.import_snapshot("library.csv", (
+        CSV_HEADER
+        + "βios (feat. Mika Kobayashi),泽野弘之,原声带,Library Songs,Favorite,,1001\n"
+        + "Beautiful World (PLANiTb Acoustica Mix) [2021 Remastered],Utada,Single,Library Songs,Favorite,,1002\n"
+        + "unravel (acoustic version),TK from Ling tosite sigure,Signal - Single,Library Songs,Favorite,,1003\n"
+    ).encode("utf-8"))
+    local = [
+        {"id": "bios", "filename": "1.flac", "title": "βios (feat.Mika Kobayashi)", "artist": "澤野弘之、小林未郁", "album": "其他", "path": "/music/1.flac"},
+        {"id": "beautiful", "filename": "2.flac", "title": "Beautiful World", "artist": "宇多田ヒカル", "album": "其他", "path": "/music/2.flac"},
+        {"id": "acoustic", "filename": "3.flac", "title": "unravel (acoustic version)", "artist": "TK from 凛として時雨", "album": "Signal", "path": "/music/3.flac"},
+        {"id": "plain", "filename": "4.flac", "title": "unravel", "artist": "TK from 凛冽时雨", "album": "其他", "path": "/music/4.flac"},
+    ]
+    result = service.reconcile(local)
+    assert result["summary"] == {"both": 0, "nas_only": 1, "apple_only": 0, "review": 3}
+    reviews = {row["apple"]["title"]: row for row in result["entries"] if row["status"] == "review"}
+    assert reviews["unravel (acoustic version)"]["candidates"][0]["id"] == "acoustic"
+    assert len(reviews["unravel (acoustic version)"]["candidates"]) == 1
+
+
+def test_reconcile_offers_translated_artist_and_long_shared_title_for_review(tmp_path: Path) -> None:
+    """多语言团名和较长的同歌手标题主体可待确认，短标题前缀不应误判。"""
+    service = create_service(tmp_path)
+    service.import_snapshot("library.csv", (
+        CSV_HEADER
+        + "Nobody (Korean Ver.),奇迹女孩,WONDER GIRLS,Library Songs,Favorite,,1001\n"
+        + "Never Say Goodbye,베이비 복스 2기,五. 歌. 舞. 世. 炅,Library Songs,Favorite,,1002\n"
+        + "世界が終るまでは… [WANDS 第5期 ver.],WANDS,Single,Library Songs,Favorite,,1003\n"
+        + '"Alone, Pt. II",Alan Walker,Alone,Library Songs,Favorite,,1004\n'
+    ).encode("utf-8"))
+    local = [
+        {"id": "nobody", "filename": "1.flac", "title": "Nobody", "artist": "Wonder Girls", "album": "其他", "path": "/music/1.flac"},
+        {"id": "goodbye", "filename": "2.flac", "title": "Never Say Goodbye", "artist": "Baby V.O.X", "album": "其他", "path": "/music/2.flac"},
+        {"id": "wands", "filename": "3.flac", "title": "世界が終るまでは…~TV Version~", "artist": "WANDS", "album": "其他", "path": "/music/3.flac"},
+        {"id": "alone", "filename": "4.flac", "title": "Alone", "artist": "Alan Walker", "album": "其他", "path": "/music/4.flac"},
+    ]
+    result = service.reconcile(local)
+    reviews = [row for row in result["entries"] if row["status"] == "review"]
+    assert {row["candidates"][0]["id"] for row in reviews} == {"nobody", "goodbye", "wands"}
+    assert result["summary"] == {"both": 0, "nas_only": 1, "apple_only": 1, "review": 3}
 
 
 def test_save_match_decisions_saves_batch_atomically(tmp_path: Path) -> None:

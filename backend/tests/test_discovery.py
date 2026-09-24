@@ -2,9 +2,50 @@ import asyncio
 import io
 import json
 
+import pytest
+from fastapi import HTTPException
+
 from app.api.routes import discovery
 from app.models import DeliveryTarget, DeliveryTargetType, WatchFolder
 from app.services.musicdl_client import MusicdlClient
+
+
+def test_apple_precheck_separates_personal_and_public_catalog(monkeypatch) -> None:
+    """补齐前分别展示个人资料库和公开曲库，不能把可搜索误认为已添加。"""
+    monkeypatch.setattr(discovery.dual_library_service, "find_apple_candidates", lambda _track: [
+        {"title": "海阔天空", "artist": "歌手甲"},
+    ])
+    search_calls = []
+    def fake_search(*args):
+        search_calls.append(args)
+        return [
+            {"title": "海阔天空", "artist": "歌手乙", "track_url": "https://music.apple.com/song/1"},
+        ]
+    monkeypatch.setattr(discovery.apple_catalog_service, "search", fake_search)
+    result = asyncio.run(discovery.precheck_apple_fill(
+        discovery.ApplePrecheckRequest(selected_track={"song_name": "海阔天空", "singers": "歌手丙"})
+    ))
+    assert result["personal"][0]["artist"] == "歌手甲"
+    assert result["catalog"][0]["artist"] == "歌手乙"
+    assert result["catalog_error"] == ""
+    assert result["country"] == discovery.dual_library_config.get()["apple_storefront"]
+    assert search_calls[0][2] == 20
+
+
+def test_apple_handoff_requires_review_when_personal_candidate_exists(monkeypatch) -> None:
+    """绕过页面直接创建补齐任务时，也不能静默重复上传疑似已有曲目。"""
+    monkeypatch.setattr(discovery.dual_library_service, "find_apple_candidates", lambda _track: [
+        {"title": "同名歌曲", "artist": "另一位歌手"},
+    ])
+    created = []
+    monkeypatch.setattr(discovery.acquisition_service, "create_job", lambda *_args: created.append(True) or {"id": "job"})
+    request = discovery.AcquisitionRequest(selected_track={"song_name": "同名歌曲"}, desired_apple=True)
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(discovery.create_acquisition(request))
+    assert error.value.status_code == 409
+    assert not created
+    request.allow_possible_duplicate = True
+    assert asyncio.run(discovery.create_acquisition(request))["id"] == "job"
 
 
 def test_musicdl_client_uses_existing_web_api(monkeypatch) -> None:
