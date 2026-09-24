@@ -24,6 +24,7 @@ REQUIRED_COLUMNS = (
     "ISRC",
     "Apple - id",
 )
+RECONCILIATION_CACHE_VERSION = 5
 
 
 def normalize_text(value: Optional[str]) -> str:
@@ -37,10 +38,39 @@ def normalize_title_subject(value: Optional[str]) -> str:
     title = (value or "").strip()
     # Apple Music 常将影视说明、现场等附在歌名末尾；这类版本差异只能作为人工候选。
     while True:
-        stripped = re.sub(r"\s*[（(][^（）()]*[）)]\s*$", "", title).strip()
+        stripped = re.sub(r"\s*(?:[（(][^（）()]*[）)]|\[[^\[\]]*\])\s*$", "", title).strip()
         if stripped == title:
             return normalize_text(title)
         title = stripped
+
+
+def normalize_review_artist(value: Optional[str]) -> str:
+    """仅供人工候选使用，忽略拉丁字母重音。"""
+    decomposed = unicodedata.normalize("NFKD", value or "")
+    return normalize_text("".join(character for character in decomposed if not unicodedata.combining(character)))
+
+
+REVIEW_ARTIST_ALIASES = {
+    frozenset((normalize_review_artist(first), normalize_review_artist(second)))
+    for first, second in (
+        ("冯沁苑LaJiao", "买辣椒也用券"),
+        ("兰卡", "Lenka"),
+        ("Utada", "宇多田ヒカル"),
+        ("Yiruma", "李闰珉"),
+        ("薛明媛", "薛黛霏"),
+        ("生物股长", "いきものがかり"),
+        ("奇迹女孩", "Wonder Girls"),
+        ("베이비 복스 2기", "Baby V.O.X"),
+        ("泽野弘之", "澤野弘之"),
+        ("米津玄师", "米津玄師"),
+        ("菅野佑悟", "菅野祐悟"),
+        ("花泽香菜", "花澤香菜"),
+        ("Britney Spears", "布兰妮·斯皮尔斯"),
+        ("ハセガワダイスケ", "長谷川大祐"),
+        ("TK from Ling tosite sigure", "TK from 凛として時雨"),
+        ("TK from Ling tosite sigure", "TK from 凛冽时雨"),
+    )
+}
 
 
 class DualLibraryService:
@@ -169,7 +199,10 @@ class DualLibraryService:
                 """,
                 (snapshot_id, local_index_version),
             ).fetchone()
-        return json.loads(row["result_json"]) if row else None
+        if not row:
+            return None
+        cached = json.loads(row["result_json"])
+        return cached["result"] if cached.get("version") == RECONCILIATION_CACHE_VERSION else None
 
     def save_cached_reconciliation(self, snapshot_id: str, local_index_version: int, result: dict) -> None:
         self.initialize()
@@ -183,7 +216,7 @@ class DualLibraryService:
                 (
                     snapshot_id,
                     local_index_version,
-                    json.dumps(result, ensure_ascii=False),
+                    json.dumps({"version": RECONCILIATION_CACHE_VERSION, "result": result}, ensure_ascii=False),
                     datetime.now(timezone.utc).isoformat(),
                 ),
             )
@@ -403,10 +436,10 @@ class DualLibraryService:
             raise ValueError("Apple Music 快照不存在")
         connection.execute("DELETE FROM apple_library_snapshots WHERE id = ?", (snapshot_id,))
         connection.execute(
-            "DELETE FROM library_matches WHERE apple_track_key NOT IN (SELECT DISTINCT track_key FROM apple_snapshot_rows)"
+            "DELETE FROM library_matches WHERE apple_track_key NOT IN (SELECT DISTINCT track_key FROM apple_snapshot_rows) AND apple_track_key NOT LIKE 'incremental:%'"
         )
         connection.execute(
-            "DELETE FROM apple_tracks WHERE track_key NOT IN (SELECT DISTINCT track_key FROM apple_snapshot_rows)"
+            "DELETE FROM apple_tracks WHERE track_key NOT IN (SELECT DISTINCT track_key FROM apple_snapshot_rows) AND track_key NOT LIKE 'incremental:%'"
         )
 
     @staticmethod
@@ -565,6 +598,8 @@ class DualLibraryService:
     def delete_incremental_track(self, entry_id: str) -> None:
         self.initialize()
         with self._connect() as connection:
+            connection.execute("DELETE FROM library_matches WHERE apple_track_key = ?", (f"incremental:{entry_id}",))
+            connection.execute("DELETE FROM apple_tracks WHERE track_key = ?", (f"incremental:{entry_id}",))
             deleted = connection.execute(
                 "DELETE FROM apple_incremental_entries WHERE id = ?",
                 (entry_id,),
@@ -577,6 +612,7 @@ class DualLibraryService:
             raise ValueError("匹配决策必须是 confirmed 或 rejected")
         self.initialize()
         with self._connect() as connection:
+            self._ensure_incremental_apple_track(connection, apple_track_key)
             track = connection.execute(
                 "SELECT 1 FROM apple_tracks WHERE track_key = ?",
                 (apple_track_key,),
@@ -602,6 +638,8 @@ class DualLibraryService:
         if any(decision not in {"confirmed", "rejected"} for _, _, decision in prepared):
             raise ValueError("匹配决策必须是 confirmed 或 rejected")
         with self._connect() as connection:
+            for _, apple_track_key, _ in prepared:
+                self._ensure_incremental_apple_track(connection, apple_track_key)
             known_keys = {
                 row[0]
                 for row in connection.execute(
@@ -625,6 +663,27 @@ class DualLibraryService:
                 [(local_file_id, apple_track_key, decision, now) for local_file_id, apple_track_key, decision in prepared],
             )
 
+    @staticmethod
+    def _ensure_incremental_apple_track(connection: sqlite3.Connection, track_key: str) -> None:
+        if not track_key.startswith("incremental:"):
+            return
+        entry = connection.execute(
+            "SELECT * FROM apple_incremental_entries WHERE id = ? AND verification_status = 'manual_confirmed'",
+            (track_key.removeprefix("incremental:"),),
+        ).fetchone()
+        if entry is None:
+            return
+        connection.execute(
+            """INSERT OR IGNORE INTO apple_tracks
+            (track_key, apple_id, apple_kind, title, artist, album, isrc,
+             normalized_title, normalized_artist, normalized_album,
+             first_seen_at, last_seen_at, presence_state)
+            VALUES (?, ?, 'manual', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'present')""",
+            (track_key, entry["apple_id"] or "", entry["title"], entry["artist"], entry["album"],
+             entry["isrc"], entry["normalized_title"], entry["normalized_artist"],
+             entry["normalized_album"], entry["created_at"], entry["updated_at"]),
+        )
+
     def _latest_tracks(self, connection: sqlite3.Connection) -> list[dict]:
         latest = connection.execute(
             "SELECT id FROM apple_library_snapshots ORDER BY imported_at DESC LIMIT 1"
@@ -641,7 +700,25 @@ class DualLibraryService:
             """,
             (latest["id"],),
         ).fetchall()
-        return [dict(row) for row in rows]
+        tracks = [dict(row) for row in rows]
+        known_ids = {track["apple_id"] for track in tracks if track["apple_id"]}
+        known_isrcs = {track["isrc"] for track in tracks if track["isrc"]}
+        known_metadata = {
+            (track["normalized_title"], track["normalized_artist"], track["normalized_album"])
+            for track in tracks
+        }
+        for entry in connection.execute(
+            "SELECT * FROM apple_incremental_entries WHERE verification_status = 'manual_confirmed'"
+        ):
+            if ((entry["apple_id"] and entry["apple_id"] in known_ids)
+                    or (entry["isrc"] and entry["isrc"] in known_isrcs)
+                    or (entry["normalized_title"], entry["normalized_artist"], entry["normalized_album"]) in known_metadata):
+                continue
+            tracks.append({
+                **dict(entry), "track_key": f"incremental:{entry['id']}",
+                "apple_kind": "manual", "row_index": 0,
+            })
+        return tracks
 
     @staticmethod
     def _prepare_local_tracks(local_tracks: Iterable[dict]) -> list[dict]:
@@ -733,8 +810,17 @@ class DualLibraryService:
                 ]
                 reason = "title_subject_artist_compatible"
             if not candidates:
+                candidates = self._cross_credit_candidates(apple, local, rejected)
+                reason = "title_credit_compatible"
+            if not candidates:
+                candidates = self._metadata_review_candidates(apple, local, rejected)
+                reason = "metadata_similar"
+            if not candidates:
                 candidates = self._fuzzy_candidates(apple, local, rejected)
                 reason = "fuzzy"
+            if not candidates:
+                candidates = self._cover_candidates(apple, by_title_subject, local, rejected)
+                reason = "title_cover_review"
             if candidates:
                 review_local_ids.update(candidate["id"] for candidate in candidates)
                 entries.append(self._entry("review", apple, None, reason, candidates))
@@ -751,6 +837,36 @@ class DualLibraryService:
         }
         return {"summary": summary, "entries": entries}
 
+    def find_apple_candidates(self, track: dict) -> list[dict]:
+        """查询个人资料库中可能是同一作品的曲目，供补齐前核对。"""
+        local = {
+            "id": track.get("id") or "apple-precheck",
+            "title": track.get("title") or track.get("song_name") or "",
+            "artist": track.get("artist") or track.get("singers") or "",
+            "album": track.get("album") or "",
+            "isrc": track.get("isrc") or "",
+        }
+        result = self.reconcile([local])
+        candidates = [
+            {**entry["apple"], "match_reason": entry["match_reason"]}
+            for entry in result["entries"]
+            if entry["apple"] and (entry["local"] or entry["candidates"])
+        ]
+        title = normalize_title_subject(local["title"])
+        isrc = local["isrc"].strip().upper()
+        for entry in self.list_incremental_tracks():
+            if entry["verification_status"] != "pending":
+                continue
+            if (isrc and isrc == entry["isrc"]) or (
+                len(title) >= 3 and title == normalize_title_subject(entry["title"])
+            ):
+                candidates.append({
+                    "title": entry["title"], "artist": entry["artist"],
+                    "album": entry["album"], "verification_status": "pending",
+                    "match_reason": "incremental_pending",
+                })
+        return candidates
+
     @staticmethod
     def _artists_are_similar(apple_artist: str, local_artist: str) -> bool:
         """识别艺名附加在本名两侧的保守场景，仅供人工确认。"""
@@ -764,7 +880,81 @@ class DualLibraryService:
         """仅把相同或明确包含关系的歌手视为人工候选。"""
         return bool(apple_artist and local_artist) and (
             apple_artist == local_artist or cls._artists_are_similar(apple_artist, local_artist)
+            or apple_artist.replace("featuring", "").replace("feat", "") == local_artist.replace("featuring", "").replace("feat", "")
         )
+
+    @staticmethod
+    def _cross_credit_candidates(apple: dict, local: Iterable[dict], rejected: set[tuple[str, str]]) -> list[dict]:
+        """歌手署名与另一侧专辑相同且歌名有明显包含关系时，仅供人工确认。"""
+        title = normalize_title_subject(apple["title"])
+        if len(title) < 4:
+            return []
+        return [track for track in local if
+                (apple["track_key"], track["id"]) not in rejected
+                and len(track["normalized_title"]) >= 4
+                and (title.startswith(track["normalized_title"])
+                     or track["normalized_title"].startswith(title))
+                and apple["normalized_artist"]
+                and apple["normalized_artist"] == track["normalized_album"]][:10]
+
+    @staticmethod
+    def _metadata_review_candidates(apple: dict, local: Iterable[dict], rejected: set[tuple[str, str]]) -> list[dict]:
+        """歌名相符且艺人或独立专辑有佐证时，只提供人工候选。"""
+        title = normalize_title_subject(apple["title"])
+        apple_artist = normalize_review_artist(apple["artist"])
+        apple_parts = DualLibraryService._review_artist_parts(apple["artist"])
+        apple_album = DualLibraryService._review_album(apple["album"])
+        candidates = []
+        for track in local:
+            if (apple["track_key"], track["id"]) in rejected:
+                continue
+            local_title = track["normalized_title_subject"]
+            same_title = len(title) >= 2 and title == local_title
+            title_extension = (
+                len(title) >= 6 and len(local_title) >= 6
+                and (title.startswith(local_title) or local_title.startswith(title))
+            )
+            if not same_title and not title_extension:
+                continue
+            local_artist = normalize_review_artist(track["artist"])
+            artist_similarity = (
+                difflib.SequenceMatcher(None, apple_artist, local_artist).ratio()
+                if len(apple_artist) >= 6 and len(local_artist) >= 6 else 0
+            )
+            local_parts = DualLibraryService._review_artist_parts(track["artist"])
+            shared_artist = bool(apple_parts & local_parts)
+            known_alias = any(
+                frozenset((first, second)) in REVIEW_ARTIST_ALIASES
+                for first in apple_parts | {apple_artist}
+                for second in local_parts | {local_artist}
+            )
+            local_album = DualLibraryService._review_album(track["album"])
+            independent_album = (
+                len(apple_album) >= 6 and len(local_album) >= 6
+                and apple_album != title and local_album != local_title
+                and difflib.SequenceMatcher(None, apple_album, local_album).ratio() >= 0.65
+            )
+            if ((same_title and (artist_similarity >= 0.55 or shared_artist or known_alias or independent_album))
+                    or (title_extension and (
+                        artist_similarity >= 0.7 or known_alias
+                        or (len(apple_artist) >= 4 and apple_artist == local_artist)
+                    ))):
+                candidates.append(track)
+        exact_titles = [track for track in candidates if track["normalized_title"] == apple["normalized_title"]]
+        return (exact_titles or candidates)[:10]
+
+    @staticmethod
+    def _review_artist_parts(value: str) -> set[str]:
+        parts = re.split(r"\s*(?:[,，、/&]|\bfeat\.?\b|\bft\.?\b)\s*", value or "", flags=re.I)
+        return {part for item in parts if len(part := normalize_review_artist(item)) >= 3}
+
+    @staticmethod
+    def _review_album(value: str) -> str:
+        album = normalize_text(value)
+        for suffix in ("deluxeversion", "single", "ep"):
+            if album.endswith(suffix):
+                return album.removesuffix(suffix)
+        return album
 
     @staticmethod
     def _fuzzy_candidates(apple: dict, local: Iterable[dict], rejected: set[tuple[str, str]]) -> list[dict]:
@@ -787,6 +977,26 @@ class DualLibraryService:
             if similarity >= 0.72:
                 candidates.append((similarity, track))
         return [track for _, track in sorted(candidates, key=lambda item: item[0], reverse=True)[:10]]
+
+    @staticmethod
+    def _cover_candidates(apple: dict, by_title_subject: dict[str, list[dict]],
+                          local: Iterable[dict], rejected: set[tuple[str, str]]) -> list[dict]:
+        """同名翻唱及本地歌名带歌手前缀时仅作为人工候选。"""
+        title = normalize_title_subject(apple["title"])
+        if len(title) < 3:
+            return []
+        candidates = list(by_title_subject.get(title, []))
+        if len(title) >= 4:
+            candidates.extend(track for track in local
+                              if (normalize_text(apple["title"]) == track["normalized_title_subject"]
+                                  or title == track["normalized_title"])
+                              and track not in candidates)
+        if len(title) >= 5:
+            candidates.extend(track for track in local if " - " in track["title"]
+                              and normalize_title_subject(track["title"].rsplit(" - ", 1)[-1]) == title
+                              and track not in candidates)
+        return [track for track in candidates
+                if (apple["track_key"], track["id"]) not in rejected][:10]
 
     def build_presence_index(self, local_tracks: Iterable[dict]) -> dict[str, set]:
         """构建搜索结果对账索引，避免每个 musicdl 结果重复查询数据库。"""

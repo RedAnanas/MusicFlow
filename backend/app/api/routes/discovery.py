@@ -2,6 +2,7 @@ import asyncio
 import json
 import queue
 import threading
+from pathlib import Path
 from urllib.parse import quote
 from typing import Optional
 
@@ -32,6 +33,12 @@ class AcquisitionRequest(BaseModel):
     local_file_id: Optional[str] = None
     desired_nas: bool = False
     desired_apple: bool = False
+    allow_possible_duplicate: bool = False
+
+
+class ApplePrecheckRequest(BaseModel):
+    selected_track: Optional[dict] = None
+    local_file_id: Optional[str] = None
 
 
 class DualLibraryConfigRequest(BaseModel):
@@ -194,6 +201,30 @@ async def search_apple_catalog(
         return await asyncio.to_thread(apple_catalog_service.search, q, country, limit)
     except OSError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.post("/discovery/apple-precheck")
+async def precheck_apple_fill(request: ApplePrecheckRequest):
+    """补齐前检查个人资料库与公开曲库；后者不代表已在个人库中。"""
+    track = request.selected_track
+    if request.local_file_id:
+        local_tracks = await asyncio.to_thread(media_library_service.load_tracks, False)
+        track = next((item for item in local_tracks if item["id"] == request.local_file_id), None)
+        if not track:
+            raise HTTPException(status_code=404, detail="本地音乐文件不存在")
+    if not track or not (track.get("title") or track.get("song_name") or track.get("filename")):
+        raise HTTPException(status_code=400, detail="缺少可搜索的歌名")
+    title = track.get("title") or track.get("song_name") or Path(track["filename"]).stem
+    personal = await asyncio.to_thread(dual_library_service.find_apple_candidates, track)
+    country = dual_library_config.get()["apple_storefront"]
+    try:
+        catalog = await asyncio.to_thread(
+            apple_catalog_service.search, title, country, 20,
+        )
+        catalog_error = ""
+    except OSError as exc:
+        catalog, catalog_error = [], str(exc)
+    return {"personal": personal, "catalog": catalog, "catalog_error": catalog_error, "country": country}
 
 
 @router.get("/discovery/download-settings")
@@ -419,6 +450,13 @@ async def create_acquisition(request: AcquisitionRequest):
                 "album": local.get("album") or "",
                 "isrc": local.get("isrc") or "",
             }
+    if request.desired_apple and not request.allow_possible_duplicate:
+        candidates = await asyncio.to_thread(
+            dual_library_service.find_apple_candidates,
+            local if request.local_file_id else (request.selected_track or {}),
+        )
+        if candidates:
+            raise HTTPException(status_code=409, detail="个人 Apple Music 资料库中已有疑似同一首歌曲，请先核对后再决定是否上传")
     try:
         job = await asyncio.to_thread(
             acquisition_service.create_job,
