@@ -19,6 +19,7 @@ class MatchDecisionRequest(BaseModel):
     local_file_id: str
     apple_track_key: str
     decision: Literal["confirmed", "rejected"]
+    require_only_unmatched: bool = False
 
 
 class BatchMatchDecisionRequest(BaseModel):
@@ -159,6 +160,7 @@ async def add_apple_incremental_entry(request: AppleIncrementalTrackRequest):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     invalidate_presence_index()
+    invalidate_reconciliation_cache()
     return entry
 
 
@@ -169,6 +171,7 @@ async def delete_apple_incremental_entry(entry_id: str):
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     invalidate_presence_index()
+    invalidate_reconciliation_cache()
     return {"status": "success"}
 
 
@@ -179,6 +182,7 @@ async def confirm_apple_incremental_entry(entry_id: str):
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     invalidate_presence_index()
+    invalidate_reconciliation_cache()
     return entry
 
 
@@ -268,6 +272,18 @@ async def save_library_match(request: MatchDecisionRequest):
     local_tracks = await asyncio.to_thread(media_library_service.load_tracks, False)
     if request.local_file_id not in {track["id"] for track in local_tracks}:
         raise HTTPException(status_code=404, detail="本地音乐文件不存在")
+    if request.require_only_unmatched:
+        result = await asyncio.to_thread(dual_library_service.reconcile, local_tracks)
+        apple_only = {
+            entry["apple"]["track_key"]
+            for entry in result["entries"] if entry["status"] == "apple_only"
+        }
+        local_only = {
+            entry["local"]["id"]
+            for entry in result["entries"] if entry["status"] == "nas_only"
+        }
+        if request.apple_track_key not in apple_only or request.local_file_id not in local_only:
+            raise HTTPException(status_code=409, detail="对账状态已变化，请刷新后重新选择")
     try:
         await asyncio.to_thread(
             dual_library_service.save_match_decision,

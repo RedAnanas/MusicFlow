@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import axios from 'axios'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import ServerFileBrowser from '../components/ServerFileBrowser.vue'
+import AppleFillReviewDialog from '../components/AppleFillReviewDialog.vue'
 
 type ReconciliationStatus = 'both' | 'nas_only' | 'apple_only' | 'review'
 
@@ -68,6 +70,7 @@ interface AppleIncrementalEntry {
 }
 
 const fileInput = ref<HTMLInputElement>()
+const router = useRouter()
 const snapshot = ref<Snapshot | null>(null)
 const ageDays = ref<number | null>(null)
 const isStale = ref(true)
@@ -79,6 +82,11 @@ const currentPage = ref(1)
 const pageSize = ref(100)
 const total = ref(0)
 const entries = ref<ReconciliationEntry[]>([])
+const localOnlyCandidates = ref<TrackSide[]>([])
+const localOnlyOptions = computed(() => localOnlyCandidates.value.map(candidate => ({
+  value: candidate.id || '',
+  label: `${displayTitle(candidate)} · ${displaySubtitle(candidate)}`,
+})))
 const summary = ref<Record<ReconciliationStatus, number>>({ both: 0, nas_only: 0, apple_only: 0, review: 0 })
 const selectedCandidates = reactive<Record<string, string>>({})
 const selectedReviews = ref<ReconciliationEntry[]>([])
@@ -94,6 +102,8 @@ const incrementalEntries = ref<AppleIncrementalEntry[]>([])
 const incrementalOpen = ref(false)
 const incrementalSaving = ref(false)
 const incrementalForm = reactive({ title: '', artist: '', album: '', isrc: '', apple_id: '' })
+const appleReviewOpen = ref(false)
+const appleReviewLocal = ref<TrackSide | null>(null)
 
 const snapshotDescription = computed(() => {
   if (!snapshot.value) return '尚未导入 Apple Music 资料库快照'
@@ -122,6 +132,9 @@ const reasonLabels: Record<string, string> = {
   title_artist_album_diff: '歌名和歌手一致（专辑不同）',
   title_artist_similar: '歌名一致，歌手名相似，等待确认',
   title_subject_artist_compatible: '歌名主体一致、歌手一致或相似，等待确认',
+  title_credit_compatible: '歌名相似、署名信息相关，等待确认',
+  metadata_similar: '歌名与歌手或专辑相似，等待确认',
+  title_cover_review: '同名作品，歌手或版本不同，请试听确认',
   fuzzy: '名称近似，等待确认',
   manual_confirmed: '人工确认',
   no_match: '未找到匹配',
@@ -141,7 +154,9 @@ function displaySubtitle(side: TrackSide | null) {
 }
 
 function displayLocal(entry: ReconciliationEntry) {
-  return entry.local || entry.candidates.find(candidate => candidate.id === selectedCandidates[entry.id]) || null
+  if (entry.local) return entry.local
+  const candidates = entry.status === 'apple_only' ? localOnlyCandidates.value : entry.candidates
+  return candidates.find(candidate => candidate.id === selectedCandidates[entry.id]) || null
 }
 
 function selectableReview(row: ReconciliationEntry) {
@@ -262,6 +277,18 @@ async function removeMediaSource(source: MediaLibrarySource) {
   }
 }
 
+async function loadLocalOnlyCandidates() {
+  const candidates: TrackSide[] = []
+  for (let offset = 0; ; offset += 1000) {
+    const response = await axios.get<ReconciliationResponse>('/api/library/reconciliation', {
+      params: { status: 'nas_only', offset, limit: 1000 },
+    })
+    candidates.push(...response.data.entries.flatMap(entry => entry.local ? [entry.local] : []))
+    if (candidates.length >= response.data.total) break
+  }
+  localOnlyCandidates.value = candidates
+}
+
 async function loadReconciliation(refreshLocal = false) {
   if (!snapshot.value) return
   loading.value = true
@@ -279,9 +306,15 @@ async function loadReconciliation(refreshLocal = false) {
     selectedReviews.value = []
     summary.value = response.data.summary
     total.value = response.data.total
+    if (entries.value.some(entry => entry.status === 'apple_only')) {
+      await loadLocalOnlyCandidates()
+    }
     for (const entry of entries.value) {
       if (entry.status === 'review' && entry.candidates.length) {
         selectedCandidates[entry.id] = entry.candidates[0].id || ''
+      } else if (entry.status === 'apple_only' &&
+        !localOnlyCandidates.value.some(candidate => candidate.id === selectedCandidates[entry.id])) {
+        delete selectedCandidates[entry.id]
       }
     }
   } catch (error) {
@@ -331,13 +364,20 @@ async function saveDecision(entry: ReconciliationEntry, decision: 'confirmed' | 
     ElMessage.warning('请先选择一个本地候选曲目')
     return
   }
-  await axios.post('/api/library/matches', {
-    local_file_id: localFileId,
-    apple_track_key: appleTrackKey,
-    decision,
-  })
-  ElMessage.success(decision === 'confirmed' ? '匹配已确认' : '候选已排除')
-  await loadReconciliation()
+  try {
+    await axios.post('/api/library/matches', {
+      local_file_id: localFileId,
+      apple_track_key: appleTrackKey,
+      decision,
+      require_only_unmatched: entry.status === 'apple_only',
+    })
+    delete selectedCandidates[entry.id]
+    ElMessage.success(decision === 'confirmed' ? '匹配已确认' : '候选已排除')
+    await loadReconciliation()
+  } catch (error) {
+    ElMessage.error(axios.isAxiosError(error) ? error.response?.data?.detail || '保存匹配失败' : '保存匹配失败')
+    if (axios.isAxiosError(error) && error.response?.status === 409) await loadReconciliation()
+  }
 }
 
 async function batchSave(decision: 'confirmed' | 'rejected') {
@@ -380,18 +420,15 @@ async function deleteSnapshot() {
   }
 }
 
-async function handoffLocal(entry: ReconciliationEntry) {
+function handoffLocal(entry: ReconciliationEntry) {
   if (!entry.local?.id) return
-  try {
-    await axios.post('/api/acquisitions', {
-      local_file_id: entry.local.id,
-      desired_nas: false,
-      desired_apple: true,
-    })
-    ElMessage.success('已创建 Apple Music 补齐任务，可在“发现音乐”查看进度')
-  } catch (error) {
-    ElMessage.error(axios.isAxiosError(error) ? error.response?.data?.detail || '创建补齐任务失败' : '创建补齐任务失败')
-  }
+  appleReviewLocal.value = entry.local
+  appleReviewOpen.value = true
+}
+
+function searchAppleFill() {
+  const title = appleReviewLocal.value?.title || (appleReviewLocal.value?.filename || '').replace(/\.[^.]+$/, '')
+  router.push({ path: '/discovery', query: { q: title } })
 }
 
 onMounted(async () => {
@@ -489,23 +526,27 @@ onMounted(async () => {
             <div class="track-meta">{{ displaySubtitle(displayLocal(row)) }}</div>
             <div v-if="displayLocal(row)?.isrc" class="track-code">ISRC {{ displayLocal(row)?.isrc }}</div>
             <template v-if="row.status === 'review'">
-              <el-select v-model="selectedCandidates[row.id]" placeholder="选择本地媒体库候选" class="candidate-select">
+              <el-select v-model="selectedCandidates[row.id]" filterable placeholder="选择本地音乐库候选" class="candidate-select">
                 <el-option v-for="candidate in row.candidates" :key="candidate.id" :value="candidate.id" :label="`${displayTitle(candidate)} · ${displaySubtitle(candidate)}`" />
               </el-select>
             </template>
+            <el-select-v2 v-else-if="row.status === 'apple_only'" v-model="selectedCandidates[row.id]" :options="localOnlyOptions" filterable clearable placeholder="搜索仅本地有的歌曲" class="candidate-select" />
           </template>
         </el-table-column>
         <el-table-column label="匹配依据" width="190">
           <template #default="{ row }">{{ reasonLabels[row.match_reason] || row.match_reason }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="180" fixed="right">
+        <el-table-column label="操作" width="225" fixed="right">
           <template #default="{ row }">
             <template v-if="row.status === 'review'">
               <el-button link type="primary" @click="saveDecision(row, 'confirmed')">确认</el-button>
               <el-button link type="danger" @click="saveDecision(row, 'rejected')">排除</el-button>
             </template>
             <el-button v-else-if="row.status === 'nas_only'" link type="primary" @click="handoffLocal(row)">补到 Apple Music</el-button>
-            <RouterLink v-else-if="row.status === 'apple_only'" :to="{ path: '/discovery', query: { q: [row.apple?.title, row.apple?.artist].filter(Boolean).join(' ') } }"><el-button link type="primary">搜索并补到本地</el-button></RouterLink>
+            <template v-else-if="row.status === 'apple_only'">
+              <el-button link type="primary" @click="saveDecision(row, 'confirmed')">确认</el-button>
+              <RouterLink :to="{ path: '/discovery', query: { q: [row.apple?.title, row.apple?.artist].filter(Boolean).join(' ') } }"><el-button link type="primary">搜索并补到本地</el-button></RouterLink>
+            </template>
             <span v-else class="muted-action">—</span>
           </template>
         </el-table-column>
@@ -526,6 +567,7 @@ onMounted(async () => {
       <el-button type="primary" @click="chooseCsv">选择 CSV 文件</el-button>
     </el-empty>
     <ServerFileBrowser v-model="showMediaBrowser" mode="directory" @select="selectMediaPath" />
+    <AppleFillReviewDialog v-model="appleReviewOpen" :payload="appleReviewLocal?.id ? { local_file_id: appleReviewLocal.id } : null" mode="search" @search="searchAppleFill" @added="loadIncrementalEntries" />
     <el-dialog v-model="mediaDialogOpen" :title="editingMediaId ? '修改本地音乐库目录' : '添加本地音乐库目录'" width="min(520px, 92vw)">
       <el-form label-position="top"><el-form-item label="目录名称"><el-input v-model="mediaForm.name" placeholder="例如 华语收藏" /></el-form-item><el-form-item label="目录地址"><el-input v-model="mediaForm.path" placeholder="服务器上的绝对路径" /></el-form-item><el-button @click="showMediaBrowser = true">浏览服务器目录</el-button></el-form>
       <template #footer><el-button @click="mediaDialogOpen = false">取消</el-button><el-button type="primary" :loading="mediaSaving" @click="saveMediaSource">保存</el-button></template>
