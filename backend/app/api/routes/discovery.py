@@ -61,6 +61,10 @@ class DownloadRequest(BaseModel):
     directory_name: str
 
 
+class MusicLinkRequest(BaseModel):
+    url: str
+
+
 def _warm_presence_index() -> None:
     """在后台扫描整理媒体库，不能阻塞 musicdl 的搜索首条结果。"""
     global presence_index, presence_index_loading
@@ -234,6 +238,35 @@ async def get_download_settings():
         return await asyncio.to_thread(musicdl_client._json, "/api/settings")
     except MusicdlClientError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.post("/discovery/resolve-link")
+async def resolve_discovery_link(request: MusicLinkRequest):
+    """在 musicdl 启动链接解析任务。"""
+    try:
+        return await asyncio.to_thread(musicdl_client._json, "/api/resolve-link", "POST", request.model_dump())
+    except MusicdlClientError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.get("/discovery/resolve-link/{job_id}")
+async def get_discovery_link(job_id: str):
+    """返回解析进度与已解析曲目的双库状态。"""
+    try:
+        result = await asyncio.to_thread(musicdl_client._json, f"/api/resolve-link/{quote(job_id, safe='')}")
+    except MusicdlClientError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    index = _get_presence_index()
+    if index is None:
+        await asyncio.to_thread(presence_index_ready.wait, 1)
+        index = _get_presence_index()
+    for track in result.get("tracks", []):
+        if index is not None:
+            track.update(dual_library_service.lookup_presence(track, index))
+            track["presence_pending"] = False
+        else:
+            track["presence_pending"] = True
+    return result
 
 
 @router.put("/discovery/download-settings")

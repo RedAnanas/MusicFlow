@@ -62,6 +62,8 @@ CSV 必须包含以下列：`Track name`、`Artist name`、`Album`、`Playlist n
 
 musicdl 保持独立服务。MusicFlow 只通过内部 HTTP API 调用搜索、下载和文件读取接口，不复制 musicdl 源码，也不共享其 Cookie 或平台密钥到浏览器。
 
+“发现音乐”支持粘贴网易云音乐、QQ 音乐、酷狗音乐、酷我音乐的 HTTPS 歌单或歌曲链接。musicdl 在后台解析链接；QQ 音乐歌单会逐首显示进度，已解析曲目可先选择已配置的服务器目录下载，并查看逐曲下载进度。该功能需要 musicdl 服务提供 `/api/resolve-link` 任务与进度接口。
+
 MusicFlow 保存下载任务和选择结果；musicdl 负责音源搜索、下载和基础标签写入。下载完成后，MusicFlow 将文件取回自身暂存区并校验文件大小、格式及校验值。
 
 ## 第三阶段设计
