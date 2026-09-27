@@ -130,6 +130,29 @@ def test_download_button_creates_musicdl_server_task(monkeypatch) -> None:
     ]
 
 
+def test_music_link_is_resolved_by_musicdl(monkeypatch) -> None:
+    """歌单和歌曲链接交给 musicdl 解析，不在 MusicFlow 内访问音乐平台。"""
+    calls = []
+
+    def fake_json(path, method="GET", payload=None):
+        calls.append((path, method, payload))
+        return {"job_id": "job-1"} if method == "POST" else {"status": "resolving", "tracks": [{"token": "track-1"}]}
+
+    monkeypatch.setattr(discovery.musicdl_client, "_json", fake_json)
+    monkeypatch.setattr(discovery, "_get_presence_index", lambda: {"ready": True})
+    monkeypatch.setattr(discovery.dual_library_service, "lookup_presence", lambda _track, _index: {"nas_present": False, "apple_present": False})
+    started = asyncio.run(discovery.resolve_discovery_link(
+        discovery.MusicLinkRequest(url="https://music.163.com/#/playlist?id=123")
+    ))
+    result = asyncio.run(discovery.get_discovery_link("job-1"))
+    assert started["job_id"] == "job-1"
+    assert result["tracks"][0]["token"] == "track-1"
+    assert calls == [
+        ("/api/resolve-link", "POST", {"url": "https://music.163.com/#/playlist?id=123"}),
+        ("/api/resolve-link/job-1", "GET", None),
+    ]
+
+
 def test_dual_library_config_selects_independent_watch_folders(monkeypatch) -> None:
     """飞牛与 Apple Music 必须保存不同的监控目录。"""
     nas_folder = WatchFolder(
