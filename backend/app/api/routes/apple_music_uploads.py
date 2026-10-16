@@ -51,6 +51,8 @@ class Event(BaseModel):
     evidence: Evidence = Field(default_factory=Evidence)
     bytes_sent: int | None = Field(default=None, ge=0)
     bytes_total: int | None = Field(default=None, ge=0)
+    signature_progress: int | None = Field(default=None, ge=0, le=100, strict=True)
+    signature_elapsed_seconds: float | None = Field(default=None, ge=0, le=86400, allow_inf_nan=False)
 
 
 class CreateUpload(BaseModel):

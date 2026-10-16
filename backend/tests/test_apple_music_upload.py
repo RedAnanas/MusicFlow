@@ -124,6 +124,38 @@ def test_重复事件幂等且旧租约和乱序事件被拒绝(queue):
             service.event(job["job_id"], binding["worker_id"], payload)
 
 
+def test_签名进度持久化并兼容旧执行器(queue):
+    service, binding, _ = queue
+    enqueue(queue)
+    job = claim(queue)
+    service.event(job['job_id'], binding['worker_id'], event(job, stage='signature', signature_progress=42, signature_elapsed_seconds=90.5))
+    restarted = AppleMusicUploadService(service.database_path)
+    result = restarted.get(job['job_id'])
+    assert result['signature_progress'] == 42
+    assert result['signature_elapsed_seconds'] == 90.5
+    service.event(job['job_id'], binding['worker_id'], event(job, sequence=2))
+    assert service.get(job['job_id'])['signature_progress'] is None
+    service.event(job['job_id'], binding['worker_id'], event(job, sequence=3, state='failed', action='resume_work', signature_progress=42, signature_elapsed_seconds=90.5))
+    assert service.retry(job['job_id'], 'resume_work')['signature_progress'] is None
+
+
+@pytest.mark.parametrize('changes', [{'signature_progress': -1}, {'signature_progress': 101}, {'signature_progress': True}, {'signature_elapsed_seconds': -1}, {'signature_elapsed_seconds': float('inf')}])
+def test_签名进度拒绝非法数值(changes):
+    with pytest.raises(ValueError):
+        api.Event(lease_token='x' * 24, sequence=1, state='uploading', stage='signature', **changes)
+
+
+def test_旧数据库升级保留任务并支持并发初始化(queue):
+    service, _, _ = queue
+    job = enqueue(queue)
+    with service.connect() as connection:
+        connection.execute('ALTER TABLE apple_uploads DROP COLUMN signature_progress')
+        connection.execute('ALTER TABLE apple_uploads DROP COLUMN signature_elapsed_seconds')
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        results = list(executor.map(lambda _: service.get(job['id']), range(3)))
+    assert all(item['id'] == job['id'] and item['signature_progress'] is None for item in results)
+
+
 def test_过期任务只归还原工作进程且拒绝旧租约(queue):
     service, binding, _ = queue
     enqueue(queue)

@@ -67,12 +67,20 @@ class AppleMusicUploadService:
                     sequence INTEGER NOT NULL DEFAULT 0, evidence TEXT NOT NULL DEFAULT '{}',
                     attempt INTEGER NOT NULL DEFAULT 0,
                     bytes_sent INTEGER, bytes_total INTEGER, created_at REAL NOT NULL, updated_at REAL NOT NULL,
+                    signature_progress INTEGER, signature_elapsed_seconds REAL,
                     UNIQUE(account_scope, sha256)
                 );
                 CREATE TABLE IF NOT EXISTS apple_upload_links (
                     conversion_task_id TEXT PRIMARY KEY, upload_id TEXT NOT NULL, source_file TEXT NOT NULL
                 );
             """)
+            columns = {row["name"] for row in connection.execute("PRAGMA table_info(apple_uploads)")}
+            if not {"signature_progress", "signature_elapsed_seconds"}.issubset(columns):
+                connection.execute("BEGIN IMMEDIATE")
+                columns = {row["name"] for row in connection.execute("PRAGMA table_info(apple_uploads)")}
+                for name, kind in (("signature_progress", "INTEGER"), ("signature_elapsed_seconds", "REAL")):
+                    if name not in columns:
+                        connection.execute(f"ALTER TABLE apple_uploads ADD COLUMN {name} {kind}")
 
     def bind_worker(self, save_binding=None):
         """仅由后端本地管理命令调用；首版不自动替换已有绑定。"""
@@ -150,7 +158,7 @@ class AppleMusicUploadService:
             row = connection.execute("SELECT * FROM apple_uploads WHERE id = ?", (job_id,)).fetchone()
         if not row:
             raise KeyError("上传任务不存在")
-        result = {key: row[key] for key in ("id", "state", "stage", "sha256", "size", "bytes_sent", "bytes_total", "created_at", "updated_at")}
+        result = {key: row[key] for key in ("id", "state", "stage", "sha256", "size", "bytes_sent", "bytes_total", "created_at", "updated_at", "signature_progress", "signature_elapsed_seconds")}
         result["error_code"] = row["error_code"]
         result["error"] = ERRORS.get(row["error_code"])
         result["allowed_actions"] = [row["action"]] if row["state"] in {"failed", "media_completed_extras_pending"} and row["action"] != "report_completed" else []
@@ -250,9 +258,9 @@ class AppleMusicUploadService:
                 raise UploadConflict("工作进程不能重置上传队列")
             terminal = state in {"cloud_completed", "requires_review", "failed", "cancelled", "media_completed_extras_pending"}
             connection.execute("""UPDATE apple_uploads SET state = ?, stage = ?, error_code = ?, action = ?, evidence = ?,
-                bytes_sent = ?, bytes_total = ?, sequence = ?, lease_until = ?, updated_at = ? WHERE id = ?""",
+                bytes_sent = ?, bytes_total = ?, signature_progress = ?, signature_elapsed_seconds = ?, sequence = ?, lease_until = ?, updated_at = ? WHERE id = ?""",
                 (state, event.get("stage"), event.get("error_code"), action, json.dumps(evidence),
-                 event.get("bytes_sent"), event.get("bytes_total"), event["sequence"], now + self.LEASE_SECONDS, now, job_id))
+                 event.get("bytes_sent"), event.get("bytes_total"), event.get("signature_progress"), event.get("signature_elapsed_seconds"), event["sequence"], now + self.LEASE_SECONDS, now, job_id))
             # 保留终态租约以便丢失响应时幂等重报；不再重新领取终态任务。
             if terminal:
                 connection.execute("UPDATE apple_uploads SET lease_until = ? WHERE id = ?", (now + 86400, job_id))
@@ -267,7 +275,7 @@ class AppleMusicUploadService:
                 raise KeyError("上传任务不存在")
             if row["state"] not in {"failed", "media_completed_extras_pending"} or row["action"] != action or action == "report_completed" or row["error_code"] in {"unsupported_fingerprint", "unsupported_media", "context_mismatch"}:
                 raise UploadConflict("当前任务不允许此恢复动作，请核对本地记录")
-            connection.execute("UPDATE apple_uploads SET state = 'queued', lease_token = NULL, lease_until = NULL, attempt = attempt + 1, updated_at = ? WHERE id = ?",
+            connection.execute("UPDATE apple_uploads SET state = 'queued', lease_token = NULL, lease_until = NULL, signature_progress = NULL, signature_elapsed_seconds = NULL, attempt = attempt + 1, updated_at = ? WHERE id = ?",
                                (time.time(), job_id))
         return self.get(job_id)
 

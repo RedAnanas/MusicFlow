@@ -703,7 +703,9 @@ def _open(handshake, native_task=None, sdk_directory=None):
             for index, value in enumerate(args[4:]):
                 uc.mem_write(native_sp + 0x28 + index * 8, struct.pack("<Q", value))
             try:
-                uc.emu_start(base + entry, RETURN, timeout=30_000_000, count=200_000_000)
+                # 签名循环关闭逐指令计数，保留超时；旧版指纹仍沿用原限制。
+                uc.emu_start(base + entry, RETURN, timeout=30_000_000,
+                             count=200_000_000 if sdk_directory is not None else 0)
             except UcError:
                 if not stopped:
                     stopped.update(reason="emulator_error", instruction=hex(uc.reg_read(UC_X86_REG_RIP)))

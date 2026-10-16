@@ -170,7 +170,12 @@ class WorkerTests(unittest.TestCase):
             worker.HEARTBEAT_SECONDS = 0.01
 
             def upload(source):
+                progress = uploader.call_args.args[4]
+                progress('signature', 0)
                 time.sleep(0.06)
+                progress('signature', 50)
+                time.sleep(0.02)
+                progress('signature', 100)
                 worker.save(directory / f"upload-{job['sha256']}.dpapi", {"completed": True, "complete_received": True})
                 return {"extras_completed": True}
 
@@ -180,6 +185,10 @@ class WorkerTests(unittest.TestCase):
             events = [call.args[1] for call in worker.json_request.call_args_list]
             self.assertGreater(len(events), 4)
             self.assertEqual([item["sequence"] for item in events], list(range(1, len(events) + 1)))
+            signature_events = [item for item in events if item.get('stage') == 'signature']
+            self.assertTrue(any(item.get('signature_progress') == 50 for item in signature_events))
+            self.assertEqual(signature_events[-1]['signature_progress'], 100)
+            self.assertGreaterEqual(signature_events[-1]['signature_elapsed_seconds'], 0)
 
 
 if __name__ == "__main__":
