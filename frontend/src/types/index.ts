@@ -104,6 +104,8 @@ export interface AppleMusicUpload {
   id: string
   state: string
   stage?: string
+  signature_progress?: number | null
+  signature_elapsed_seconds?: number | null
   error?: string
   error_code?: string
   allowed_actions: string[]

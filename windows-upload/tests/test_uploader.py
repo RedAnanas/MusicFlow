@@ -137,6 +137,7 @@ class UploaderTests(unittest.TestCase):
         status = {'session-id': 'test', 'upload-responses-url': 'responses', 'download-requests-url': 'work'}
         uploader.state.update(cloud_id=123, status=base64.b64encode(plistlib.dumps(status)).decode(), audio_uploaded=False)
         uploader.common, uploader.job, uploader.source = {}, Path('test.dpapi'), Path('test.m4a')
+        uploader._refresh_work_status = Mock(return_value=status)
         uploader.upload_media_extras = Mock(return_value={'extras_completed': True})
         uploader._post = Mock(side_effect=[{'retry-in-ms': 180000, 'sequence-id': 2},
             {'all-work-completed': True, 'payload': [{'cloud-id': 123, 'actions': [{'action': 'complete'}]}]}])

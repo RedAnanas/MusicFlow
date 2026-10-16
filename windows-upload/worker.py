@@ -176,6 +176,7 @@ class Worker:
         lost = threading.Event()
         event_lock = threading.RLock()
         current = {"state": "staging", "stage": "download", "action": job["action"]}
+        signature_started = None
         pending = None
         original_upload_asset = uploader_module.upload_asset
 
@@ -214,6 +215,8 @@ class Worker:
                     pending = None
                 if changes:
                     current.update(changes)
+                if signature_started is not None and current.get("stage") == "signature" and current.get("signature_progress", 0) < 100:
+                    current["signature_elapsed_seconds"] = round(time.monotonic() - signature_started, 1)
                 pending = {**current, "sequence": saved["sequence"] + 1, "lease_token": job["lease_token"]}
                 self.json_request(event_path, pending)
                 saved["sequence"] = pending["sequence"]
@@ -232,13 +235,19 @@ class Worker:
                     pass
 
         def progress(stage, value=None):
+            nonlocal signature_started
             if lost.is_set():
                 raise WorkerError("任务租约已失效")
             stages = {"prepare-fingerprint": "signature", "upload-fingerprint": "signature", "signature": "signature",
                       "upload-track": "audio", "create-session": "metadata", "check-session": "processing",
                       "metadata-processing": "processing", "waiting": "processing"}
-            send({"state": "cloud_processing" if stage in {"waiting", "metadata-processing"} else "uploading",
-                  "stage": "extras" if stage.startswith("extras-") or stage in {"upload-artwork", "upload-lyrics"} else stages.get(stage, "processing")})
+            changes = {"state": "cloud_processing" if stage in {"waiting", "metadata-processing"} else "uploading",
+                       "stage": "extras" if stage.startswith("extras-") or stage in {"upload-artwork", "upload-lyrics"} else stages.get(stage, "processing")}
+            if stage == "signature" and type(value) is int and 0 <= value <= 100:
+                if signature_started is None:
+                    signature_started = time.monotonic()
+                changes.update(signature_progress=value, signature_elapsed_seconds=round(time.monotonic() - signature_started, 1))
+            send(changes)
 
         thread = threading.Thread(target=heartbeat, daemon=True)
         thread.start()

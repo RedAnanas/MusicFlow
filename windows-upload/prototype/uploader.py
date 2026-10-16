@@ -12,6 +12,7 @@ import plistlib
 import re
 import secrets
 import subprocess
+import tempfile
 import time
 from urllib.parse import parse_qs, urlsplit
 from urllib.request import ProxyHandler, build_opener
@@ -136,13 +137,38 @@ class WindowsSongUploader:
 
     def _signature(self):
         if self.signature is None:
+            self.progress("signature", 0)
+            cache = self.private / "signature-cache"
+            cache.mkdir(mode=0o700, exist_ok=True)
+            if cache.is_symlink():
+                raise SongUploadError("签名缓存目录不能为符号链接")
             pcm = self.directory / "signature.pcm"
             result = subprocess.run([str(self.ffmpeg), "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i", str(self.source),
                                     "-ac", "1", "-ar", "16000", "-f", "f32le", str(pcm)], capture_output=True)
             if result.returncode:
                 raise SongUploadError("生成音频签名所需的 PCM 失败")
-            self.signature = generate_signature(pcm.read_bytes(), self.progress)
+            samples = pcm.read_bytes()
+            # 使用实际解码样本，避免相同 AAC 载荷但不同裁剪信息误命中缓存。
+            key = hashlib.sha256(b"signature-f32le-16k-mono-v1\0" + windows_sap.EXPECTED.encode() + samples).hexdigest()
+            target = cache / (key + ".bin")
+            if target.is_file() and not target.is_symlink() and 32 < target.stat().st_size <= 1048576 + 32:
+                data = target.read_bytes()
+                if hashlib.sha256(data[32:]).digest() == data[:32]:
+                    self.signature = data[32:]
+                    self.progress("signature", 100)
+                    return self.signature
+            self.signature = generate_signature(samples, self.progress)
             (self.directory / "signature.bin").write_bytes(self.signature)
+            with tempfile.NamedTemporaryFile(dir=cache, delete=False) as output:
+                temporary = Path(output.name)
+                output.write(hashlib.sha256(self.signature).digest() + self.signature)
+                output.flush()
+                os.fsync(output.fileno())
+            try:
+                temporary.replace(target)
+            finally:
+                temporary.unlink(missing_ok=True)
+            self.progress("signature", 100)
         return self.signature
 
     def _fingerprint(self, kind):
@@ -355,6 +381,17 @@ class WindowsSongUploader:
             time.sleep(delay / 1000)
         raise SongUploadError("元数据仍在服务端处理中；可从等待会话恢复")
 
+    def _refresh_work_status(self):
+        """仅刷新原更新的工作路由，拒绝切换到其他会话。"""
+        previous = plistlib.loads(base64.b64decode(self.state["status"]))
+        initial = plistlib.loads(base64.b64decode(self.state["initial"]))
+        status = self._await_status(initial)
+        if not previous.get("session-id") or status.get("session-id") != previous["session-id"]:
+            raise SongUploadError("工作路由刷新返回了其他会话；保留原记录供核对")
+        self.state["status"] = base64.b64encode(plistlib.dumps(status)).decode("ascii")
+        save_session(self.job, self.state)
+        return status
+
     def _finish(self, initial, track_id, resume_reply=None):
         self.progress("check-session")
         if resume_reply is None:
@@ -416,4 +453,6 @@ class WindowsSongUploader:
                 delay = max(delay, 1000)
                 self.progress("waiting", delay // 1000)
                 time.sleep(delay / 1000)
+                if delay >= 180000:
+                    status = self._refresh_work_status()
         raise SongUploadError("上传会话尚未在等待期限内完成；保留记录供恢复")

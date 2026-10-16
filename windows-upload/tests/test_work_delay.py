@@ -19,6 +19,7 @@ class WorkDelayTests(unittest.TestCase):
                        'status': base64.b64encode(plistlib.dumps({'session-id': 'test', 'download-requests-url': 'https://example.test/work'})).decode()}
         value._post = Mock(return_value={'payload': [{'cloud-id': 7, 'actions': [{'action': 'complete'}]}], 'all-work-completed': True})
         value.upload_media_extras = Mock(return_value={'extras_completed': True})
+        value._refresh_work_status = Mock(return_value=plistlib.loads(base64.b64decode(value.state['status'])))
         return value
 
     @patch('prototype.uploader.save_session')
