@@ -10,6 +10,8 @@ Path(settings.LOGS_DIR).mkdir(parents=True, exist_ok=True)
 # 确保所有必需的目录存在
 from app.config import ensure_directories
 ensure_directories()
+from app.services.configuration_backup import load_general_settings
+load_general_settings()
 
 # 初始化日志服务
 from app.services.logger_service import logger_service
@@ -66,6 +68,8 @@ async def startup_event():
     # 加载历史任务
     from app.api.routes.tasks import load_tasks
     load_tasks()
+    from app.api.routes.tasks import refresh_direct_uploads
+    refresh_direct_uploads()
 
     # 在后台启动任务队列处理
     import asyncio

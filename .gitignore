@@ -47,9 +47,11 @@ tmp/
 # 运行时配置与数据
 config/*.json
 config/*.bak
+config/apple-upload/
 !config/examples/
 !config/examples/*.json
 data/
+windows-upload/.tools/
 
 # 系统文件
 .DS_Store
@@ -63,3 +65,7 @@ coverage/
 htmlcov/
 .pytest_cache/
 .coverage
+
+# 本机容器配置与导入前备份
+config/docker-local/
+config/configuration-backups/

@@ -1,7 +1,7 @@
 import asyncio
 from urllib.parse import urlsplit
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from app.services.config_manager import config_manager
@@ -89,3 +89,52 @@ async def install_ffmpeg():
         return system_service.install_ffmpeg()
     except (OSError, ValueError, RuntimeError) as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@router.get('/apple-upload')
+def upload_preparation():
+    from app.services.apple_upload_setup import preparation_status
+    return preparation_status()
+
+
+@router.get('/apple-upload/desktop-tools')
+def upload_desktop_tools():
+    from fastapi.responses import Response
+    from app.services.apple_upload_setup import desktop_tools
+    return Response(desktop_tools(), media_type='application/zip', headers={'Content-Disposition': 'attachment; filename="musicflow-authorization-tools.zip"'})
+
+
+@router.post('/apple-upload/algorithms')
+async def upload_algorithms(files: list[UploadFile]):
+    from app.services.apple_upload_setup import install_algorithms, preparation_status
+    try:
+        if len(files) != 4:
+            raise ValueError('需要四个算法文件')
+        content = {}
+        for file in files:
+            if file.filename in content:
+                raise ValueError('算法文件重复')
+            data = await file.read(64 * 1024 * 1024 + 1)
+            if len(data) > 64 * 1024 * 1024:
+                raise ValueError('单个算法文件不能超过 64 MiB')
+            content[file.filename] = data
+        await asyncio.to_thread(install_algorithms, content)
+        return preparation_status()
+    except (ValueError, OSError):
+        raise HTTPException(400, '算法导入失败：请选择完整的四个匹配版本文件，并检查存储权限') from None
+
+
+@router.post('/apple-upload/authorization')
+async def upload_authorization(account: UploadFile, key: UploadFile | None = None):
+    from app.services.apple_upload_setup import import_account, preparation_status
+    try:
+        data = await account.read(64 * 1024 * 1024 + 35)
+        secret = await key.read(33) if key else None
+        if len(data) > 64 * 1024 * 1024 + 34:
+            raise ValueError('授权文件过大')
+        await asyncio.to_thread(import_account, data, secret)
+        return preparation_status()
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from None
+    except OSError:
+        raise HTTPException(400, '无法保存授权，请检查存储权限') from None

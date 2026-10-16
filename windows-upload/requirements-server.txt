@@ -1,0 +1,4 @@
+# 服务端独立运行所需；不安装 Frida 或官方桌面客户端。
+unicorn==2.1.4
+pefile==2024.8.26
+cryptography==50.0.2

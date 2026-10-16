@@ -1,5 +1,5 @@
-from pydantic import BaseModel
-from typing import Optional, List
+from pydantic import BaseModel, model_validator
+from typing import Optional, List, Literal
 from datetime import datetime
 from enum import Enum
 
@@ -99,7 +99,17 @@ class Profile(BaseModel):
     output_dir: Optional[str] = None
     apple_music_handoff_enabled: bool = False
     apple_music_import_dir: Optional[str] = None
+    apple_music_delivery_mode: Optional[Literal["none", "client_import", "direct_upload"]] = None
     version: int = 1
+
+    @model_validator(mode="after")
+    def normalize_apple_music_mode(self):
+        if self.apple_music_delivery_mode is None:
+            self.apple_music_delivery_mode = "client_import" if self.apple_music_handoff_enabled else "none"
+        self.apple_music_handoff_enabled = self.apple_music_delivery_mode == "client_import"
+        if self.apple_music_delivery_mode == "direct_upload" and (self.output_format.value != "m4a" or self.codec not in (None, "aac")):
+            raise ValueError("独立上传仅支持 AAC LC M4A，请选择 M4A 与 AAC 编码器")
+        return self
 
 
 class DeliveryTarget(BaseModel):
@@ -134,3 +144,5 @@ class Task(BaseModel):
     apple_music_status: Optional[str] = None
     apple_music_import_file: Optional[str] = None
     apple_music_error: Optional[str] = None
+    apple_music_delivery_mode: Optional[str] = None
+    apple_music_account_scope: Optional[str] = None

@@ -2,7 +2,9 @@
 param(
     [Parameter(Position = 0)]
     [ValidateSet("start", "stop", "restart", "status", "version", "preflight")]
-    [string]$Action = "status"
+    [string]$Action = "status",
+    [ValidateRange(1024, 65535)]
+    [int]$FrontendPort = 3000
 )
 
 Set-StrictMode -Version Latest
@@ -55,9 +57,9 @@ $services = @{
         StateFile = Join-Path $runtimeDir "backend.json"
     }
     frontend = @{
-        Port = 3000
-        Url = "http://127.0.0.1:3000"
-        StateFile = Join-Path $runtimeDir "frontend.json"
+        Port = $FrontendPort
+        Url = "http://127.0.0.1:$FrontendPort"
+        StateFile = Join-Path $runtimeDir $(if ($FrontendPort -eq 3000) { "frontend.json" } else { "frontend-$FrontendPort.json" })
     }
 }
 
@@ -89,7 +91,7 @@ function Test-MusicFlowListener {
     }
 
     return $processInfo.CommandLine -match "(?i)vite" -and
-        $processInfo.CommandLine -match "(?i)--port\s+3000"
+        $processInfo.CommandLine -match "(?i)--port\s+$FrontendPort(?:\s|$)"
 }
 
 function Save-ProcessState {
@@ -178,7 +180,7 @@ function Start-MusicFlowService {
     }
     else {
         $process = Start-Process -FilePath "npm.cmd" `
-            -ArgumentList @("run", "dev", "--", "--host", "0.0.0.0", "--port", "3000") `
+            -ArgumentList @("run", "dev", "--", "--host", "0.0.0.0", "--port", "$FrontendPort") `
             -WorkingDirectory (Join-Path $projectRoot "frontend") `
             -RedirectStandardOutput (Join-Path $logDir "frontend-dev.out.log") `
             -RedirectStandardError (Join-Path $logDir "frontend-dev.err.log") `

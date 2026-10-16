@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param()
 
 Set-StrictMode -Version Latest
@@ -40,7 +40,15 @@ try {
     }
 
     Write-Host "[4/5] Compose 配置检查"
-    & docker.exe compose config -q
+    if (Get-Command docker.exe -ErrorAction SilentlyContinue) {
+        & docker.exe compose config -q
+    }
+    else {
+        $linuxProject = & wsl.exe -d Ubuntu -- wslpath -a ($projectRoot.Replace('\', '/'))
+        Assert-NativeCommand -Step "WSL 项目路径解析"
+        $linuxProject = $linuxProject.Trim()
+        & wsl.exe -d Ubuntu -u root -- docker compose -f "$linuxProject/docker-compose.yml" config -q
+    }
     Assert-NativeCommand -Step "Compose 配置检查"
 
     Write-Host "[5/5] Git 空白字符检查"

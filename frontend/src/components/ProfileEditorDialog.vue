@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import type { Profile } from '../types'
 import ServerFileBrowser from './ServerFileBrowser.vue'
 
@@ -14,6 +14,7 @@ export interface ProfileEditorForm {
   filenameTemplate: string
   directoryTemplate: string
   appleMusicHandoffEnabled: boolean
+  appleMusicDeliveryMode: Profile['appleMusicDeliveryMode']
   appleMusicImportDir: string
 }
 
@@ -21,7 +22,18 @@ const props = defineProps<{ modelValue: boolean; mode: 'create' | 'edit'; form: 
 const emit = defineEmits<{ 'update:modelValue': [value: boolean]; submit: [] }>()
 const showDirectoryBrowser = ref(false)
 const lossless = computed(() => ['alac', 'flac', 'pcm_s16le'].includes(props.form.codec))
-const isValid = computed(() => props.form.name.trim() && props.form.filenameTemplate.trim() && props.form.directoryTemplate.trim() && (!props.form.appleMusicHandoffEnabled || props.form.appleMusicImportDir.trim()))
+const worker = ref<{ bound?: boolean; online?: boolean; authorization_saved?: boolean; compatible?: boolean; context_matches?: boolean; server_verified_at?: number }>({})
+const workerError = ref('')
+const isValid = computed(() => props.form.name.trim() && props.form.filenameTemplate.trim() && props.form.directoryTemplate.trim() && (props.form.appleMusicDeliveryMode !== 'client_import' || props.form.appleMusicImportDir.trim()) && (props.form.appleMusicDeliveryMode !== 'direct_upload' || (props.form.outputFormat === 'm4a' && props.form.codec === 'aac')))
+watch(() => props.modelValue, async open => {
+  if (!open) return
+  try {
+    const response = await fetch('/api/apple-music/workers/status')
+    if (!response.ok) throw new Error('读取失败')
+    worker.value = await response.json()
+    workerError.value = ''
+  } catch { workerError.value = '无法读取服务端上传状态' }
+}, { immediate: true })
 
 const selectAppleMusicDirectory = (paths: string[]) => {
   props.form.appleMusicImportDir = paths[0] || ''
@@ -58,13 +70,19 @@ const selectAppleMusicDirectory = (paths: string[]) => {
         </section>
 
         <section>
-          <div class="section-heading"><div><span>05</span><h3>Apple Music 自动交接</h3></div><p>转换完成后复制到 Apple Music 自动导入目录。</p></div>
-          <div class="switch-row"><div><strong>启用自动交接</strong><span>仅表示文件已交给 Apple Music，不代表云端上传成功。</span></div><el-switch v-model="form.appleMusicHandoffEnabled" /></div>
-          <el-form-item v-if="form.appleMusicHandoffEnabled" label="自动导入目录" required>
+          <div class="section-heading"><div><span>05</span><h3>Apple Music 上传方式</h3></div><p>用于此方案之后创建的任务，不自动上传历史成品。</p></div>
+          <el-form-item label="上传方式"><el-select v-model="form.appleMusicDeliveryMode"><el-option label="不上传" value="none" /><el-option label="官方客户端自动导入" value="client_import" /><el-option label="服务端独立上传（实验）" value="direct_upload" /></el-select></el-form-item>
+          <el-form-item v-if="form.appleMusicDeliveryMode === 'client_import'" label="自动导入目录" required>
             <el-input v-model="form.appleMusicImportDir" readonly placeholder="请选择 Apple Music 自动导入目录">
               <template #append><el-button @click="showDirectoryBrowser = true"><el-icon><FolderOpened /></el-icon>选择</el-button></template>
             </el-input>
           </el-form-item>
+          <div v-if="form.appleMusicDeliveryMode === 'direct_upload'" class="form-callout" role="status"><div>
+            <p>仅支持 AAC LC M4A，服务端上传为实验功能。</p>
+            <p>{{ workerError || (worker.online ? '上传执行器在线' : '上传前请在系统设置中完成授权和算法文件准备。') }}</p>
+            <router-link to="/system#apple-upload" @click="emit('update:modelValue', false)">前往系统设置 · 上传准备</router-link>
+            <p v-if="form.outputFormat !== 'm4a' || form.codec !== 'aac'">请先将输出格式改为 M4A，编码器改为 AAC。</p>
+          </div></div>
         </section>
       </el-form>
 

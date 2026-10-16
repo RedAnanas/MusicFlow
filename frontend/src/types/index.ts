@@ -78,6 +78,7 @@ export interface Profile {
   directoryTemplate: string
   outputDir?: string
   appleMusicHandoffEnabled: boolean
+  appleMusicDeliveryMode: 'none' | 'client_import' | 'direct_upload'
   appleMusicImportDir?: string
   version: number
 }
@@ -92,9 +93,20 @@ export interface Task {
   start_time?: string
   end_time?: string
   error?: string
-  apple_music_status?: 'waiting' | 'received' | 'failed'
+  apple_music_status?: 'waiting' | 'received' | 'failed' | 'delivery_pending'
+  apple_music_delivery_mode?: string
+  apple_music_upload?: AppleMusicUpload
   apple_music_import_file?: string
   apple_music_error?: string
+}
+
+export interface AppleMusicUpload {
+  id: string
+  state: string
+  stage?: string
+  error?: string
+  error_code?: string
+  allowed_actions: string[]
 }
 
 export interface WatchFolder {

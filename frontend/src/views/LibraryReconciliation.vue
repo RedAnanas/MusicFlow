@@ -64,7 +64,7 @@ interface AppleIncrementalEntry {
   album: string
   isrc?: string
   apple_id?: string
-  source: 'manual' | 'catalog' | 'handoff'
+  source: 'manual' | 'catalog' | 'handoff' | 'direct_upload'
   verification_status: 'pending' | 'manual_confirmed' | 'confirmed' | 'absent'
   updated_at: string
 }
@@ -484,8 +484,8 @@ onMounted(async () => {
     </div>
 
     <section class="incremental-card">
-      <div class="incremental-heading"><div><span class="section-label">Apple Music 增量记录</span><p>可手动确认；导入新 CSV 后也会自动核对。</p></div><div class="card-actions"><strong>{{ incrementalEntries.length }} 首</strong><el-button @click="incrementalOpen = true">添加记录</el-button></div></div>
-      <div v-if="incrementalEntries.length" class="incremental-list"><div v-for="entry in incrementalEntries" :key="entry.id"><div><strong>{{ entry.title }}</strong><span>{{ entry.artist }}<template v-if="entry.album"> · {{ entry.album }}</template></span></div><el-tag size="small" :type="entry.verification_status === 'absent' ? 'danger' : entry.verification_status === 'pending' ? 'warning' : 'success'">{{ entry.verification_status === 'confirmed' ? '快照已确认' : entry.verification_status === 'manual_confirmed' ? '手动已确认' : entry.verification_status === 'absent' ? '当前快照未收录' : '待确认' }}</el-tag><span class="incremental-source">{{ entry.source === 'handoff' ? '自动交接' : entry.source === 'catalog' ? 'Apple 曲库添加' : '手工录入' }}</span><div class="entry-actions"><el-button v-if="entry.verification_status === 'pending' || entry.verification_status === 'absent'" link type="primary" @click="confirmIncrementalEntry(entry)">手动确认</el-button><el-button link type="danger" @click="deleteIncrementalEntry(entry)">删除</el-button></div></div></div>
+      <div class="incremental-heading"><div><span class="section-label">Apple Music 增量记录</span><p>交接或云端协议完成仍需资料库快照确认；导入新 CSV 后会自动核对。</p></div><div class="card-actions"><strong>{{ incrementalEntries.length }} 首</strong><el-button @click="incrementalOpen = true">添加记录</el-button></div></div>
+      <div v-if="incrementalEntries.length" class="incremental-list"><div v-for="entry in incrementalEntries" :key="entry.id"><div><strong>{{ entry.title }}</strong><span>{{ entry.artist }}<template v-if="entry.album"> · {{ entry.album }}</template></span></div><el-tag size="small" :type="entry.verification_status === 'absent' ? 'danger' : entry.verification_status === 'pending' ? 'warning' : 'success'">{{ entry.verification_status === 'confirmed' ? '快照已确认' : entry.verification_status === 'manual_confirmed' ? '手动已确认' : entry.verification_status === 'absent' ? '当前快照未收录' : '待确认' }}</el-tag><span class="incremental-source">{{ entry.source === 'direct_upload' ? '独立上传提交' : entry.source === 'handoff' ? '自动交接' : entry.source === 'catalog' ? 'Apple 曲库添加' : '手工录入' }}</span><div class="entry-actions"><el-button v-if="entry.verification_status === 'pending' || entry.verification_status === 'absent'" link type="primary" @click="confirmIncrementalEntry(entry)">手动确认</el-button><el-button link type="danger" @click="deleteIncrementalEntry(entry)">删除</el-button></div></div></div>
       <p v-else class="media-source-empty">暂无增量记录。</p>
     </section>
 

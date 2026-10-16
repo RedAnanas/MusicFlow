@@ -63,6 +63,11 @@ class AcquisitionService:
                 )
                 """
             )
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(acquisition_jobs)")}
+            if "apple_watch_path" not in columns:
+                connection.execute("ALTER TABLE acquisition_jobs ADD COLUMN apple_watch_path TEXT")
+            if "apple_delivery_mode" not in columns:
+                connection.execute("ALTER TABLE acquisition_jobs ADD COLUMN apple_delivery_mode TEXT")
 
     def create_job(
         self,
@@ -130,7 +135,7 @@ class AcquisitionService:
             errors = []
             accepted_statuses = {"submitted", "success", "handoff_pending", "received_unverified", "confirmed_present"}
             needs_nas = job["desired_nas"] and job["nas_status"] not in accepted_statuses
-            needs_apple = job["desired_apple"] and job["apple_status"] not in accepted_statuses
+            needs_apple = job["desired_apple"] and not job.get("apple_upload") and job["apple_status"] not in accepted_statuses
             target_config = dual_library_config.resolve()
             if needs_nas:
                 try:
@@ -146,13 +151,22 @@ class AcquisitionService:
                     self._update(job_id, nas_status="failed")
             if needs_apple:
                 try:
-                    self._deliver_to_watch_folder(
+                    apple_watch_path = self._deliver_to_watch_folder(
                         source_path,
                         job_id,
                         target_config["apple_watch_folder_id"],
                         "Apple Music",
                     )
-                    self._update(job_id, apple_status="submitted")
+                    from app.services.profile_manager import profile_manager
+                    folder = watch_folder_manager.get_watch_folder(target_config["apple_watch_folder_id"])
+                    direct_upload = folder and any(
+                        (profile := profile_manager.get_profile(target.profile_id or "")) is not None
+                        and profile.apple_music_delivery_mode == "direct_upload" for target in folder.targets
+                    )
+                    self._update(job_id, apple_status="submitted", apple_watch_path=str(apple_watch_path),
+                                 apple_delivery_mode="direct_upload" if direct_upload else "client_import")
+                    if direct_upload and job.get("selected_track"):
+                        dual_library_service.upsert_incremental_track(job["selected_track"], source="direct_upload", acquisition_job_id=job_id)
                 except Exception as exc:
                     errors.append(f"提交 Apple Music 监控目录失败：{exc}")
                     self._update(job_id, apple_status="failed")
@@ -160,7 +174,7 @@ class AcquisitionService:
             final_job = self.get_job(job_id)
             target_statuses = [
                 "success" if final_job["nas_status"] in accepted_statuses else final_job["nas_status"] if final_job["desired_nas"] else "success",
-                "success" if final_job["apple_status"] in accepted_statuses else final_job["apple_status"] if final_job["desired_apple"] else "success",
+                "success" if final_job.get("apple_upload") or final_job["apple_status"] in accepted_statuses else final_job["apple_status"] if final_job["desired_apple"] else "success",
             ]
             final_status = "completed" if all(status == "success" for status in target_statuses) else "partial"
             self._update(job_id, status=final_status, error="；".join(errors) or None)
@@ -308,8 +322,9 @@ class AcquisitionService:
             ).fetchall()
             jobs = connection.execute(
                 """
-                SELECT id, selected_track_json FROM acquisition_jobs
-                WHERE desired_apple = 1 AND apple_status IN ('handoff_pending', 'received_unverified')
+                SELECT id, selected_track_json, apple_watch_path FROM acquisition_jobs
+                WHERE desired_apple = 1 AND (apple_status IN ('handoff_pending', 'received_unverified')
+                    OR (apple_status = 'submitted' AND apple_watch_path IS NOT NULL))
                 """
             ).fetchall()
         apple_isrc = {row["isrc"] for row in apple_rows if row["isrc"]}
@@ -319,6 +334,11 @@ class AcquisitionService:
         }
         confirmed = 0
         for job in jobs:
+            if job["apple_watch_path"]:
+                from app.services.apple_music_upload import apple_music_upload_service
+                upload = apple_music_upload_service.for_source(job["apple_watch_path"])
+                if not upload or upload["state"] != "cloud_completed":
+                    continue
             selected = json.loads(job["selected_track_json"] or "{}")
             isrc = (selected.get("isrc") or "").strip().upper()
             metadata = (
@@ -348,6 +368,13 @@ class AcquisitionService:
 
     def retry(self, job_id: str) -> dict:
         job = self.get_job(job_id)
+        if job.get("apple_upload"):
+            from app.services.apple_music_upload import apple_music_upload_service
+            upload = job["apple_upload"]
+            if upload["allowed_actions"]:
+                apple_music_upload_service.retry(upload["id"], upload["allowed_actions"][0])
+            if job["nas_status"] != "failed":
+                return self.get_job(job_id)
         updates = {"status": "queued", "error": None}
         if job["desired_nas"] and job["nas_status"] == "failed":
             updates["nas_status"] = "waiting"
@@ -357,12 +384,18 @@ class AcquisitionService:
         self.start(job_id)
         return self.get_job(job_id)
 
-    @staticmethod
-    def _public_job(job: dict) -> dict:
+    def _public_job(self, job: dict) -> dict:
         job["desired_nas"] = bool(job["desired_nas"])
         job["desired_apple"] = bool(job["desired_apple"])
         selected_track_json = job.pop("selected_track_json", None)
         job["selected_track"] = json.loads(selected_track_json) if selected_track_json else None
+        if job.get("apple_watch_path"):
+            from app.services.apple_music_upload import apple_music_upload_service
+            upload = apple_music_upload_service.for_source(job["apple_watch_path"])
+            if upload:
+                job["apple_upload"] = upload
+                if job["apple_status"] != "confirmed_present":
+                    job["apple_status"] = upload["state"]
         return job
 
 

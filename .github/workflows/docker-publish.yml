@@ -38,8 +38,9 @@ jobs:
         env:
           PYTHONPATH: backend
         run: |
-          pip install -r backend/requirements-dev.txt
+          pip install -r backend/requirements-dev.txt -r windows-upload/requirements-server.txt
           python -m pytest backend/tests
+          PYTHONPATH=windows-upload python -m unittest discover -s windows-upload/tests -q
           python -m app.preflight
 
       - name: 配置 Node.js

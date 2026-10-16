@@ -11,6 +11,9 @@ services:
       CONFIG_DIR: /data/config
       LOGS_DIR: /data/logs
       TEMP_DIR: /data/temp
+      MUSICFLOW_UPLOAD_KEY_FILE: /data/config/apple-upload/keys/store.key
+      MUSICFLOW_UPLOAD_PRIVATE_DIR: /data/config/apple-upload/state
+      MUSICFLOW_APPLE_BINARY: /data/config/apple-upload/binaries/AMPLibraryAgent.exe
       MUSIC_SOURCE_DIR: /music
       # NAS 容器必须确认 Apple Music 目录仍由 SMB/CIFS 挂载提供。
       APPLE_MUSIC_REQUIRE_NETWORK_MOUNT: "true"

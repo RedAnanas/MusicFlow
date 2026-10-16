@@ -16,7 +16,11 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 COPY backend/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
+COPY windows-upload/requirements-server.txt ./requirements-upload.txt
+RUN pip install --no-cache-dir -r requirements-upload.txt
 COPY backend/app ./app
+COPY windows-upload/prototype ./upload-runtime/prototype
+COPY windows-upload/worker.py windows-upload/runtime.py windows-upload/server.py windows-upload/import-server-authorization.py ./upload-runtime/
 COPY VERSION ./VERSION
 COPY --from=frontend-build /frontend/dist /usr/share/nginx/html
 COPY docker/nginx.conf /etc/nginx/conf.d/default.conf
@@ -26,3 +30,10 @@ RUN chmod +x /usr/local/bin/musicflow-start \
 EXPOSE 80
 ENTRYPOINT ["tini", "--"]
 CMD ["/usr/local/bin/musicflow-start"]
+COPY windows-upload/export-server-authorization.py ./upload-runtime/
+COPY windows-upload/scripts/authorize-client.py ./upload-runtime/scripts/
+COPY windows-upload/prototype/requirements.txt ./upload-runtime/prototype/
+COPY windows-upload/scripts/bootstrap-session.js ./upload-runtime/scripts/
+COPY windows-upload/start-authorization.cmd ./upload-runtime/
+COPY windows-upload/scripts/prepare-authorization.ps1 ./upload-runtime/scripts/
+COPY windows-upload/requirements-server.txt ./upload-runtime/
