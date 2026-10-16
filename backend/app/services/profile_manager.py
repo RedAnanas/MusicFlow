@@ -19,7 +19,7 @@ class ProfileManager:
     def load_profiles(self):
         """加载配置"""
         data = config_manager.load(self.PROFILES_FILE)
-        if data:
+        if data is not None:
             for profile_id, profile_dict in data.items():
                 self.profiles[profile_id] = Profile(**profile_dict)
         else:

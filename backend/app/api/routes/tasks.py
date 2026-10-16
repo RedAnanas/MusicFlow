@@ -1,6 +1,7 @@
 import logging
 import uuid
 import json
+import sqlite3
 from pathlib import Path
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
@@ -51,6 +52,31 @@ class TaskResponse(BaseModel):
     apple_music_status: Optional[str] = None
     apple_music_import_file: Optional[str] = None
     apple_music_error: Optional[str] = None
+    apple_music_delivery_mode: Optional[str] = None
+    apple_music_account_scope: Optional[str] = None
+    apple_music_upload: Optional[dict] = None
+
+
+def register_direct_upload(task):
+    """幂等登记已完成成品；入队失败不重新转码。"""
+    from app.services.apple_music_upload import apple_music_upload_service
+
+    return apple_music_upload_service.enqueue(task.id, task.source_file, task.output_file, task.apple_music_account_scope)
+
+
+def refresh_direct_uploads():
+    from app.services.apple_music_upload import apple_music_upload_service
+
+    for task in tasks_cache.values():
+        if task.apple_music_delivery_mode != "direct_upload" or task.status != TaskStatus.SUCCESS:
+            continue
+        try:
+            task.apple_music_upload = apple_music_upload_service.for_task(task.id)
+            if task.apple_music_upload is None and task.apple_music_status == "delivery_pending":
+                task.apple_music_upload = register_direct_upload(task)
+                task.apple_music_error = None
+        except (ValueError, OSError, sqlite3.Error):
+            task.apple_music_error = "上传队列暂不可用或成品校验失败，转换成品已保留"
 
 
 def refresh_apple_music_statuses():
@@ -59,6 +85,8 @@ def refresh_apple_music_statuses():
 
     changed = False
     for task in tasks_cache.values():
+        if task.apple_music_delivery_mode == "direct_upload":
+            continue
         if task.apple_music_status != "waiting" or not task.apple_music_import_file:
             continue
         try:
@@ -139,6 +167,8 @@ def update_task_progress(task_id: str, progress: float, status: str = None, appl
         logger.info(f"Task {task_id} progress: {progress}%, status: {status}")
         # 保存任务到文件
         save_tasks()
+        if status == 'success' and task.apple_music_delivery_mode == 'direct_upload':
+            refresh_direct_uploads()
 
 
 @router.get("/", response_model=List[TaskResponse])
@@ -148,6 +178,7 @@ async def get_tasks(
 ):
     """获取所有任务"""
     refresh_apple_music_statuses()
+    refresh_direct_uploads()
     tasks = list(tasks_cache.values())
 
     # 状态筛选
@@ -170,6 +201,7 @@ async def get_task(task_id: str):
     if task_id not in tasks_cache:
         raise HTTPException(status_code=404, detail="Task not found")
 
+    refresh_direct_uploads()
     return tasks_cache[task_id]
 
 
@@ -235,6 +267,13 @@ async def enqueue_conversion_task(
         # 获取 Profile
         profile = profile_manager.get_profile(task_create.profile_id)
         if profile:
+            task.apple_music_delivery_mode = profile.apple_music_delivery_mode
+            if task.apple_music_delivery_mode == "direct_upload":
+                from app.services.apple_music_upload import apple_music_upload_service
+                worker = apple_music_upload_service.worker_status()
+                if not worker.get("bound"):
+                    raise ValueError("请先导入服务端授权并等待上传执行器就绪")
+                task.apple_music_account_scope = worker["account_scope"]
             # 创建模型任务
             model_task = Task(
                 id=task_id,
@@ -243,6 +282,8 @@ async def enqueue_conversion_task(
                 profile_id=task_create.profile_id,
                 status=ModelTaskStatus.WAITING,
                 start_time=datetime.now(),
+                apple_music_delivery_mode=task.apple_music_delivery_mode,
+                apple_music_account_scope=task.apple_music_account_scope,
             )
 
             # 提交到转换引擎，传入进度回调
@@ -324,15 +365,19 @@ def retry_apple_music_handoff(task: TaskResponse) -> TaskResponse:
     from app.services.profile_manager import profile_manager
 
     profile = profile_manager.get_profile(task.profile_id)
-    if not profile or not profile.apple_music_handoff_enabled:
+    if task.apple_music_delivery_mode == "direct_upload":
+        raise HTTPException(status_code=400, detail="独立上传任务不能使用客户端交接重试")
+    original_directory = str(Path(task.apple_music_import_file).parent) if task.apple_music_import_file else None
+    if not original_directory and (not profile or not profile.apple_music_handoff_enabled):
         raise HTTPException(status_code=400, detail="原转换方案未启用 Apple Music 自动交接")
-    if not profile.apple_music_import_dir:
+    directory = original_directory or profile.apple_music_import_dir
+    if not directory:
         raise HTTPException(status_code=400, detail="原转换方案未配置 Apple Music 自动导入目录")
 
     try:
         task.apple_music_import_file = apple_music_handoff_service.handoff(
             task.output_file,
-            profile.apple_music_import_dir,
+            directory,
         )
         task.apple_music_status = "waiting"
         task.apple_music_error = None

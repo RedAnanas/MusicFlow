@@ -164,8 +164,8 @@ async def update_dual_library_config(request: DualLibraryConfigRequest):
         has_apple = any(
             item.type.value == "convert"
             and (profile := profile_manager.get_profile(item.profile_id or "")) is not None
-            and profile.apple_music_handoff_enabled
-            and bool(profile.apple_music_import_dir)
+            and (getattr(profile, "apple_music_delivery_mode", None) == "direct_upload"
+                 or (profile.apple_music_handoff_enabled and bool(profile.apple_music_import_dir)))
             for item in folder.targets
         )
         if target == "nas" and (not has_copy or has_apple):

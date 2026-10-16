@@ -182,6 +182,7 @@ export const useAppStore = defineStore('app', () => {
         directoryTemplate: p.directory_template,
         outputDir: p.output_dir,
         appleMusicHandoffEnabled: p.apple_music_handoff_enabled,
+        appleMusicDeliveryMode: p.apple_music_delivery_mode,
         appleMusicImportDir: p.apple_music_import_dir,
         version: p.version,
       }))
@@ -207,6 +208,7 @@ export const useAppStore = defineStore('app', () => {
         filename_template: profile.filenameTemplate,
         directory_template: profile.directoryTemplate,
         apple_music_handoff_enabled: profile.appleMusicHandoffEnabled ?? false,
+        apple_music_delivery_mode: profile.appleMusicDeliveryMode,
         apple_music_import_dir: profile.appleMusicImportDir || null,
       }
 
@@ -230,6 +232,7 @@ export const useAppStore = defineStore('app', () => {
         directoryTemplate: response.data.directory_template,
         outputDir: response.data.output_dir,
         appleMusicHandoffEnabled: response.data.apple_music_handoff_enabled,
+        appleMusicDeliveryMode: response.data.apple_music_delivery_mode,
         appleMusicImportDir: response.data.apple_music_import_dir,
         version: response.data.version,
       }
@@ -258,6 +261,7 @@ export const useAppStore = defineStore('app', () => {
       if (profile.appleMusicHandoffEnabled !== undefined) {
         apiData.apple_music_handoff_enabled = profile.appleMusicHandoffEnabled
       }
+      if (profile.appleMusicDeliveryMode !== undefined) apiData.apple_music_delivery_mode = profile.appleMusicDeliveryMode
       if (profile.appleMusicImportDir !== undefined) {
         apiData.apple_music_import_dir = profile.appleMusicImportDir || null
       }
@@ -283,6 +287,7 @@ export const useAppStore = defineStore('app', () => {
         directoryTemplate: response.data.directory_template,
         outputDir: response.data.output_dir,
         appleMusicHandoffEnabled: response.data.apple_music_handoff_enabled,
+        appleMusicDeliveryMode: response.data.apple_music_delivery_mode,
         appleMusicImportDir: response.data.apple_music_import_dir,
         version: response.data.version,
       }

@@ -223,13 +223,21 @@ class ConversionEngine:
 
                     logger.info(f"Writing metadata to output: {task.output_file}")
                     write_success = metadata_service.write_metadata(task.output_file, metadata)
+                    if not write_success and profile.apple_music_delivery_mode == "direct_upload":
+                        raise RuntimeError("最终元数据写入失败，未创建上传任务")
                     logger.info(f"Metadata write result: {'成功' if write_success else '失败'}")
                 else:
                     logger.warning(f"No metadata found in source file: {task.source_file}")
             else:
                 logger.info(f"Metadata policy is '{profile.metadata_policy.value}', skipping metadata copy")
 
-            if profile.apple_music_handoff_enabled:
+            if profile.apple_music_delivery_mode == "direct_upload":
+                final_info = ffprobe_service.get_audio_info(task.output_file)
+                if not final_info or final_info.get("codec") != "aac":
+                    raise RuntimeError("最终标签写入后的 AAC 成品校验失败，未创建上传任务")
+                # 先随转换成功回调持久保存待交付标记，再幂等写入上传队列。
+                task.apple_music_status = "delivery_pending"
+            elif profile.apple_music_handoff_enabled:
                 if not profile.apple_music_import_dir:
                     task.apple_music_status = "failed"
                     task.apple_music_error = "未配置 Apple Music 自动导入目录"

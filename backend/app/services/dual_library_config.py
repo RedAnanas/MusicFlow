@@ -34,8 +34,8 @@ class DualLibraryConfigService:
         if any(
             target.type == DeliveryTargetType.CONVERT
             and (profile := profile_manager.get_profile(target.profile_id or "")) is not None
-            and profile.apple_music_handoff_enabled
-            and bool(profile.apple_music_import_dir)
+            and (getattr(profile, "apple_music_delivery_mode", None) == "direct_upload"
+                 or (profile.apple_music_handoff_enabled and bool(profile.apple_music_import_dir)))
             for target in folder.targets
         ):
             values["apple_watch_folder_id"] = legacy_id

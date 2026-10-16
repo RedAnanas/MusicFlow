@@ -22,6 +22,7 @@ interface ProfileForm {
   filenameTemplate: string
   directoryTemplate: string
   appleMusicHandoffEnabled: boolean
+  appleMusicDeliveryMode: Profile['appleMusicDeliveryMode']
   appleMusicImportDir: string
 }
 
@@ -36,6 +37,7 @@ const createDefaultProfileForm = (): ProfileForm => ({
   filenameTemplate: '{title}.{extension}',
   directoryTemplate: '{album_artist}/{year} - {album}',
   appleMusicHandoffEnabled: false,
+  appleMusicDeliveryMode: 'none',
   appleMusicImportDir: '',
 })
 
@@ -118,6 +120,7 @@ const handleDuplicate = (profile: Profile) => {
     coverPolicy: profile.coverPolicy, filenameTemplate: profile.filenameTemplate,
     directoryTemplate: profile.directoryTemplate,
     appleMusicHandoffEnabled: profile.appleMusicHandoffEnabled,
+    appleMusicDeliveryMode: profile.appleMusicDeliveryMode,
     appleMusicImportDir: profile.appleMusicImportDir || '',
   }
   showCreateDialog.value = true
@@ -153,6 +156,7 @@ const handleEdit = (profile: Profile) => {
     filenameTemplate: profile.filenameTemplate,
     directoryTemplate: profile.directoryTemplate,
     appleMusicHandoffEnabled: profile.appleMusicHandoffEnabled,
+    appleMusicDeliveryMode: profile.appleMusicDeliveryMode,
     appleMusicImportDir: profile.appleMusicImportDir || '',
   }
   showEditDialog.value = true
@@ -173,6 +177,7 @@ const handleUpdate = async () => {
       filenameTemplate: editProfile.value.filenameTemplate,
       directoryTemplate: editProfile.value.directoryTemplate,
       appleMusicHandoffEnabled: editProfile.value.appleMusicHandoffEnabled,
+      appleMusicDeliveryMode: editProfile.value.appleMusicDeliveryMode,
       appleMusicImportDir: editProfile.value.appleMusicImportDir,
     }
 
@@ -249,7 +254,7 @@ const handleDelete = async (id: string) => {
           </article>
           <article class="detail-card">
             <div class="detail-title"><el-icon><Connection /></el-icon><span>Apple Music</span></div>
-            <div class="handoff-state"><span class="status-dot" :class="{ enabled: selectedProfile.appleMusicHandoffEnabled }"></span><div><strong>{{ selectedProfile.appleMusicHandoffEnabled ? '自动交接已开启' : '自动交接未开启' }}</strong><small>{{ selectedProfile.appleMusicImportDir || '转换完成后不会自动导入' }}</small></div></div>
+            <div class="handoff-state"><span class="status-dot" :class="{ enabled: selectedProfile.appleMusicDeliveryMode !== 'none' }"></span><div><strong>{{ selectedProfile.appleMusicDeliveryMode === 'direct_upload' ? '服务端独立上传（实验）' : selectedProfile.appleMusicHandoffEnabled ? '自动交接已开启' : '自动交接未开启' }}</strong><small>{{ selectedProfile.appleMusicDeliveryMode === 'direct_upload' ? '转换后由服务端排队上传，加密保存授权' : selectedProfile.appleMusicImportDir || '转换完成后不会自动导入' }}</small></div></div>
           </article>
           <article class="detail-card preview-card">
             <div class="detail-title"><el-icon><View /></el-icon><span>输出预览</span></div>

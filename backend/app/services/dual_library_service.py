@@ -518,7 +518,7 @@ class DualLibraryService:
         acquisition_job_id: Optional[str] = None,
     ) -> dict:
         """记录手动添加或交接中的 Apple Music 曲目，等待后续快照确认。"""
-        if source not in {"manual", "catalog", "handoff"}:
+        if source not in {"manual", "catalog", "handoff", "direct_upload"}:
             raise ValueError("Apple Music 增量来源无效")
         self.initialize()
         identity_key, values = self._incremental_identity(track)

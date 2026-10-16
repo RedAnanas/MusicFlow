@@ -2,7 +2,7 @@ import uuid
 from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Optional, Literal
 from enum import Enum
 
 router = APIRouter()
@@ -57,6 +57,7 @@ class ProfileCreate(BaseModel):
     output_dir: Optional[str] = None
     apple_music_handoff_enabled: bool = False
     apple_music_import_dir: Optional[str] = None
+    apple_music_delivery_mode: Optional[Literal["none", "client_import", "direct_upload"]] = None
 
 
 class ProfileUpdate(BaseModel):
@@ -76,6 +77,7 @@ class ProfileUpdate(BaseModel):
     output_dir: Optional[str] = None
     apple_music_handoff_enabled: Optional[bool] = None
     apple_music_import_dir: Optional[str] = None
+    apple_music_delivery_mode: Optional[Literal["none", "client_import", "direct_upload"]] = None
 
 
 class ProfileResponse(BaseModel):
@@ -96,6 +98,7 @@ class ProfileResponse(BaseModel):
     output_dir: Optional[str]
     apple_music_handoff_enabled: bool
     apple_music_import_dir: Optional[str]
+    apple_music_delivery_mode: str
 
 
 @router.get("/", response_model=List[ProfileResponse])
@@ -131,7 +134,7 @@ async def create_profile(profile_create: ProfileCreate):
     from app.models import Profile, OutputFormat as ModelOutputFormat
 
     validate_apple_music_directory(
-        profile_create.apple_music_handoff_enabled,
+        profile_create.apple_music_delivery_mode == "client_import" if profile_create.apple_music_delivery_mode is not None else profile_create.apple_music_handoff_enabled,
         profile_create.apple_music_import_dir,
     )
     try:
@@ -152,12 +155,15 @@ async def create_profile(profile_create: ProfileCreate):
             output_dir=profile_create.output_dir,
             apple_music_handoff_enabled=profile_create.apple_music_handoff_enabled,
             apple_music_import_dir=profile_create.apple_music_import_dir,
+            apple_music_delivery_mode=profile_create.apple_music_delivery_mode,
         )
 
         created_profile = profile_manager.create_profile(profile)
         profile_dict = created_profile.dict()
         profile_dict.pop('version', None)
         return ProfileResponse(**profile_dict)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to create profile: {str(e)}")
 
@@ -177,14 +183,11 @@ async def update_profile(profile_id: str, profile_update: ProfileUpdate):
         # 合并更新数据
         update_data = profile_update.model_dump(exclude_unset=True)
 
-        validate_apple_music_directory(
-            update_data.get("apple_music_handoff_enabled", existing_profile.apple_music_handoff_enabled),
-            update_data.get("apple_music_import_dir", existing_profile.apple_music_import_dir),
-        )
-
         # 构建更新后的 Profile
         profile_dict = existing_profile.dict()
         profile_dict.update(update_data)
+        if "apple_music_handoff_enabled" in update_data and "apple_music_delivery_mode" not in update_data:
+            profile_dict["apple_music_delivery_mode"] = None
 
         # 转换枚举值
         if 'output_format' in update_data and update_data['output_format']:
@@ -206,6 +209,7 @@ async def update_profile(profile_id: str, profile_update: ProfileUpdate):
         profile_dict.pop('version', None)
 
         profile = Profile(**profile_dict)
+        validate_apple_music_directory(profile.apple_music_handoff_enabled, profile.apple_music_import_dir)
 
         updated_profile = profile_manager.update_profile(profile_id, profile)
         if not updated_profile:
@@ -216,6 +220,8 @@ async def update_profile(profile_id: str, profile_update: ProfileUpdate):
         return ProfileResponse(**result_dict)
     except HTTPException:
         raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to update profile: {str(e)}")
 

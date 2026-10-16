@@ -32,13 +32,18 @@ jobs:
         run: node scripts/sync-version.mjs --check
 
       - name: 安装后端依赖
-        run: pip install -r backend/requirements-dev.txt
+        run: pip install -r backend/requirements-dev.txt -r windows-upload/requirements-server.txt
 
       - name: 后端测试
         run: python -m pytest
 
+      - name: 上传执行器离线回归
+        env:
+          PYTHONPATH: windows-upload
+        run: python -m unittest discover -s windows-upload/tests -q
+
       - name: Python 编译检查
-        run: python -m compileall -q backend/app backend/tests
+        run: python -m compileall -q backend/app backend/tests windows-upload
 
       - name: 安装前端依赖
         working-directory: frontend
