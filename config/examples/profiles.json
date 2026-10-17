@@ -14,6 +14,9 @@
     "filename_template": "{title}.{extension}",
     "directory_template": "{album_artist}/{year} - {album}",
     "output_dir": null,
+    "apple_music_delivery_mode": "client_import",
+    "apple_music_handoff_enabled": true,
+    "apple_music_import_dir": "/music/apple-import",
     "version": 1
   }
 }

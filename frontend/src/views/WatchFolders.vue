@@ -4,6 +4,7 @@ import { useAppStore } from '../stores/app'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { DeliveryTarget, WatchFolder, WatchFolderEvent } from '../types'
 import WatchFolderEditorDialog from '../components/WatchFolderEditorDialog.vue'
+import axios from 'axios'
 
 const store = useAppStore()
 const showCreateDialog = ref(false)
@@ -14,11 +15,32 @@ const showDetailsDialog = ref(false)
 const selectedFolderName = ref('')
 const watchEvents = ref<WatchFolderEvent[]>([])
 const eventsLoading = ref(false)
+const routingOpen = ref(false)
+const routedFiles = ref<Array<{ path: string; review?: string; outputs: Array<{ library: string; state: string; status?: string; error?: string; task_id?: string }> }>>([])
+const manualTarget = ref<'nas' | 'apple' | 'both'>('both')
+const routingLabels: Record<string, string> = { nas: '本地', apple: 'Apple Music', waiting: '等待处理', submitted: '已创建转换任务', success: '已入库', skipped: '成品已存在', blocked: '需要核对', failed: '失败', processing: '处理中', requires_review: '需要人工核对', handoff_pending: '等待接收', received_unverified: '已接收，待确认' }
+async function showRouting() {
+  if (!selectedFolder.value) return
+  routedFiles.value = (await axios.get(`/api/watch-folders/${selectedFolder.value.id}/files`)).data
+  routingOpen.value = true
+}
+async function processFile(path: string) {
+  if (!selectedFolder.value) return
+  try {
+    await ElMessageBox.confirm('请确认该歌曲及版本确实需要补到所选目标。已提交的输出会保留。', '确认处理', { type: 'warning' })
+    await axios.post(`/api/watch-folders/${selectedFolder.value.id}/files/process`, { path, target: manualTarget.value })
+    await showRouting()
+    ElMessage.success('已按所选目标处理，转换或上传进度请查看操作记录')
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close') ElMessage.error(axios.isAxiosError(error) ? error.response?.data?.detail || '处理失败' : '处理失败')
+  }
+}
 let refreshTimer: ReturnType<typeof setInterval> | undefined
 
 const newFolder = ref({
   name: '',
   inputDir: '',
+  defaultTarget: 'both' as WatchFolder['defaultTarget'],
   targets: [] as DeliveryTarget[],
   profileIds: [] as string[],
   outputDir: '',
@@ -30,6 +52,7 @@ const newFolder = ref({
 const editFolder = ref({
   name: '',
   inputDir: '',
+  defaultTarget: 'both' as WatchFolder['defaultTarget'],
   targets: [] as DeliveryTarget[],
   profileIds: [] as string[],
   outputDir: '',
@@ -95,6 +118,7 @@ const handleCreate = async () => {
     newFolder.value = {
       name: '',
       inputDir: '',
+      defaultTarget: 'both',
       targets: [],
       profileIds: [],
       outputDir: '',
@@ -104,7 +128,7 @@ const handleCreate = async () => {
     }
   } catch (error) {
     console.error('>>> handleCreate error:', error)
-    ElMessage.error('创建失败')
+    ElMessage.error(axios.isAxiosError(error) ? error.response?.data?.detail || '创建失败' : '创建失败')
   }
 }
 
@@ -114,6 +138,7 @@ const handleEdit = (folder: WatchFolder) => {
   editFolder.value = {
     name: folder.name,
     inputDir: folder.inputDir,
+    defaultTarget: folder.defaultTarget,
     targets: folder.targets.map(target => ({ ...target })),
     profileIds: [],
     outputDir: '',
@@ -134,7 +159,7 @@ const handleUpdate = async () => {
     showEditDialog.value = false
   } catch (error) {
     console.error('>>> handleUpdate error:', error)
-    ElMessage.error('更新失败')
+    ElMessage.error(axios.isAxiosError(error) ? error.response?.data?.detail || '更新失败' : '更新失败')
   }
 }
 
@@ -202,7 +227,7 @@ const handleEvents = async (folder: WatchFolder) => {
     <div class="page-header">
       <div class="page-title-block">
         <h1>监控目录</h1>
-        <p>持续监听下载入口，按一条或多条输出规则处理新音乐。</p>
+        <p>统一下载入口，按任务目标或目录默认目标分流到两个音乐库。</p>
       </div>
       <el-button type="primary" @click="showCreateDialog = true">
         <el-icon><Plus /></el-icon>
@@ -210,6 +235,7 @@ const handleEvents = async (folder: WatchFolder) => {
       </el-button>
     </div>
 
+    <div v-if="selectedFolder && selectedFolder.defaultTarget !== 'all'" style="margin-bottom:16px"><el-button @click="showRouting">查看 {{ selectedFolder.name }} 的文件目标与待确认项</el-button></div>
     <div class="watch-summary">
       <div><span>监控目录</span><strong>{{ store.watchFolders.length }}</strong></div>
       <div><span>已启用</span><strong>{{ enabledCount }}</strong></div>
@@ -390,6 +416,12 @@ const handleEvents = async (folder: WatchFolder) => {
       </el-table>
     </el-dialog>
   </div>
+  <el-dialog v-model="routingOpen" title="文件目标与待确认项（最近 200 条）" width="min(960px,95vw)">
+    <p>默认目标只影响新文件。需要补另一边时，选择目标后明确处理；已提交输出的进度和重试请到操作记录查看。</p>
+    <el-radio-group v-model="manualTarget"><el-radio-button value="nas">仅本地</el-radio-button><el-radio-button value="apple">仅 Apple Music</el-radio-button><el-radio-button value="both">双库</el-radio-button></el-radio-group>
+    <el-table :data="routedFiles" style="margin-top:16px"><el-table-column prop="path" label="源文件" min-width="260"/><el-table-column label="处理记录" min-width="260"><template #default="{ row }"><span v-if="row.review">{{ row.review }}</span><span v-else-if="!row.outputs.length">目标库已有，已跳过</span><div v-for="(output,index) in row.outputs" :key="index">{{ routingLabels[output.library] }}：{{ routingLabels[output.status || output.state] || output.status || output.state }} {{ output.error || '' }}</div></template></el-table-column><el-table-column label="操作" width="150"><template #default="{ row }"><el-button @click="processFile(row.path)">{{ row.review ? '确认并处理' : '补到所选目标' }}</el-button></template></el-table-column></el-table>
+  </el-dialog>
+
 </template>
 
 <style scoped>

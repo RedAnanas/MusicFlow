@@ -385,3 +385,60 @@ def test_独立上传增量来源保持待快照确认(queue):
     entry = library.upsert_incremental_track({"title": "测试曲目", "artist": "测试歌手", "album": "测试专辑"}, source="direct_upload")
     assert entry["source"] == "direct_upload"
     assert entry["verification_status"] == "pending"
+
+
+def test_阶段时间线保留重复等待且幂等重报不重复记账(queue, monkeypatch):
+    service, binding, _ = queue
+    monkeypatch.setattr("app.services.apple_music_upload.time.time", lambda: 1000)
+    upload = enqueue(queue)
+    job = claim(queue)
+    first = event(job, stage="waiting", stage_token=1, wait_seconds=180)
+    monkeypatch.setattr("app.services.apple_music_upload.time.time", lambda: 1010)
+    service.event(upload["id"], binding["worker_id"], first)
+    service.event(upload["id"], binding["worker_id"], first)
+    monkeypatch.setattr("app.services.apple_music_upload.time.time", lambda: 1020)
+    service.event(upload["id"], binding["worker_id"], event(job, 2, stage="waiting", stage_token=1, wait_seconds=180))
+    timeline = service.get(upload["id"])["timeline"]
+    assert len(timeline) == 2
+    assert timeline[-1]["wait_until"] == 1190
+    service.event(upload["id"], binding["worker_id"], event(job, 3, stage="waiting", stage_token=2, wait_seconds=180))
+    timeline = service.get(upload["id"])["timeline"]
+    assert len(timeline) == 3
+    assert timeline[-2]["elapsed_seconds"] == 10
+    assert timeline[-1]["wait_until"] == 1200
+
+
+def test_完成后总耗时冻结且重启保留明细(queue, monkeypatch):
+    service, binding, _ = queue
+    monkeypatch.setattr("app.services.apple_music_upload.time.time", lambda: 1000)
+    upload = enqueue(queue)
+    job = claim(queue)
+    service.event(upload["id"], binding["worker_id"], event(job, stage="full-lowres", stage_progress=40))
+    monkeypatch.setattr("app.services.apple_music_upload.time.time", lambda: 1030)
+    service.event(upload["id"], binding["worker_id"], event(job, 2, state="cloud_completed", stage="complete", evidence={key: True for key in ("complete_received", "all_work_completed", "extras_completed")}))
+    monkeypatch.setattr("app.services.apple_music_upload.time.time", lambda: 1100)
+    value = AppleMusicUploadService(service.database_path).get(upload["id"])
+    assert value["finished_at"] == 1030
+    assert value["elapsed_seconds"] == 30
+    assert sum(item["elapsed_seconds"] for item in value["timeline"]) == 30
+    assert value["timeline"][-1]["progress"] == 40
+
+
+def test_恢复保留前轮耗时且取消关闭排队阶段(queue):
+    service, binding, _ = queue
+    upload = enqueue(queue)
+    job = claim(queue)
+    service.event(upload["id"], binding["worker_id"], event(job, state="failed", action="resume_work", error_code="upload_failed"))
+    service.retry(upload["id"], "resume_work")
+    service.cancel(upload["id"])
+    value = service.get(upload["id"])
+    assert len(value["timeline"]) == 2
+    assert all(item["ended_at"] is not None for item in value["timeline"])
+
+
+def test_阶段进度拒绝非有限数及越界输入():
+    from app.api.routes.apple_music_uploads import Event
+    from pydantic import ValidationError
+    for changes in ({"stage_progress": 101}, {"stage_progress": float("nan")}, {"stage_token": float("inf")}, {"wait_seconds": 601}):
+        with pytest.raises(ValidationError):
+            Event(lease_token="x" * 32, sequence=1, state="uploading", **changes)

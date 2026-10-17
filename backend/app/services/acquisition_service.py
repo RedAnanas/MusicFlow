@@ -1,4 +1,5 @@
 import hashlib
+import asyncio
 import json
 import os
 import shutil
@@ -84,7 +85,28 @@ class AcquisitionService:
             raise ValueError("缺少 musicdl 搜索结果或本地源文件")
         job_id = uuid.uuid4().hex
         now = datetime.now(timezone.utc).isoformat()
-        with self._connect() as connection:
+        with self._lock, self._connect() as connection:
+            if selected_track:
+                identity = ((selected_track.get("isrc") or "").strip().upper(),
+                            tuple(normalize_text(selected_track.get(key) or selected_track.get(fallback)) for key, fallback in
+                                  (("song_name", "title"), ("singers", "artist"), ("album", "album"))))
+                rows = connection.execute("SELECT * FROM acquisition_jobs ORDER BY created_at DESC LIMIT 1000").fetchall()
+                for row in rows:
+                    previous = json.loads(row["selected_track_json"] or "{}")
+                    same = (identity[0] and identity[0] == (previous.get("isrc") or "").strip().upper()) or (
+                        all(identity[1]) and identity[1] == tuple(normalize_text(previous.get(key) or previous.get(fallback)) for key, fallback in
+                                                                 (("song_name", "title"), ("singers", "artist"), ("album", "album"))))
+                    if not same:
+                        continue
+                    existing = self._public_job(dict(row))
+                    if existing["status"] == "failed":
+                        continue
+                    pending_nas = existing["desired_nas"] and existing["nas_status"] in {"waiting", "submitted", "processing"}
+                    pending_apple = existing["desired_apple"] and existing["apple_status"] not in {"failed", "cancelled", "requires_review", "not_needed", "confirmed_present", "cloud_completed"}
+                    if (desired_nas and pending_nas) or (desired_apple and pending_apple):
+                        if (not desired_nas or pending_nas) and (not desired_apple or pending_apple):
+                            return existing
+                        raise ValueError("该歌曲已有处理中的任务，请等待完成后再补齐其他目标")
             connection.execute(
                 """
                 INSERT INTO acquisition_jobs (
@@ -137,6 +159,19 @@ class AcquisitionService:
             needs_nas = job["desired_nas"] and job["nas_status"] not in accepted_statuses
             needs_apple = job["desired_apple"] and not job.get("apple_upload") and job["apple_status"] not in accepted_statuses
             target_config = dual_library_config.resolve()
+            unified_id = target_config.get("unified_watch_folder_id")
+            if unified_id and (needs_nas or needs_apple):
+                watch_path = self._deliver_to_watch_folder(source_path, job_id, unified_id, "统一", (needs_nas, needs_apple))
+                folder = watch_folder_manager.get_watch_folder(unified_id)
+                from app.services.profile_manager import profile_manager
+                direct = any((profile := profile_manager.get_profile(item.profile_id or "")) and profile.apple_music_delivery_mode == "direct_upload" for item in folder.targets)
+                fields = {}
+                if needs_nas:
+                    fields.update(nas_path=str(watch_path))
+                if needs_apple:
+                    fields.update(apple_watch_path=str(watch_path), apple_delivery_mode="direct_upload" if direct else "client_import")
+                self._update(job_id, **fields)
+                needs_nas = needs_apple = False
             if needs_nas:
                 try:
                     watch_path = self._deliver_to_watch_folder(
@@ -176,7 +211,7 @@ class AcquisitionService:
                 "success" if final_job["nas_status"] in accepted_statuses else final_job["nas_status"] if final_job["desired_nas"] else "success",
                 "success" if final_job.get("apple_upload") or final_job["apple_status"] in accepted_statuses else final_job["apple_status"] if final_job["desired_apple"] else "success",
             ]
-            final_status = "completed" if all(status == "success" for status in target_statuses) else "partial"
+            final_status = "completed" if unified_id or all(status == "success" for status in target_statuses) else "partial"
             self._update(job_id, status=final_status, error="；".join(errors) or None)
             if final_status == "completed" and final_job["musicdl_download_id"]:
                 try:
@@ -228,6 +263,7 @@ class AcquisitionService:
         job_id: str,
         watch_folder_id: str,
         target_name: str,
+        routing: Optional[tuple[bool, bool]] = None,
     ) -> Path:
         if not watch_folder_id:
             raise ValueError(f"未配置{target_name}补齐监控目录")
@@ -236,24 +272,56 @@ class AcquisitionService:
             raise ValueError(f"{target_name}补齐监控目录不存在")
         if not watch_folder.enabled or not watch_folder.auto_process:
             raise ValueError(f"{target_name}补齐监控目录未启用自动处理")
+        if routing:
+            from app.services.watch_routing import target_library
+            available = {target_library(item) for item in watch_folder.targets}
+            needed = ({"nas"} if routing[0] else set()) | ({"apple"} if routing[1] else set())
+            if not needed <= available:
+                raise ValueError("统一入口缺少本次目标的输出规则")
         target_dir = Path(watch_folder.input_dir)
         if not target_dir.is_dir():
             raise ValueError(f"{target_name}补齐监控目录不可访问")
-        target_path = target_dir / source_path.name
         source_checksum = self._sha256(source_path)
-        if target_path.exists():
-            if self._sha256(target_path) == source_checksum:
-                return target_path
-            target_path = target_dir / f"{source_path.stem}-{job_id[:8]}{source_path.suffix}"
-        temp_path = target_dir / f".{target_path.name}.{uuid.uuid4().hex}.musicflow-copying"
+        temp_path = target_dir / f".{source_path.name}.{uuid.uuid4().hex}.musicflow-copying"
         try:
             shutil.copy2(source_path, temp_path)
             if self._sha256(temp_path) != source_checksum:
                 raise IOError("本地目标文件校验失败")
-            os.replace(temp_path, target_path)
+            number = 1
+            while True:
+                name = source_path.name if number == 1 else f"{source_path.stem} ({number}){source_path.suffix}"
+                target_path = target_dir / name
+                exists = target_path.exists() or target_path.is_symlink()
+                if exists and (target_path.is_symlink() or not target_path.is_file() or self._sha256(target_path) != source_checksum):
+                    number += 1
+                    continue
+                # 硬链接原子发布完整文件，目标已存在时绝不覆盖。
+                publish = None if exists else lambda: os.link(temp_path, target_path)
+                try:
+                    if routing:
+                        from app.services.watch_routing import watch_routing
+                        fields = {}
+                        if routing[0]:
+                            fields.update(nas_path=str(target_path), nas_status="submitted")
+                        if routing[1]:
+                            fields.update(apple_watch_path=str(target_path), apple_status="submitted")
+                        self._update(job_id, **fields)
+                        watch_routing.register(watch_folder, target_path, target_path if exists else temp_path,
+                                               *routing, merge=True, job_id=job_id, publish=publish)
+                    elif publish:
+                        publish()
+                    break
+                except FileExistsError:
+                    # 并发任务先发布时重新核对内容，只有内容不同时才换名。
+                    continue
+            if routing and watch_folder_manager.loop and watch_folder_manager.loop.is_running():
+                asyncio.run_coroutine_threadsafe(
+                    watch_folder_manager._process_file(watch_folder, str(target_path), "acquisition", wait=True),
+                    watch_folder_manager.loop,
+                ).add_done_callback(watch_folder_manager._log_callback_error)
+            return target_path
         finally:
             temp_path.unlink(missing_ok=True)
-        return target_path
 
     def mark_nas_delivered(self, source_path: str, output_path: Path) -> None:
         """本地成品进入整理媒体库后，再将对应任务标记为已入库。"""
@@ -322,7 +390,7 @@ class AcquisitionService:
             ).fetchall()
             jobs = connection.execute(
                 """
-                SELECT id, selected_track_json, apple_watch_path FROM acquisition_jobs
+                SELECT id, selected_track_json, apple_watch_path, apple_delivery_mode FROM acquisition_jobs
                 WHERE desired_apple = 1 AND (apple_status IN ('handoff_pending', 'received_unverified')
                     OR (apple_status = 'submitted' AND apple_watch_path IS NOT NULL))
                 """
@@ -334,7 +402,7 @@ class AcquisitionService:
         }
         confirmed = 0
         for job in jobs:
-            if job["apple_watch_path"]:
+            if job["apple_watch_path"] and job["apple_delivery_mode"] == "direct_upload":
                 from app.services.apple_music_upload import apple_music_upload_service
                 upload = apple_music_upload_service.for_source(job["apple_watch_path"])
                 if not upload or upload["state"] != "cloud_completed":
@@ -368,6 +436,15 @@ class AcquisitionService:
 
     def retry(self, job_id: str) -> dict:
         job = self.get_job(job_id)
+        from app.services.watch_routing import watch_routing
+        routed = watch_routing.for_source(job.get("nas_path") or job.get("apple_watch_path"))
+        if routed:
+            folder_id, plan = routed
+            if not watch_folder_manager.loop or not watch_folder_manager.loop.is_running():
+                raise ValueError("监控服务尚未就绪")
+            libraries = {library for library in ("nas", "apple") if job[f"desired_{library}"]}
+            asyncio.run_coroutine_threadsafe(self._retry_routed_outputs(folder_id, plan, libraries), watch_folder_manager.loop).result(timeout=30)
+            return self.get_job(job_id)
         if job.get("apple_upload"):
             from app.services.apple_music_upload import apple_music_upload_service
             upload = job["apple_upload"]
@@ -384,11 +461,56 @@ class AcquisitionService:
         self.start(job_id)
         return self.get_job(job_id)
 
+    async def _retry_routed_outputs(self, folder_id, plan, libraries=None):
+        from app.api.routes.tasks import tasks_cache, retry_task, retry_task_apple_music_handoff
+        from app.services.watch_routing import watch_routing
+        from app.services.apple_music_upload import apple_music_upload_service
+
+        for item in plan["outputs"]:
+            if libraries is not None and item["library"] not in libraries:
+                continue
+            task = tasks_cache.get(item.get("task_id"))
+            if not task:
+                if item["state"] == "failed" and not item.get("task_id"):
+                    item.update(state="waiting", error=None)
+                continue
+            upload = apple_music_upload_service.for_task(task.id)
+            if upload:
+                if upload["allowed_actions"]:
+                    await asyncio.to_thread(apple_music_upload_service.retry, upload["id"], upload["allowed_actions"][0])
+            elif task.status.value == "failed":
+                retried = await retry_task(task.id)
+                item["task_id"] = retried.id
+            elif task.apple_music_status == "failed":
+                await retry_task_apple_music_handoff(task.id)
+        watch_routing.save(folder_id, plan["path"], plan)
+        folder = watch_folder_manager.get_watch_folder(folder_id)
+        if folder:
+            await watch_folder_manager._process_file(folder, plan["path"], "retry")
+
     def _public_job(self, job: dict) -> dict:
         job["desired_nas"] = bool(job["desired_nas"])
         job["desired_apple"] = bool(job["desired_apple"])
         selected_track_json = job.pop("selected_track_json", None)
         job["selected_track"] = json.loads(selected_track_json) if selected_track_json else None
+        from app.services.watch_routing import watch_routing
+        routed = watch_routing.for_source(job.get("nas_path") or job.get("apple_watch_path"))
+        if routed:
+            _, plan = routed
+            for library, field in (("nas", "nas_status"), ("apple", "apple_status")):
+                if not job[f"desired_{library}"] or job[field] == "confirmed_present":
+                    continue
+                states = [watch_routing.output_status(item) for item in plan["outputs"] if item["library"] == library]
+                if not states:
+                    continue
+                if any(state in {"failed", "blocked"} for state in states):
+                    job[field] = "failed"
+                elif any(state in {"skipped", "requires_review"} for state in states):
+                    job[field] = "requires_review"
+                elif all(state == "success" for state in states):
+                    job[field] = "success"
+                else:
+                    job[field] = states[0] if len(set(states)) == 1 and states[0] in {"handoff_pending", "received_unverified"} else "processing"
         if job.get("apple_watch_path"):
             from app.services.apple_music_upload import apple_music_upload_service
             upload = apple_music_upload_service.for_source(job["apple_watch_path"])
@@ -396,6 +518,17 @@ class AcquisitionService:
                 job["apple_upload"] = upload
                 if job["apple_status"] != "confirmed_present":
                     job["apple_status"] = upload["state"]
+        if routed:
+            states = [job[field] for field in ("nas_status", "apple_status") if job[field] != "not_needed"]
+            if any(state in {"failed", "requires_review", "cancelled"} for state in states):
+                job["status"] = "partial"
+            elif all(state in {"success", "confirmed_present", "cloud_completed"} for state in states):
+                job["status"] = "completed"
+            elif all(state in {"success", "confirmed_present", "cloud_completed", "received_unverified", "handoff_pending"} for state in states):
+                job["status"] = "awaiting_confirmation"
+            else:
+                job["status"] = "processing"
+        job["routing_managed"] = bool(routed)
         return job
 
 

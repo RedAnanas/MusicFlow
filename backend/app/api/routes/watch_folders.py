@@ -1,7 +1,7 @@
 import logging
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Literal
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
@@ -22,6 +22,7 @@ class WatchFolderCreate(BaseModel):
     recursive_scan: bool = True
     scan_interval_minutes: int = 5
     output_dir: Optional[str] = None
+    default_target: Literal["all", "nas", "apple", "both"] = "all"
 
 
 class WatchFolderUpdate(BaseModel):
@@ -33,6 +34,7 @@ class WatchFolderUpdate(BaseModel):
     recursive_scan: Optional[bool] = None
     scan_interval_minutes: Optional[int] = None
     output_dir: Optional[str] = None
+    default_target: Optional[Literal["all", "nas", "apple", "both"]] = None
 
 
 class WatchFolderResponse(WatchFolderCreate):
@@ -105,6 +107,31 @@ def validate_targets(targets: List[DeliveryTarget], input_directory: str):
         prepare_output_directory(target.output_dir, input_directory)
 
 
+def validate_routing(folder_data):
+    from app.services.profile_manager import profile_manager
+    from app.services.watch_routing import target_library
+
+    if folder_data.get("default_target", "all") == "all":
+        return
+    libraries = set()
+    for target in folder_data["targets"]:
+        library = target_library(target)
+        if library in libraries:
+            raise HTTPException(status_code=400, detail="目标分流模式下，每个资料库只配置一条输出规则；多规则旧配置可继续使用全部规则模式")
+        if library == "nas" and target.type != DeliveryTargetType.COPY:
+            raise HTTPException(status_code=400, detail="本地目标请使用原样复制规则")
+        if library == "apple":
+            profile = profile_manager.get_profile(target.profile_id or "")
+            if target.type != DeliveryTargetType.CONVERT or not profile or not profile.enabled or profile.apple_music_delivery_mode == "none":
+                raise HTTPException(status_code=400, detail="Apple Music 目标必须选择已启用上传或交接的转换方案")
+            if profile.apple_music_delivery_mode == "client_import" and not profile.apple_music_import_dir:
+                raise HTTPException(status_code=400, detail="Apple Music 转换方案尚未设置自动导入目录")
+        libraries.add(library)
+    needed = {"nas", "apple"} if folder_data["default_target"] == "both" else {folder_data["default_target"]}
+    if not needed <= libraries:
+        raise HTTPException(status_code=400, detail="默认目标缺少对应的输出规则")
+
+
 def build_response(folder: WatchFolder) -> WatchFolderResponse:
     data = folder.model_dump()
     data.update(watch_folder_manager.get_status(folder.id))
@@ -130,6 +157,7 @@ async def create_watch_folder(folder_create: WatchFolderCreate):
     folder_data = folder_create.model_dump()
     folder_data["targets"] = normalize_targets(folder_data)
     validate_targets(folder_data["targets"], folder_create.input_dir)
+    validate_routing(folder_data)
 
     folder = WatchFolder(
         id=str(uuid.uuid4()),
@@ -153,6 +181,7 @@ async def update_watch_folder(folder_id: str, folder_update: WatchFolderUpdate):
     folder_data.update(update_data)
     folder_data["targets"] = normalize_targets(folder_data)
     validate_targets(folder_data["targets"], folder_data["input_dir"])
+    validate_routing(folder_data)
     updated_folder = WatchFolder(**folder_data)
     watch_folder_manager.update_watch_folder(folder_id, updated_folder)
     return build_response(updated_folder)
@@ -216,3 +245,40 @@ async def toggle_watch_folder(folder_id: str):
     if not folder:
         raise HTTPException(status_code=404, detail="Watch folder not found")
     return build_response(folder)
+
+
+class FileRoutingRequest(BaseModel):
+    path: str
+    target: Literal["nas", "apple", "both"]
+
+
+@router.get("/{folder_id}/files")
+async def get_routed_files(folder_id: str):
+    from app.services.watch_routing import watch_routing
+    if not watch_folder_manager.get_watch_folder(folder_id):
+        raise HTTPException(status_code=404, detail="监控目录不存在")
+    files = watch_routing.list_files(folder_id)
+    for file in files:
+        for item in file["outputs"]:
+            item["status"] = watch_routing.output_status(item)
+    return files
+
+
+@router.post("/{folder_id}/files/process")
+async def process_routed_file(folder_id: str, request: FileRoutingRequest):
+    from app.services.watch_routing import watch_routing
+    folder = watch_folder_manager.get_watch_folder(folder_id)
+    if not folder or folder.default_target == "all":
+        raise HTTPException(status_code=400, detail="请先为目录启用目标分流")
+    path = Path(request.path).resolve()
+    try:
+        path.relative_to(Path(folder.input_dir).resolve())
+    except ValueError:
+        raise HTTPException(status_code=400, detail="文件不属于该监控目录") from None
+    if not path.is_file() or not watch_routing.get(folder_id, path):
+        raise HTTPException(status_code=400, detail="文件不存在或尚未完成稳定扫描")
+    if str(path) in watch_folder_manager._processing_files:
+        raise HTTPException(status_code=409, detail="文件正在处理，请稍后再试")
+    validate_routing({**folder.model_dump(), "targets": folder.targets, "default_target": request.target})
+    watch_routing.register(folder, path, path, request.target in {"nas", "both"}, request.target in {"apple", "both"}, replace=True)
+    return await watch_folder_manager._process_file(folder, str(path), "manual")

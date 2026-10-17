@@ -130,7 +130,7 @@ class Worker:
         return {"authorization_saved": authorization_saved, "client_exited": exited, "compatible": compatible,
                 "context_matches": matches, "server_verified_at": self.server_verified_at}
 
-    def download(self, job):
+    def download(self, job, progress=None):
         path = PRIVATE / (job["job_id"] + ".m4a")
         if path.exists() and path.stat().st_size == job["size"] and checksum(path) == job["sha256"]:
             return path
@@ -143,6 +143,8 @@ class Worker:
                     if total > job["size"]:
                         raise WorkerError("成品大小超过登记值")
                     output.write(chunk)
+                    if progress:
+                        progress("download", {"bytes_sent": total, "bytes_total": job["size"]})
             if part.stat().st_size != job["size"] or checksum(part) != job["sha256"]:
                 raise WorkerError("成品完整性校验失败")
             part.replace(path)
@@ -175,15 +177,17 @@ class Worker:
         stop = threading.Event()
         lost = threading.Event()
         event_lock = threading.RLock()
-        current = {"state": "staging", "stage": "download", "action": job["action"]}
+        current = {"state": "staging", "stage": "download", "action": job["action"], "stage_token": time.time()}
         signature_started = None
         pending = None
+        last_progress_sent = 0.0
         original_upload_asset = uploader_module.upload_asset
 
         def guarded_asset(*args, **kwargs):
             with event_lock:
                 saved["asset_uncertain"] = True
                 self.save(local, saved)
+            kwargs["progress"] = lambda sent, total: progress("asset-bytes", {"bytes_sent": sent, "bytes_total": total})
             result = original_upload_asset(*args, **kwargs)
             with event_lock:
                 saved["asset_uncertain"] = False
@@ -214,6 +218,10 @@ class Worker:
                     saved["sequence"] = pending["sequence"]
                     pending = None
                 if changes:
+                    next_stage = changes.get("stage", current.get("stage"))
+                    new_step = changes.pop("new_step", False)
+                    if next_stage != current.get("stage") or new_step:
+                        current.update(stage_token=max(time.time(), current.get("stage_token", 0) + 0.000001), stage_progress=None, wait_seconds=None, bytes_sent=None, bytes_total=None)
                     current.update(changes)
                 if signature_started is not None and current.get("stage") == "signature" and current.get("signature_progress", 0) < 100:
                     current["signature_elapsed_seconds"] = round(time.monotonic() - signature_started, 1)
@@ -235,19 +243,41 @@ class Worker:
                     pass
 
         def progress(stage, value=None):
-            nonlocal signature_started
+            nonlocal signature_started, last_progress_sent
             if lost.is_set():
                 raise WorkerError("任务租约已失效")
-            stages = {"prepare-fingerprint": "signature", "upload-fingerprint": "signature", "signature": "signature",
+            stages = {"prepare-fingerprint": "processing", "get-fingerprint": "processing", "upload-fingerprint": "fingerprint-upload", "signature": "signature",
+                      "hash-track": "hash", "prepare-track": "prepare-track", "media": "media", "decode": "decode",
+                      "partial": "partial", "full-lowres": "full-lowres", "download": "download",
                       "upload-track": "audio", "create-session": "metadata", "check-session": "processing",
-                      "metadata-processing": "processing", "waiting": "processing"}
+                      "metadata-processing": "waiting", "waiting": "waiting", "complete": "processing"}
             changes = {"state": "cloud_processing" if stage in {"waiting", "metadata-processing"} else "uploading",
                        "stage": "extras" if stage.startswith("extras-") or stage in {"upload-artwork", "upload-lyrics"} else stages.get(stage, "processing")}
+            if stage == "extras-waiting":
+                changes.update(state="cloud_processing", stage="extras-waiting")
+            if stage == "asset-bytes":
+                changes = {"stage": current.get("stage")}
+            if stage == "download":
+                changes["state"] = "staging"
+            if isinstance(value, dict):
+                changes.update(value)
+                total = value.get("bytes_total", 0)
+                if total:
+                    changes["stage_progress"] = min(100, value["bytes_sent"] / total * 100)
+            elif stage in {"waiting", "metadata-processing", "extras-waiting"}:
+                changes.update(wait_seconds=value, new_step=True)
+            elif type(value) is int and stage in {"signature", "partial", "full-lowres"}:
+                changes["stage_progress"] = value
             if stage == "signature" and type(value) is int and 0 <= value <= 100:
                 if signature_started is None:
                     signature_started = time.monotonic()
                 changes.update(signature_progress=value, signature_elapsed_seconds=round(time.monotonic() - signature_started, 1))
-            send(changes)
+            with event_lock:
+                if changes.get("stage") == current.get("stage") and value is not None and not changes.get("new_step") and changes.get("stage_progress") != 100 and time.monotonic() - last_progress_sent < 1:
+                    current.update(changes)
+                    return
+                send(changes)
+                last_progress_sent = time.monotonic()
 
         thread = threading.Thread(target=heartbeat, daemon=True)
         thread.start()
@@ -260,7 +290,7 @@ class Worker:
                 self.save(local, saved)
                 return
             send()
-            source = self.download(job)
+            source = self.download(job, progress)
             send({"state": "validating", "stage": "validation"})
             ready = self.readiness()
             if not all(ready[key] for key in ("authorization_saved", "client_exited", "compatible", "context_matches")):

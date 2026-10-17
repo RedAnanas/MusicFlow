@@ -45,7 +45,8 @@ class Event(BaseModel):
     lease_token: str = Field(min_length=20, max_length=128)
     sequence: int = Field(ge=1)
     state: str = Field(max_length=48)
-    stage: Literal["download", "validation", "signature", "metadata", "audio", "extras", "processing", "complete"] | None = None
+    stage: Literal["download", "validation", "signature", "metadata", "audio", "extras", "processing", "complete",
+                   "media", "hash", "partial", "full-lowres", "decode", "fingerprint-upload", "prepare-track", "waiting", "extras-waiting"] | None = None
     action: str = "upload"
     error_code: str | None = Field(default=None, max_length=48)
     evidence: Evidence = Field(default_factory=Evidence)
@@ -53,6 +54,9 @@ class Event(BaseModel):
     bytes_total: int | None = Field(default=None, ge=0)
     signature_progress: int | None = Field(default=None, ge=0, le=100, strict=True)
     signature_elapsed_seconds: float | None = Field(default=None, ge=0, le=86400, allow_inf_nan=False)
+    stage_progress: float | None = Field(default=None, ge=0, le=100, allow_inf_nan=False)
+    stage_token: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    wait_seconds: float | None = Field(default=None, ge=0, le=600, allow_inf_nan=False)
 
 
 class CreateUpload(BaseModel):

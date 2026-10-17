@@ -48,19 +48,27 @@ class WindowsSongUploader:
         self.opener = build_opener(ProxyHandler({}), NoRedirect())
 
     def _post(self, endpoint, payload, route=None, signed=True):
+        self.progress("create-session" if route == "updateLibrary" else "protocol")
         request = build_control_request(endpoint, payload,
                     request_headers(self.account, endpoint, self.common["cuid"]),
                     self.signer if signed else None, server_route=route)
-        record = {"state": "prepared", "request": base64.b64encode(request.data).decode("ascii"), "route": route}
+        record = {"state": "prepared", "request": base64.b64encode(request.data).decode("ascii"), "route": route,
+                  "started_at": time.time()}
+        started = time.monotonic()
         self.state["requests"].append(record)
         save_session(self.job, self.state)
-        with self.opener.open(request, timeout=45) as response:
-            raw = response.read(1048577)
-            encoding = response.headers.get("Content-Encoding", "").lower()
-            record["http_status"] = response.status
+        try:
+            with self.opener.open(request, timeout=45) as response:
+                raw = response.read(1048577)
+                encoding = response.headers.get("Content-Encoding", "").lower()
+                record["http_status"] = response.status
+        finally:
+            record.update(ended_at=time.time(), elapsed_seconds=time.monotonic() - started)
+            save_session(self.job, self.state)
         if len(raw) > 1048576:
             raise SongUploadError("上传控制响应超过支持范围")
-        record.update(state="received", response=base64.b64encode(raw).decode("ascii"))
+        record.update(state="received", response=base64.b64encode(raw).decode("ascii"),
+                      ended_at=time.time(), elapsed_seconds=time.monotonic() - started)
         save_session(self.job, self.state)
         if encoding == "gzip" or raw.startswith(b"\x1f\x8b\x08"):
             raw = gzip.decompress(raw)
@@ -84,6 +92,7 @@ class WindowsSongUploader:
             raise SongUploadError("当前授权与旧任务不属于同一资料库，停止恢复或补传")
 
     def _media(self, source, directory):
+        self.progress("media")
         probe = subprocess.run([str(self.ffprobe), "-v", "error", "-show_streams", "-show_format", "-of", "json", str(source)],
                                capture_output=True, check=True)
         info = json.loads(probe.stdout)
@@ -137,7 +146,7 @@ class WindowsSongUploader:
 
     def _signature(self):
         if self.signature is None:
-            self.progress("signature", 0)
+            self.progress("decode")
             cache = self.private / "signature-cache"
             cache.mkdir(mode=0o700, exist_ok=True)
             if cache.is_symlink():
@@ -148,6 +157,7 @@ class WindowsSongUploader:
             if result.returncode:
                 raise SongUploadError("生成音频签名所需的 PCM 失败")
             samples = pcm.read_bytes()
+            self.progress("signature", 0)
             # 使用实际解码样本，避免相同 AAC 载荷但不同裁剪信息误命中缓存。
             key = hashlib.sha256(b"signature-f32le-16k-mono-v1\0" + windows_sap.EXPECTED.encode() + samples).hexdigest()
             target = cache / (key + ".bin")
@@ -178,6 +188,7 @@ class WindowsSongUploader:
             raise SongUploadError("服务端请求了尚未验证的指纹类型")
         cache = getattr(self, "_fingerprints", {})
         if kind not in cache:
+            self.progress("decode")
             pcm = self.directory / "fingerprint.pcm"
             result = subprocess.run([str(self.ffmpeg), "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i", str(self.source),
                                      "-ac", "2", "-ar", "44100", "-f", "s16le", str(pcm)], capture_output=True)
@@ -185,7 +196,8 @@ class WindowsSongUploader:
                 raise SongUploadError("生成旧版指纹 PCM 失败")
             try:
                 sdk = Path(os.environ.get("MUSICFLOW_APPLE_SDK_DIRECTORY", windows_sap.TARGET.parent))
-                cache[kind] = generate_fingerprint(pcm, kind, sdk)
+                self.progress(kind)
+                cache[kind] = generate_fingerprint(pcm, kind, sdk, self.progress)
             except (OSError, RuntimeError, windows_sap.SapError):
                 raise SongUploadError("旧版指纹生成失败，请核对算法文件版本") from None
             self._fingerprints = cache
@@ -194,6 +206,7 @@ class WindowsSongUploader:
     def upload_media_extras(self, source):
         """给已成功上传的同一首歌曲补传歌词和封面，不重新提交音频。"""
         from prototype.extra_asset_upload import upload_extras
+        self.progress("extras-create-session")
 
         source = Path(source).resolve()
         digest = hashlib.sha256(source.read_bytes()).hexdigest()
@@ -254,8 +267,10 @@ class WindowsSongUploader:
             if action.get("fingerprint-type") not in ("partial", "full-lowres", "signature"):
                 raise SongUploadError("未验证的指纹资产任务")
             descriptor = reply.pop("upload-info")
+            data = self._fingerprint(action["fingerprint-type"])
+            self.progress("upload-fingerprint")
             started = time.monotonic()
-            statuses = upload_asset(descriptor, self._fingerprint(action["fingerprint-type"]), self.account["headers"]["User-Agent"])
+            statuses = upload_asset(descriptor, data, self.account["headers"]["User-Agent"])
             reply.update({"response-code": statuses[-1], "upload-seconds": int(time.monotonic() - started)})
         elif name == "prepare-track":
             for kind, asset in action["assets"].items():
@@ -266,6 +281,7 @@ class WindowsSongUploader:
                 reply["assets"][kind].update({"file-size": len(data), "hash-value": hashlib.md5(data).hexdigest(), "status": 0})
         elif name == "upload-track":
             for kind, asset in reply["assets"].items():
+                self.progress("upload-track" if kind == "audio" else f"upload-{kind}")
                 data = self._asset_data(kind, clean_audio=True)
                 descriptor = asset.pop("upload-info")
                 asset.pop("upload-type", None)
@@ -453,6 +469,7 @@ class WindowsSongUploader:
                 delay = max(delay, 1000)
                 self.progress("waiting", delay // 1000)
                 time.sleep(delay / 1000)
+                self.progress("check-session")
                 if delay >= 180000:
                     status = self._refresh_work_status()
         raise SongUploadError("上传会话尚未在等待期限内完成；保留记录供恢复")

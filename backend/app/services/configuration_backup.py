@@ -61,6 +61,7 @@ class DualLibrarySettings(BaseModel):
     nas_watch_folder_id: str = ''
     apple_watch_folder_id: str = ''
     apple_storefront: str = 'cn'
+    unified_watch_folder_id: str = ''
 
 
 class MusicdlSettings(BaseModel):
@@ -102,7 +103,7 @@ class Configuration(BaseModel):
             references = folder.profile_ids + [target.profile_id for target in folder.targets if target.profile_id]
             if any(value not in self.profiles for value in references):
                 raise ValueError('监控目录引用了不存在的转换方案')
-        for value in (self.dual_library.nas_watch_folder_id, self.dual_library.apple_watch_folder_id):
+        for value in (self.dual_library.nas_watch_folder_id, self.dual_library.apple_watch_folder_id, self.dual_library.unified_watch_folder_id):
             if value and value not in self.watch_folders:
                 raise ValueError('双库配置引用了不存在的监控目录')
         return self

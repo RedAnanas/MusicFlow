@@ -8,7 +8,7 @@ export const uploadStateLabel = (value: string) => ({
   failed: '上传失败', cancelled: '已停止后续处理',
 }[value] || value)
 
-export const uploadStageLabel = (value?: string) => ({ download: '下载成品', validation: '校验成品', signature: '生成或提交签名', metadata: '提交元数据', audio: '上传音频资产', extras: '处理歌词封面', processing: '协议处理', complete: '完成' }[value || ''] || '')
+export const uploadStageLabel = (value?: string) => ({ queued: '排队等待', download: '获取上传成品', validation: '校验成品及上传环境', media: '解析音频及提取歌词封面', hash: '计算音频哈希', decode: '解码指纹音频', partial: '局部音频指纹', 'full-lowres': '全曲指纹（音频处理进度）', signature: '生成签名', 'fingerprint-upload': '提交指纹', 'prepare-track': '准备音频资产', waiting: '等待 Apple 下发任务', 'extras-waiting': '等待歌词封面处理', metadata: '提交元数据', audio: '上传音频资产', extras: '处理歌词封面', processing: '协议处理', complete: '完成' }[value || ''] || '')
 
 export const uploadActionLabel = (value: string) => value === 'upload_media_extras' ? '补传歌词封面' : value === 'upload' ? '重试上传成品' : '恢复上传'
 

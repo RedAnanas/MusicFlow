@@ -1,1 +1,16 @@
-{}
+{
+  "unified-downloads": {
+    "id": "unified-downloads",
+    "name": "统一音乐下载（示例，启用前修改路径）",
+    "input_dir": "/music/inbox",
+    "default_target": "both",
+    "targets": [
+      { "type": "copy", "library": "nas", "output_dir": "/music/library" },
+      { "type": "convert", "library": "apple", "profile_id": "apple-music-aac-256", "output_dir": "/music/apple-output" }
+    ],
+    "auto_process": false,
+    "recursive_scan": true,
+    "scan_interval_minutes": 5,
+    "enabled": false
+  }
+}

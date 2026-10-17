@@ -18,6 +18,7 @@ UPLOAD_STATES = {
     "media_completed_extras_pending", "cloud_completed", "requires_review", "failed", "cancelled",
 }
 RESUME_ACTIONS = {"upload", "resume_pending", "resume_work", "upload_media_extras", "report_completed"}
+TERMINAL_STATES = {"cloud_completed", "requires_review", "failed", "cancelled", "media_completed_extras_pending"}
 ERRORS = {
     "authorization_required": "请在桌面客户端重新获取授权并导入服务端",
     "client_running": "请正常退出 Apple Music 和资料库进程",
@@ -73,6 +74,12 @@ class AppleMusicUploadService:
                 CREATE TABLE IF NOT EXISTS apple_upload_links (
                     conversion_task_id TEXT PRIMARY KEY, upload_id TEXT NOT NULL, source_file TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS apple_upload_timeline (
+                    id INTEGER PRIMARY KEY, upload_id TEXT NOT NULL, stage TEXT, state TEXT NOT NULL,
+                    started_at REAL NOT NULL, ended_at REAL, stage_token REAL,
+                    progress REAL, wait_until REAL, bytes_sent INTEGER, bytes_total INTEGER
+                );
+                CREATE INDEX IF NOT EXISTS apple_upload_timeline_job ON apple_upload_timeline(upload_id, id);
             """)
             columns = {row["name"] for row in connection.execute("PRAGMA table_info(apple_uploads)")}
             if not {"signature_progress", "signature_elapsed_seconds"}.issubset(columns):
@@ -143,10 +150,12 @@ class AppleMusicUploadService:
             if previous:
                 return self.get(previous["upload_id"])
             job_id = str(uuid.uuid4())
-            connection.execute("""INSERT OR IGNORE INTO apple_uploads
+            inserted = connection.execute("""INSERT OR IGNORE INTO apple_uploads
                 (id, account_scope, source_path, sha256, size, state, created_at, updated_at)
                 VALUES (?, ?, ?, ?, ?, 'queued', ?, ?)""",
                 (job_id, account_scope, str(path), digest, size, now, now))
+            if inserted.rowcount:
+                connection.execute("INSERT INTO apple_upload_timeline(upload_id, stage, state, started_at) VALUES (?, 'queued', 'queued', ?)", (job_id, now))
             row = connection.execute("SELECT id FROM apple_uploads WHERE account_scope = ? AND sha256 = ?", (account_scope, digest)).fetchone()
             connection.execute("INSERT INTO apple_upload_links VALUES (?, ?, ?)", (task_id, row["id"], source_file))
             job_id = row["id"]
@@ -156,10 +165,17 @@ class AppleMusicUploadService:
         self.initialize()
         with self.connect() as connection:
             row = connection.execute("SELECT * FROM apple_uploads WHERE id = ?", (job_id,)).fetchone()
+            timeline = [dict(item) for item in connection.execute(
+                "SELECT stage, state, started_at, ended_at, progress, wait_until, bytes_sent, bytes_total FROM apple_upload_timeline WHERE upload_id = ? ORDER BY id", (job_id,))]
         if not row:
             raise KeyError("上传任务不存在")
         result = {key: row[key] for key in ("id", "state", "stage", "sha256", "size", "bytes_sent", "bytes_total", "created_at", "updated_at", "signature_progress", "signature_elapsed_seconds")}
         result["error_code"] = row["error_code"]
+        finished = row["updated_at"] if row["state"] in TERMINAL_STATES else None
+        result.update(timeline=timeline, finished_at=finished, server_time=time.time(),
+                      elapsed_seconds=max(0, (finished or time.time()) - row["created_at"]))
+        for item in timeline:
+            item["elapsed_seconds"] = max(0, (item["ended_at"] or finished or time.time()) - item["started_at"])
         result["error"] = ERRORS.get(row["error_code"])
         result["allowed_actions"] = [row["action"]] if row["state"] in {"failed", "media_completed_extras_pending"} and row["action"] != "report_completed" else []
         if row["error_code"] in {"unsupported_fingerprint", "unsupported_media", "context_mismatch"}:
@@ -257,6 +273,7 @@ class AppleMusicUploadService:
             if state in {"queued", "waiting_worker"}:
                 raise UploadConflict("工作进程不能重置上传队列")
             terminal = state in {"cloud_completed", "requires_review", "failed", "cancelled", "media_completed_extras_pending"}
+            self.record_timing(connection, row, event, now, terminal)
             connection.execute("""UPDATE apple_uploads SET state = ?, stage = ?, error_code = ?, action = ?, evidence = ?,
                 bytes_sent = ?, bytes_total = ?, signature_progress = ?, signature_elapsed_seconds = ?, sequence = ?, lease_until = ?, updated_at = ? WHERE id = ?""",
                 (state, event.get("stage"), event.get("error_code"), action, json.dumps(evidence),
@@ -266,6 +283,23 @@ class AppleMusicUploadService:
                 connection.execute("UPDATE apple_uploads SET lease_until = ? WHERE id = ?", (now + 86400, job_id))
             connection.execute("UPDATE upload_worker SET last_seen = ? WHERE id = ?", (now, worker_id))
         return {"accepted": True, "sequence": event["sequence"]}
+
+    @staticmethod
+    def record_timing(connection, row, event, now, terminal=False):
+        """使用服务端时钟记录阶段；同一序号的重报在调用前排除。"""
+        last = connection.execute("SELECT * FROM apple_upload_timeline WHERE upload_id = ? ORDER BY id DESC LIMIT 1", (row["id"],)).fetchone()
+        changed = (last is None or last["ended_at"] is not None or last["stage"] != event.get("stage")
+                   or last["state"] != event["state"] or last["stage_token"] != event.get("stage_token"))
+        if changed or terminal:
+            connection.execute("UPDATE apple_upload_timeline SET ended_at = ? WHERE upload_id = ? AND ended_at IS NULL", (now, row["id"]))
+        if not terminal and changed:
+            connection.execute("INSERT INTO apple_upload_timeline(upload_id, stage, state, started_at, stage_token) VALUES (?, ?, ?, ?, ?)",
+                               (row["id"], event.get("stage"), event["state"], now, event.get("stage_token")))
+        if not terminal:
+            connection.execute("""UPDATE apple_upload_timeline SET progress = ?, bytes_sent = ?, bytes_total = ?,
+                wait_until = COALESCE(wait_until, ?) WHERE upload_id = ? AND ended_at IS NULL""",
+                (event.get("stage_progress"), event.get("bytes_sent"), event.get("bytes_total"),
+                 now + event["wait_seconds"] if event.get("wait_seconds") is not None else None, row["id"]))
 
     def retry(self, job_id, action):
         with self.connect() as connection:
@@ -277,6 +311,7 @@ class AppleMusicUploadService:
                 raise UploadConflict("当前任务不允许此恢复动作，请核对本地记录")
             connection.execute("UPDATE apple_uploads SET state = 'queued', lease_token = NULL, lease_until = NULL, signature_progress = NULL, signature_elapsed_seconds = NULL, attempt = attempt + 1, updated_at = ? WHERE id = ?",
                                (time.time(), job_id))
+            connection.execute("INSERT INTO apple_upload_timeline(upload_id, stage, state, started_at) VALUES (?, 'queued', 'queued', ?)", (job_id, time.time()))
         return self.get(job_id)
 
     def cancel(self, job_id):
@@ -287,7 +322,9 @@ class AppleMusicUploadService:
                 raise KeyError("上传任务不存在")
             if row["state"] != "queued" or row["lease_token"]:
                 raise UploadConflict("只能取消尚未领取的任务；已发送请求的任务必须先核对本地记录")
-            connection.execute("UPDATE apple_uploads SET state = 'cancelled', updated_at = ? WHERE id = ?", (time.time(), job_id))
+            now = time.time()
+            self.record_timing(connection, row, {"state": "cancelled"}, now, terminal=True)
+            connection.execute("UPDATE apple_uploads SET state = 'cancelled', updated_at = ? WHERE id = ?", (now, job_id))
         return self.get(job_id)
 
 

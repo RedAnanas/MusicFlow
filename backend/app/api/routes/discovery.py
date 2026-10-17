@@ -4,7 +4,7 @@ import queue
 import threading
 from pathlib import Path
 from urllib.parse import quote
-from typing import Optional
+from typing import Optional, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
@@ -13,7 +13,7 @@ from pydantic import BaseModel
 from app.config import settings
 from app.services.acquisition_service import acquisition_service
 from app.services.apple_catalog_service import apple_catalog_service
-from app.services.dual_library_service import dual_library_service
+from app.services.dual_library_service import dual_library_service, normalize_text
 from app.services.dual_library_config import dual_library_config
 from app.services.media_library_service import media_library_service
 from app.services.musicdl_client import MusicdlClientError, musicdl_client
@@ -34,6 +34,7 @@ class AcquisitionRequest(BaseModel):
     desired_nas: bool = False
     desired_apple: bool = False
     allow_possible_duplicate: bool = False
+    target_mode: Optional[Literal["nas", "apple", "both"]] = None
 
 
 class ApplePrecheckRequest(BaseModel):
@@ -42,6 +43,7 @@ class ApplePrecheckRequest(BaseModel):
 
 
 class DualLibraryConfigRequest(BaseModel):
+    unified_watch_folder_id: str = ""
     nas_watch_folder_id: str = ""
     apple_watch_folder_id: str = ""
     apple_storefront: str = "cn"
@@ -111,17 +113,18 @@ async def get_discovery_status():
         health = None
         error = str(exc)
     target_config = dual_library_config.resolve()
-    nas_folder = watch_folder_manager.get_watch_folder(target_config["nas_watch_folder_id"])
-    apple_folder = watch_folder_manager.get_watch_folder(target_config["apple_watch_folder_id"])
+    unified_id = target_config.get("unified_watch_folder_id")
+    nas_folder = watch_folder_manager.get_watch_folder(unified_id or target_config["nas_watch_folder_id"])
+    apple_folder = watch_folder_manager.get_watch_folder(unified_id or target_config["apple_watch_folder_id"])
     return {
         "musicdl_connected": connected,
         "musicdl": health,
         "musicdl_error": error,
         "nas_watch_folder_configured": bool(
-            nas_folder and nas_folder.enabled and nas_folder.auto_process
+            nas_folder and nas_folder.enabled and nas_folder.auto_process and any(item.type.value == "copy" for item in nas_folder.targets)
         ),
         "apple_watch_folder_configured": bool(
-            apple_folder and apple_folder.enabled and apple_folder.auto_process
+            apple_folder and apple_folder.enabled and apple_folder.auto_process and any(item.type.value == "convert" for item in apple_folder.targets)
         ),
     }
 
@@ -149,6 +152,16 @@ async def update_dual_library_config(request: DualLibraryConfigRequest):
     apple_storefront = request.apple_storefront.strip().lower()
     if len(apple_storefront) != 2 or not apple_storefront.isalpha():
         raise HTTPException(status_code=400, detail="Apple 曲库地区必须是两位国家或地区代码")
+    if request.unified_watch_folder_id:
+        folder = watch_folder_manager.get_watch_folder(request.unified_watch_folder_id)
+        if not folder or not folder.enabled or not folder.auto_process or folder.default_target == "all":
+            raise HTTPException(status_code=400, detail="请选择已启用自动处理和目标分流的统一监控目录")
+        from app.api.routes.watch_folders import validate_routing
+        validate_routing({**folder.model_dump(), "targets": folder.targets})
+        try:
+            return await asyncio.to_thread(dual_library_config.save, "", "", apple_storefront, request.unified_watch_folder_id)
+        except OSError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     if nas_watch_folder_id and apple_watch_folder_id == nas_watch_folder_id:
         raise HTTPException(status_code=400, detail="本地和 Apple Music 必须使用独立监控目录")
 
@@ -469,6 +482,13 @@ async def get_discovery_lyrics(token: str):
 
 @router.post("/acquisitions", status_code=202)
 async def create_acquisition(request: AcquisitionRequest):
+    if request.target_mode:
+        plan = await preview_acquisition(request)
+        if plan["review"] and not request.allow_possible_duplicate:
+            raise HTTPException(status_code=409, detail=plan["review"])
+        request.desired_nas = plan["desired_nas"]
+        request.desired_apple = plan["desired_apple"]
+        request.local_file_id = plan["local_file_id"]
     local_source_path = None
     if request.local_file_id:
         local_tracks = await asyncio.to_thread(media_library_service.load_tracks, False)
@@ -504,6 +524,31 @@ async def create_acquisition(request: AcquisitionRequest):
         return job
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/discovery/plan")
+async def preview_acquisition(request: AcquisitionRequest):
+    """根据服务端资料库判断目标，并优先复用可访问的本地文件。"""
+    track = request.selected_track or {}
+    local = await asyncio.to_thread(media_library_service.load_tracks, False)
+    index = await asyncio.to_thread(dual_library_service.build_presence_index, local)
+    presence = dual_library_service.lookup_presence(track, index)
+    mode = request.target_mode or "both"
+    nas = mode in {"nas", "both"} and not presence["nas_present"]
+    apple = mode in {"apple", "both"} and not presence["apple_present"]
+    matches = [item for item in local if dual_library_service.lookup_presence(track, {
+        **index, "local_isrc": {(item.get("isrc") or "").strip().upper()} - {""},
+        "local_metadata": {(normalize_text(item.get("title")), normalize_text(item.get("artist")), normalize_text(item.get("album")))},
+    })["nas_present"]]
+    reusable = next((item for item in matches if Path(item["path"]).is_file()), None)
+    review = "本地资料库记录存在，但源文件不可访问，请先检查挂载或更新索引" if presence["nas_present"] and apple and not reusable else None
+    if apple and not review and await asyncio.to_thread(dual_library_service.find_apple_candidates, track):
+        review = "Apple Music 存在相似曲目，请先核对版本"
+    if nas and not review and any(normalize_text(item.get("title")) == normalize_text(track.get("song_name") or track.get("title"))
+                                 and normalize_text(item.get("artist")) == normalize_text(track.get("singers") or track.get("artist")) for item in local):
+        review = "本地存在同歌名、同歌手的其他版本，请核对后再入库"
+    return {"desired_nas": nas, "desired_apple": apple, "local_file_id": reusable["id"] if reusable else None,
+            "reuse_local": bool(reusable), "review": review, "skip": not nas and not apple}
 
 
 @router.get("/acquisitions")
