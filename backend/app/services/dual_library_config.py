@@ -9,6 +9,7 @@ class DualLibraryConfigService:
     def get(self) -> dict[str, str]:
         saved = config_manager.load(self.FILE_NAME) or {}
         return {
+            "unified_watch_folder_id": str(saved.get("unified_watch_folder_id") or ""),
             "nas_watch_folder_id": str(saved.get("nas_watch_folder_id") or ""),
             "apple_watch_folder_id": str(saved.get("apple_watch_folder_id") or ""),
             "apple_storefront": str(saved.get("apple_storefront") or "cn").lower(),
@@ -46,8 +47,10 @@ class DualLibraryConfigService:
         nas_watch_folder_id: str,
         apple_watch_folder_id: str,
         apple_storefront: str = "cn",
+        unified_watch_folder_id: str = "",
     ) -> dict[str, str]:
         values = {
+            "unified_watch_folder_id": unified_watch_folder_id.strip(),
             "nas_watch_folder_id": nas_watch_folder_id.strip(),
             "apple_watch_folder_id": apple_watch_folder_id.strip(),
             "apple_storefront": apple_storefront.strip().lower() or "cn",

@@ -116,6 +116,7 @@ class DeliveryTarget(BaseModel):
     type: DeliveryTargetType
     output_dir: str
     profile_id: Optional[str] = None
+    library: Optional[Literal["nas", "apple"]] = None
 
 
 class WatchFolder(BaseModel):
@@ -129,6 +130,7 @@ class WatchFolder(BaseModel):
     scan_interval_minutes: int = 5
     output_dir: Optional[str] = None
     enabled: bool = True
+    default_target: Literal["all", "nas", "apple", "both"] = "all"
 
 
 class Task(BaseModel):

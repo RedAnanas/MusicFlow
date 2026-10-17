@@ -11,6 +11,7 @@ from app.config import settings
 from app.core.watcher import is_metadata_temp_audio, watcher_service
 from app.models import DeliveryTarget, DeliveryTargetType, WatchFolder
 from app.services.config_manager import config_manager
+from app.services.watch_routing import watch_routing
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,7 @@ class WatchFolderManager:
         self.next_scan_at: Dict[str, float] = {}
         self.loop: Optional[asyncio.AbstractEventLoop] = None
         self.periodic_task: Optional[asyncio.Task] = None
+        self._processing_files: set[str] = set()
         self.load_watch_folders()
 
     def load_watch_folders(self):
@@ -99,6 +101,10 @@ class WatchFolderManager:
         if not old_folder:
             return None
 
+        if old_folder.default_target == "all" and folder.default_target != "all":
+            for path in self._scan_directory(folder.input_dir, folder.recursive_scan):
+                if not watch_routing.get(folder.id, path):
+                    watch_routing.register(folder, path, path, False, False, review="旧目录历史文件，请选择目标后确认处理")
         watcher_service.stop_watch(old_folder.input_dir)
         self.watch_folders[folder_id] = folder
         self.save_watch_folders()
@@ -227,67 +233,129 @@ class WatchFolderManager:
             f"实时事件创建 {result['created_tasks']} 个转换任务，原样复制 {result['copied_files']} 个文件",
         )
 
-    async def _process_file(self, folder: WatchFolder, file_path: str, trigger: str) -> Dict[str, int]:
-        from app.api.routes.tasks import TaskCreate, enqueue_conversion_task
+    async def _process_file(self, folder: WatchFolder, file_path: str, trigger: str, *, wait: bool = False) -> Dict[str, int]:
+        key = str(Path(file_path).resolve())
+        while wait and key in self._processing_files:
+            await asyncio.sleep(0.1)
+        if key in self._processing_files:
+            return {"created_tasks": 0, "copied_files": 0}
+        self._processing_files.add(key)
+        try:
+            return await self._process_file_outputs(folder, file_path, trigger)
+        finally:
+            self._processing_files.discard(key)
+
+    async def _process_file_outputs(self, folder: WatchFolder, file_path: str, trigger: str) -> Dict[str, int]:
+        from app.api.routes.tasks import TaskCreate, enqueue_conversion_task, tasks_cache
         from app.services.profile_manager import profile_manager
 
         source_path = Path(file_path)
         created = 0
         copied = 0
-        for target in folder.targets:
-            if target.type == DeliveryTargetType.CONVERT:
-                profile = profile_manager.get_profile(target.profile_id or "")
-                if not profile or not profile.enabled:
-                    self._record_event(folder.id, "error", f"转换方案不可用：{target.profile_id}")
-                    continue
+        plan = await asyncio.to_thread(watch_routing.get, folder.id, source_path)
+        if not plan and folder.default_target != "all":
+            plan = await asyncio.to_thread(watch_routing.plan, folder, source_path)
+        if plan and plan["review"]:
+            self._record_event(folder.id, "review", f"{source_path.name}：{plan['review']}")
+            return {"created_tasks": 0, "copied_files": 0}
+        outputs = plan["outputs"] if plan else [target.model_dump(mode="json") for target in folder.targets]
+        for item in outputs:
+            if item.get("state", "waiting") != "waiting":
+                continue
+            try:
+                target = DeliveryTarget.model_validate(item)
+                if target.type == DeliveryTargetType.CONVERT:
+                    profile = profile_manager.get_profile(target.profile_id or "")
+                    if not profile or not profile.enabled or (plan and (profile.apple_music_delivery_mode == "none"
+                            or (profile.apple_music_delivery_mode == "client_import" and not profile.apple_music_import_dir))):
+                        if plan:
+                            item.update(state="failed", error="转换方案不可用，请恢复方案后重试")
+                            await asyncio.to_thread(watch_routing.save, folder.id, source_path, plan)
+                        self._record_event(folder.id, "error", f"转换方案不可用：{target.profile_id}")
+                        continue
 
-                output_file = self._build_output_path(folder, source_path, target, profile)
-                task = await enqueue_conversion_task(
-                    TaskCreate(
-                        source_file=str(source_path),
-                        output_file=str(output_file),
-                        profile_id=profile.id,
-                    ),
-                    skip_existing=True,
-                )
-                if task:
-                    created += 1
-                    self._record_event(
-                        folder.id,
-                        "task",
-                        f"{trigger} 创建 Apple Music 转换任务：{source_path.name} -> {output_file}",
+                    output_file = self._build_output_path(folder, source_path, target, profile)
+                    task = next((existing for existing in tasks_cache.values() if plan
+                                 and existing.source_file == str(source_path) and existing.output_file == str(output_file)
+                                 and existing.profile_id == profile.id and existing.start_time
+                                 and existing.start_time.timestamp() >= plan["created_at"]), None)
+                    task = task or await enqueue_conversion_task(
+                        TaskCreate(
+                            source_file=str(source_path),
+                            output_file=str(output_file),
+                            profile_id=profile.id,
+                        ),
+                        skip_existing=True,
                     )
-            elif target.type == DeliveryTargetType.COPY:
-                output_file = self._build_output_path(folder, source_path, target)
-                if await asyncio.to_thread(self._copy_file, source_path, output_file):
-                    copied += 1
-                    from app.api.routes import discovery
-                    from app.services.acquisition_service import acquisition_service
-                    from app.services.media_library_service import media_library_service
-
-                    if await asyncio.to_thread(media_library_service.index_output, output_file):
-                        discovery.invalidate_presence_index()
-                        await asyncio.to_thread(
-                            acquisition_service.mark_nas_delivered,
-                            str(source_path),
-                            output_file,
+                    if task:
+                        item.update(state="submitted", task_id=task.id, error=None)
+                        if plan:
+                            await asyncio.to_thread(watch_routing.save, folder.id, source_path, plan)
+                        if plan and task.status.value not in {"failed", "cancelled"}:
+                            from app.core import metadata_service
+                            from app.services.dual_library_service import dual_library_service
+                            metadata = await asyncio.to_thread(metadata_service.read_metadata, str(source_path)) or {}
+                            if metadata.get("title") and metadata.get("artist"):
+                                await asyncio.to_thread(dual_library_service.upsert_incremental_track,
+                                                      {key: metadata.get(key) for key in ("title", "artist", "album", "isrc")},
+                                                      "direct_upload" if profile.apple_music_delivery_mode == "direct_upload" else "handoff")
+                                from app.api.routes.discovery import invalidate_presence_index
+                                invalidate_presence_index()
+                        created += 1
+                        self._record_event(
+                            folder.id,
+                            "task",
+                            f"{trigger} 创建 Apple Music 转换任务：{source_path.name} -> {output_file}",
                         )
-                    self._record_event(
-                        folder.id,
-                        "copied",
-                        f"{trigger} 原样复制到本地音乐：{source_path.name} -> {output_file}",
-                    )
-                else:
-                    self._record_event(
-                        folder.id,
-                        "skipped",
-                        f"本地音乐目标已存在同名文件，已跳过：{output_file}",
-                    )
+                    elif output_file.exists():
+                        item.update(state="skipped", error="成品已存在，请在操作记录核对交接或上传状态")
+                elif target.type == DeliveryTargetType.COPY:
+                    output_file = self._build_output_path(folder, source_path, target)
+                    did_copy = await asyncio.to_thread(self._copy_file, source_path, output_file)
+                    if did_copy or (plan and output_file.is_file() and await asyncio.to_thread(self._same_content, source_path, output_file)):
+                        item["state"] = "success"
+                        if did_copy:
+                            copied += 1
+                        from app.api.routes import discovery
+                        from app.services.acquisition_service import acquisition_service
+                        from app.services.media_library_service import media_library_service
+
+                        if await asyncio.to_thread(media_library_service.index_output, output_file):
+                            discovery.invalidate_presence_index()
+                            await asyncio.to_thread(
+                                acquisition_service.mark_nas_delivered,
+                                str(source_path),
+                                output_file,
+                            )
+                        self._record_event(
+                            folder.id,
+                            "copied",
+                            f"{trigger} 原样复制到本地音乐：{source_path.name} -> {output_file}",
+                        )
+                    else:
+                        item.update(state="blocked", error="本地目标存在不同内容的同名文件，请先核对")
+                        self._record_event(
+                            folder.id,
+                            "skipped",
+                            f"本地音乐目标已存在同名文件，已跳过：{output_file}",
+                        )
+            except Exception as exc:
+                if not plan:
+                    raise
+                item.update(state="failed", error=str(getattr(exc, "detail", exc)))
+                self._record_event(folder.id, "error", f"{source_path.name}：{item['error']}")
+            if plan:
+                await asyncio.to_thread(watch_routing.save, folder.id, source_path, plan)
 
         status = self._ensure_runtime(folder.id)
         status["created_tasks"] = status.get("created_tasks", 0) + created
         status["copied_files"] = status.get("copied_files", 0) + copied
         return {"created_tasks": created, "copied_files": copied}
+
+    @staticmethod
+    def _same_content(source_path, output_file):
+        from app.services.acquisition_service import acquisition_service
+        return acquisition_service._sha256(source_path) == acquisition_service._sha256(output_file)
 
     def _build_output_path(self, folder: WatchFolder, source_path: Path, target: DeliveryTarget, profile=None) -> Path:
         output_root = Path(target.output_dir)

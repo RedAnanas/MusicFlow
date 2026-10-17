@@ -109,12 +109,31 @@ export interface AppleMusicUpload {
   error?: string
   error_code?: string
   allowed_actions: string[]
+  created_at: number
+  updated_at: number
+  finished_at?: number | null
+  elapsed_seconds: number
+  server_time: number
+  timeline?: UploadTiming[]
+}
+
+export interface UploadTiming {
+  stage?: string
+  state: string
+  started_at: number
+  ended_at?: number | null
+  elapsed_seconds: number
+  progress?: number | null
+  wait_until?: number | null
+  bytes_sent?: number | null
+  bytes_total?: number | null
 }
 
 export interface WatchFolder {
   id: string
   name: string
   inputDir: string
+  defaultTarget: 'all' | 'nas' | 'apple' | 'both'
   profileIds: string[]
   targets: DeliveryTarget[]
   autoProcess: boolean
@@ -136,6 +155,7 @@ export interface DeliveryTarget {
   type: 'convert' | 'copy'
   outputDir: string
   profileId?: string
+  library?: 'nas' | 'apple'
 }
 
 export interface WatchFolderEvent {

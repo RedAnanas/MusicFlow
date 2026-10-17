@@ -6,7 +6,7 @@ import struct
 from prototype import windows_sap
 
 
-def generate_fingerprint(pcm_path, kind, sdk_directory):
+def generate_fingerprint(pcm_path, kind, sdk_directory, progress=None):
     """输入为双声道 44.1 kHz、16 位 PCM；每次创建独立来宾。"""
     pcm_path = Path(pcm_path)
     if kind not in ('partial', 'full-lowres') or not pcm_path.is_file() or not pcm_path.stat().st_size or pcm_path.stat().st_size % 4:
@@ -41,11 +41,14 @@ def generate_fingerprint(pcm_path, kind, sdk_directory):
             raise windows_sap.SapError('指纹上下文无效')
         audio_address = 0x280000000
         machine.mem_map(audio_address, 0x40000)
+        audio_size = pcm_path.stat().st_size
         with pcm_path.open('rb') as audio:
             while data := audio.read(44100 * 4):
                 machine.mem_write(audio_address, data)
                 machine.mem_write(context + 0x40, bytes(8))
                 call(0x24f0, engine, audio_address, len(data), 0, context + 0x40)
+                if progress and kind == 'full-lowres':
+                    progress(kind, min(99, int(audio.tell() * 100 / audio_size)))
                 if machine.mem_read(context + 0x40, 1)[0]:
                     break
         call(0x2710, engine, context + 0x40)
@@ -72,4 +75,6 @@ def generate_fingerprint(pcm_path, kind, sdk_directory):
         fingerprint, _ = windows_sap._open(False, native_task=task, sdk_directory=sdk_directory)
     except (OSError, RuntimeError, AssertionError):
         raise windows_sap.SapError('旧版指纹计算失败，请核对算法文件版本') from None
+    if progress:
+        progress(kind, 100)
     return fingerprint

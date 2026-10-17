@@ -1,6 +1,9 @@
 """验证真实描述符语义、范围边界与网络失败脱敏。"""
 
 import unittest
+from http.server import BaseHTTPRequestHandler, HTTPServer
+import threading
+from urllib.request import Request
 from unittest.mock import patch, MagicMock
 from urllib.error import HTTPError
 
@@ -22,6 +25,63 @@ def descriptor(offset=0, length=4):
 
 
 class UploadAssetTests(unittest.TestCase):
+    def test_真实本机连接验证流式请求不改变传输字节(self):
+        received = []
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_PUT(self):
+                received.append(self.rfile.read(int(self.headers['Content-Length'])))
+                self.send_response(200)
+                self.end_headers()
+
+            def log_message(self, *args):
+                pass
+
+        data = b'test-audio' * 20000
+        server = HTTPServer(('127.0.0.1', 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            request = Request(f'http://127.0.0.1:{server.server_port}/', data=data, method='PUT')
+            with patch('prototype.upload_asset.build_requests', return_value=[request]):
+                self.assertEqual(upload_asset({}, data, 'test', lambda *args: None), [200])
+            self.assertEqual(received, [data])
+        finally:
+            server.shutdown()
+            thread.join()
+            server.server_close()
+
+    def test_流式进度保持原始请求字节和长度并等待服务端确认(self):
+        data = b'a' * 150000
+        updates = []
+
+        def open_request(request, timeout):
+            self.assertEqual(request.get_header('Content-length'), str(len(data)))
+            self.assertEqual(b''.join(request.data), data)
+            self.assertTrue(all(done < total for done, total in updates))
+            response = MagicMock()
+            response.__enter__.return_value.status = 200
+            return response
+
+        with patch('prototype.upload_asset.build_opener') as opener:
+            opener.return_value.open.side_effect = open_request
+            self.assertEqual(upload_asset(descriptor(0, len(data)), data, 'test', lambda done, total: updates.append((done, total))), [200])
+        self.assertGreater(len(updates), 2)
+        self.assertEqual(updates[-1], (len(data), len(data)))
+
+    def test_服务端拒绝不显示传输完成(self):
+        updates = []
+
+        def reject(request, timeout):
+            list(request.data)
+            raise HTTPError('https://test', 503, 'test', {}, None)
+
+        with patch('prototype.upload_asset.build_opener') as opener:
+            opener.return_value.open.side_effect = reject
+            with self.assertRaises(UploadError):
+                upload_asset(descriptor(), b'test', 'test', lambda done, total: updates.append((done, total)))
+        self.assertTrue(all(done < total for done, total in updates))
+
     def test_歌词封面任务接受十进制字符串范围并拒绝异常格式(self):
         self.assertEqual(build_requests(descriptor("2", "4"), b"001234", "test")[0].data, b"1234")
         for offset in ("-1", "1.0", " 1", "１", "1e0"):

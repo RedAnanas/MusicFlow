@@ -13,6 +13,34 @@ from worker import Worker, WorkerError, recovery_action, validate_url
 
 
 class WorkerTests(unittest.TestCase):
+    def test_独立指纹阶段字节进度及每轮等待均保留标识(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            worker, records, job = self.make_worker(directory)
+
+            def upload(source):
+                progress = uploader.call_args.args[4]
+                progress('full-lowres', 25)
+                progress('full-lowres', 100)
+                progress('waiting', 180)
+                progress('waiting', 180)
+                progress('upload-track')
+                progress('asset-bytes', {'bytes_sent': 50, 'bytes_total': 100})
+                progress('asset-bytes', {'bytes_sent': 100, 'bytes_total': 100})
+                worker.save(directory / f"upload-{job['sha256']}.dpapi", {'completed': True, 'complete_received': True})
+                return {'extras_completed': True}
+
+            with patch('worker.PRIVATE', directory), patch('prototype.uploader.WindowsSongUploader') as uploader:
+                uploader.return_value.upload.side_effect = upload
+                worker.execute(job)
+            events = [call.args[1] for call in worker.json_request.call_args_list]
+            waits = [item for item in events if item.get('stage') == 'waiting']
+            self.assertEqual(len(waits), 2)
+            self.assertNotEqual(waits[0]['stage_token'], waits[1]['stage_token'])
+            self.assertEqual(waits[0]['wait_seconds'], 180)
+            self.assertTrue(any(item.get('stage') == 'full-lowres' and item.get('stage_progress') == 100 for item in events))
+            self.assertTrue(any(item.get('stage') == 'audio' and item.get('bytes_sent') == 100 and item.get('stage_progress') == 100 for item in events))
+
     def test_服务端请求更新授权后不再领取新任务(self):
         """授权导入只暂停后续领取，不抢占当前上传。"""
         with tempfile.TemporaryDirectory() as temporary:

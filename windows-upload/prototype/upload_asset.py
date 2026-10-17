@@ -77,12 +77,28 @@ def build_requests(descriptor: dict, asset: bytes, user_agent: str) -> list[Requ
     return requests
 
 
-def upload_asset(descriptor: dict, asset: bytes, user_agent: str) -> list[int]:
+def upload_asset(descriptor: dict, asset: bytes, user_agent: str, progress=None) -> list[int]:
     """顺序执行资产上传；HTTP 成功不代表整首歌曲已入库。"""
     requests = build_requests(descriptor, asset, user_agent)
     opener = build_opener(ProxyHandler({}), _NoRedirect())
     statuses = []
+    total = sum(len(request.data) for request in requests)
+    sent = 0
     for request in requests:
+        if progress:
+            body = request.data
+
+            def chunks():
+                nonlocal sent
+                for offset in range(0, len(body), 64 * 1024):
+                    chunk = body[offset:offset + 64 * 1024]
+                    yield chunk
+                    sent += len(chunk)
+                    # 最后一个字节留待服务端确认成功，避免提前显示完成。
+                    progress(min(sent, total - 1), total)
+
+            request.data = chunks()
+            request.add_header("Content-Length", str(len(body)))
         try:
             with opener.open(request, timeout=150) as response:
                 if not 200 <= response.status < 300:
@@ -92,6 +108,8 @@ def upload_asset(descriptor: dict, asset: bytes, user_agent: str) -> list[int]:
             raise UploadError(f"资产上传返回 HTTP {error.code}") from None
         except (URLError, OSError):
             raise UploadError("资产上传连接失败") from None
+    if progress:
+        progress(total, total)
     return statuses
 
 

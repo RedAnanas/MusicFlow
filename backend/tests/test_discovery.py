@@ -239,3 +239,35 @@ def test_search_backfills_presence_before_done(monkeypatch) -> None:
     assert stream.index("event: result") < stream.index("event: presence") < stream.index("event: done")
     assert '"nas_present": true' in stream
     assert '"presence_pending": false' in stream
+
+
+def test_processing_preview_reuses_exact_local_file(monkeypatch, tmp_path):
+    """搜索到本地已有的歌曲时，补 Apple Music 应复用本地文件。"""
+    source = tmp_path / 'song.flac'
+    source.write_bytes(b'audio')
+    local = {'id': 'local-song', 'path': str(source), 'title': '歌曲', 'artist': '歌手', 'album': '专辑', 'isrc': 'CN123'}
+    monkeypatch.setattr(discovery.media_library_service, 'load_tracks', lambda _refresh: [local])
+    index = {'local_isrc': {'CN123'}, 'local_metadata': set(), 'apple_isrc': set(), 'apple_metadata': set()}
+    monkeypatch.setattr(discovery.dual_library_service, 'build_presence_index', lambda _tracks: index)
+    monkeypatch.setattr(discovery.dual_library_service, 'find_apple_candidates', lambda _track: [])
+    request = discovery.AcquisitionRequest(selected_track={'song_name': '歌曲', 'singers': '歌手', 'album': '专辑', 'isrc': 'CN123'}, target_mode='both')
+    plan = asyncio.run(discovery.preview_acquisition(request))
+    assert plan == {'desired_nas': False, 'desired_apple': True, 'local_file_id': 'local-song', 'reuse_local': True, 'review': None, 'skip': False}
+    request.target_mode = 'nas'
+    assert asyncio.run(discovery.preview_acquisition(request))['skip'] is True
+
+
+def test_create_acquisition_rechecks_presence_and_uses_server_local_path(monkeypatch, tmp_path):
+    """提交时不信任浏览器的存在状态，本地路径只能从服务端索引取得。"""
+    source = tmp_path / 'song.flac'
+    source.write_bytes(b'audio')
+    monkeypatch.setattr(discovery.media_library_service, 'load_tracks', lambda _refresh: [{'id': 'local-song', 'path': str(source)}])
+    async def preview(_request):
+        return {'desired_nas': False, 'desired_apple': True, 'local_file_id': 'local-song', 'review': None}
+    monkeypatch.setattr(discovery, 'preview_acquisition', preview)
+    monkeypatch.setattr(discovery.dual_library_service, 'find_apple_candidates', lambda _track: [])
+    calls = []
+    monkeypatch.setattr(discovery.acquisition_service, 'create_job', lambda *args: calls.append(args) or {'id': 'job'})
+    request = discovery.AcquisitionRequest(selected_track={'token': 'track'}, desired_nas=True, desired_apple=False, target_mode='both')
+    asyncio.run(discovery.create_acquisition(request))
+    assert calls == [({'token': 'track'}, 'local-song', str(source), False, True)]
