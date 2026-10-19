@@ -151,6 +151,8 @@ class AcquisitionService:
             self._update(job_id, status="preparing", error=None)
             source_path = Path(job["staging_path"] or job["local_source_path"] or "")
             if not source_path.is_file():
+                if job["local_source_path"]:
+                    raise ValueError("本地源文件不可读取，请重新定位文件或搜索下载")
                 source_path = self._download(job_id, job)
 
             job = self.get_job(job_id)
@@ -270,6 +272,8 @@ class AcquisitionService:
         watch_folder = watch_folder_manager.get_watch_folder(watch_folder_id)
         if not watch_folder:
             raise ValueError(f"{target_name}补齐监控目录不存在")
+        if not watch_folder.input_dir:
+            raise ValueError(f"{target_name}处理方案未配置监控目录，不能用于发现音乐自动投递")
         if not watch_folder.enabled or not watch_folder.auto_process:
             raise ValueError(f"{target_name}补齐监控目录未启用自动处理")
         if routing:

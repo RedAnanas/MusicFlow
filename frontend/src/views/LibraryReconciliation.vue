@@ -5,6 +5,7 @@ import axios from 'axios'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import ServerFileBrowser from '../components/ServerFileBrowser.vue'
 import AppleFillReviewDialog from '../components/AppleFillReviewDialog.vue'
+import { useAppStore } from '../stores/app'
 
 type ReconciliationStatus = 'both' | 'nas_only' | 'apple_only' | 'review'
 
@@ -102,6 +103,9 @@ const incrementalEntries = ref<AppleIncrementalEntry[]>([])
 const incrementalOpen = ref(false)
 const incrementalSaving = ref(false)
 const incrementalForm = reactive({ title: '', artist: '', album: '', isrc: '', apple_id: '' })
+const store = useAppStore()
+const appleProcessingPlan = ref('')
+const applePlans = computed(() => store.watchFolders.filter(plan => plan.targets.some(target => target.type === 'convert' && target.library !== 'nas' && store.profiles.some(profile => profile.id === target.profileId && profile.enabled && profile.appleMusicDeliveryMode !== 'none'))))
 const appleReviewOpen = ref(false)
 const appleReviewLocal = ref<TrackSide | null>(null)
 
@@ -422,18 +426,38 @@ async function deleteSnapshot() {
 
 function handoffLocal(entry: ReconciliationEntry) {
   if (!entry.local?.id) return
+  if (!applePlans.value.some(plan => plan.id === appleProcessingPlan.value)) appleProcessingPlan.value = applePlans.value[0]?.id || ''
   appleReviewLocal.value = entry.local
   appleReviewOpen.value = true
 }
 
+async function fillLocalApple() {
+  if (!appleReviewLocal.value?.id || !appleProcessingPlan.value) return
+  try {
+    const response = await axios.post('/api/discovery/fill-local-apple', {
+      local_file_id: appleReviewLocal.value.id,
+      processing_plan_id: appleProcessingPlan.value,
+    })
+    const errors = response.data.outputs.filter((item: { state: string }) => ['failed', 'blocked'].includes(item.state))
+    if (errors.length) ElMessage.warning(errors[0].error || '部分输出失败，请查看操作记录')
+    else ElMessage.success(response.data.created_tasks ? '已使用本地文件创建转换任务，上传进度请查看操作记录' : '已有输出或处理记录，请在操作记录中核对')
+    await loadIncrementalEntries()
+    await loadReconciliation()
+  } catch (error) {
+    ElMessage.error(axios.isAxiosError(error) ? error.response?.data?.detail || '本地补齐失败' : '本地补齐失败')
+  }
+}
+
 function searchAppleFill() {
   const title = appleReviewLocal.value?.title || (appleReviewLocal.value?.filename || '').replace(/\.[^.]+$/, '')
+  appleReviewOpen.value = false
   router.push({ path: '/discovery', query: { q: title } })
 }
 
 onMounted(async () => {
   loading.value = true
   try {
+    await Promise.all([store.fetchProfiles(), store.fetchWatchFolders()])
     await loadStatus()
     await loadMediaSources()
     await loadIncrementalEntries()
@@ -567,7 +591,9 @@ onMounted(async () => {
       <el-button type="primary" @click="chooseCsv">选择 CSV 文件</el-button>
     </el-empty>
     <ServerFileBrowser v-model="showMediaBrowser" mode="directory" @select="selectMediaPath" />
-    <AppleFillReviewDialog v-model="appleReviewOpen" :payload="appleReviewLocal?.id ? { local_file_id: appleReviewLocal.id } : null" mode="search" @search="searchAppleFill" @added="loadIncrementalEntries" />
+    <AppleFillReviewDialog v-model="appleReviewOpen" :payload="appleReviewLocal?.id ? { local_file_id: appleReviewLocal.id } : null" mode="local" :confirm-disabled="!applePlans.some(plan => plan.id === appleProcessingPlan)" @confirm="fillLocalApple" @search="searchAppleFill" @added="loadIncrementalEntries">
+      <template #processing-plan><el-form label-position="top"><el-form-item label="Apple Music 转换方案"><el-select v-model="appleProcessingPlan" placeholder="选择含上传或交接规则的方案"><el-option v-for="plan in applePlans" :key="plan.id" :label="plan.name" :value="plan.id" /></el-select></el-form-item><p>只使用当前本地歌曲和方案中的 Apple Music 输出，不重新下载，也不执行本地复制规则。</p><RouterLink v-if="!applePlans.length" to="/processing-plans">先配置 Apple Music 转换方案</RouterLink></el-form></template>
+    </AppleFillReviewDialog>
     <el-dialog v-model="mediaDialogOpen" :title="editingMediaId ? '修改本地音乐库目录' : '添加本地音乐库目录'" width="min(520px, 92vw)">
       <el-form label-position="top"><el-form-item label="目录名称"><el-input v-model="mediaForm.name" placeholder="例如 华语收藏" /></el-form-item><el-form-item label="目录地址"><el-input v-model="mediaForm.path" placeholder="服务器上的绝对路径" /></el-form-item><el-button @click="showMediaBrowser = true">浏览服务器目录</el-button></el-form>
       <template #footer><el-button @click="mediaDialogOpen = false">取消</el-button><el-button type="primary" :loading="mediaSaving" @click="saveMediaSource">保存</el-button></template>

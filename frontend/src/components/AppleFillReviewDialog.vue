@@ -26,12 +26,14 @@ interface PrecheckResult {
   catalog: CatalogTrack[]
   catalog_error: string
   country: string
+  local_available?: boolean
 }
 
 const props = defineProps<{
   modelValue: boolean
   payload: { local_file_id?: string; selected_track?: object } | null
-  mode: 'search' | 'confirm'
+  mode: 'search' | 'confirm' | 'local'
+  confirmDisabled?: boolean
 }>()
 const emit = defineEmits<{
   'update:modelValue': [value: boolean]
@@ -106,13 +108,16 @@ function proceed() {
           </article>
         </div>
       </section>
-      <p v-if="!loading && !result.personal.length && !result.catalog.length && !result.catalog_error" class="review-empty">未找到疑似已有曲目。可到发现页继续搜索，选择你认可的版本。</p>
+      <p v-if="!loading && !result.personal.length && !result.catalog.length && !result.catalog_error" class="review-empty">未找到疑似已有曲目。{{ mode === 'local' ? '可直接使用当前本地文件转换并补齐。' : '可到发现页继续搜索，选择你认可的版本。' }}</p>
       <p v-if="result.catalog_error" class="review-error">{{ result.catalog_error }}。请重试曲库核对，或到发现页手动搜索。</p>
+      <p v-if="mode === 'local' && !loading && result.local_available !== true" class="review-error">本地文件不可读取，请重新定位文件，或去发现页搜索下载。</p>
+      <slot name="processing-plan" />
       <el-button v-if="result.catalog_error" @click="loadReview">重试核对</el-button>
     </div>
     <template #footer>
       <el-button @click="emit('update:modelValue', false)">取消</el-button>
-      <el-button type="primary" :disabled="loading || (mode === 'confirm' && (!!result.catalog_error || recordedIds.length > 0))" @click="proceed">{{ mode === 'search' ? '去发现页搜索' : recordedIds.length ? '已记录，等待确认' : '确认补齐所选版本' }}</el-button>
+      <el-button v-if="mode === 'local' && !loading && result.local_available === false" @click="emit('search')">去发现页搜索下载</el-button>
+      <el-button type="primary" :disabled="loading || confirmDisabled || ((mode === 'confirm' || mode === 'local') && (!!result.catalog_error || recordedIds.length > 0)) || (mode === 'local' && (result.local_available !== true || result.personal.length > 0))" @click="proceed">{{ mode === 'search' ? '去发现页搜索' : recordedIds.length ? '已记录，等待确认' : mode === 'local' ? '使用本地文件转换并补齐' : '确认补齐所选版本' }}</el-button>
     </template>
   </el-dialog>
 </template>

@@ -5,6 +5,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import type { Profile } from '../types'
 import ProfileEditorDialog from '../components/ProfileEditorDialog.vue'
 
+defineProps<{ embedded?: boolean }>()
 const store = useAppStore()
 const showCreateDialog = ref(false)
 const showEditDialog = ref(false)
@@ -210,28 +211,30 @@ const handleDelete = async (id: string) => {
 
 <template>
   <div class="profiles-page product-page">
+    <RouterLink v-if="!embedded" to="/processing-plans"><el-button link type="primary">返回转换方案</el-button></RouterLink>
     <div class="page-header">
       <div class="page-title-block">
-        <h1>转换方案</h1>
-        <p>管理输出格式、音质、元数据和 Apple Music 自动交接规则。</p>
+        <span class="page-eyebrow">音频与交付参数</span>
+        <h1>转换参数预设</h1>
+        <p>保存常用格式、音质和上传方式，供转换方案的输出规则复用。</p>
       </div>
       <el-button type="primary" @click="showCreateDialog = true">
         <el-icon><Plus /></el-icon>
-        新建方案
+        新建转换参数
       </el-button>
     </div>
 
     <div class="profile-workspace" v-loading="store.profilesLoading">
       <aside class="profile-list-panel">
-        <div class="panel-heading"><span>全部方案</span><span class="panel-count">{{ store.profiles.length }}</span></div>
-        <div class="profile-table-head"><span class="profile-head-name">方案</span><span>格式 / 编码</span><span>操作</span></div>
+        <div class="panel-heading"><span>全部参数预设</span><span class="panel-count">{{ store.profiles.length }}</span></div>
+        <div class="profile-table-head"><span class="profile-head-name">预设名称</span><span>格式 / 编码</span><span>操作</span></div>
         <article v-for="profile in store.profiles" :key="profile.id" class="profile-list-item">
           <span class="format-icon">{{ profile.outputFormat.toUpperCase() }}</span>
-          <span class="profile-list-copy"><strong>{{ profile.name }}</strong><small>版本 {{ profile.version }} · {{ profile.enabled ? '可用' : '停用' }}</small></span>
+          <span class="profile-list-copy"><strong>{{ profile.name }}</strong><small>{{ profile.enabled ? '可用' : '停用' }}<template v-if="profile.version"> · 版本 {{ profile.version }}</template></small></span>
           <span class="profile-format">{{ profile.outputFormat.toUpperCase() }} · {{ profile.codec?.toUpperCase() || '--' }} · {{ profile.bitrate ? `${profile.bitrate} kbps` : '无损' }}</span>
           <div class="profile-row-actions"><el-button link type="primary" @click="selectedProfile = profile; showDetailsDialog = true">详情</el-button><el-button link @click="handleEdit(profile)">编辑</el-button><el-button link type="danger" @click="handleDelete(profile.id)">删除</el-button></div>
         </article>
-        <el-empty v-if="!store.profiles.length" description="还没有转换方案" :image-size="70" />
+        <el-empty v-if="!store.profiles.length" description="还没有转换参数预设" :image-size="70" />
       </aside>
 
       <el-dialog v-if="selectedProfile" v-model="showDetailsDialog" class="profile-details-dialog" :title="`${selectedProfile.name} - 方案详情`" width="1180px" destroy-on-close>
@@ -497,7 +500,7 @@ const handleDelete = async (id: string) => {
 }
 .page-header { padding:30px 34px; margin-bottom:18px; border:1px solid #ece8fb; border-radius:24px; background:linear-gradient(120deg,#fff 40%,#f7f3ff); }
 
-.profile-workspace { min-height: 420px; overflow: hidden; background: #fff; border: 1px solid #e8ecea; border-radius: 16px; box-shadow: 0 12px 36px rgba(18, 58, 45, .06); }
+.profile-workspace { overflow: hidden; background: #fff; border: 1px solid #e8ecea; border-radius: 16px; box-shadow: 0 12px 36px rgba(18, 58, 45, .06); }
 .profile-list-panel { display:grid; grid-template-columns:repeat(auto-fill,minmax(250px,1fr)); gap:10px; padding:18px; background:#fff; }
 .panel-heading { grid-column:1 / -1; display: flex; align-items: center; justify-content: space-between; padding: 0 10px 6px; color: #606b67; font-size: 13px; font-weight: 700; }
 .panel-count { display: inline-grid; min-width: 24px; height: 24px; place-items: center; background: #e8f5f0; color: #087955; border-radius: 12px; }
@@ -603,25 +606,37 @@ code { padding: 4px 7px; background: #edf3f0; color: #385148; border-radius: 5px
 :deep(.profile-details-dialog) { max-width: calc(100vw - 24px); }
 
 @media (max-width: 700px) {
-  .profile-list-panel { grid-template-columns:1fr; }
-  .profile-inspector { padding: 20px; }
-  .inspector-header { flex-direction: column; }
-  .detail-grid { grid-template-columns: 1fr; }
-  .wide-card { grid-column: auto; }
-  .profile-form {
-    grid-template-columns: 1fr;
-  }
+  .profile-inspector { padding:20px; }
+  .inspector-header { flex-direction:column; }
+  .detail-grid,.profile-form { grid-template-columns:1fr; }
+  .wide-card { grid-column:auto; }
 }
-.profile-list-panel { grid-template-columns:1fr; }
-.profile-table-head { display:grid; grid-template-columns:42px minmax(0,1fr) 220px 180px; gap:12px; padding:0 16px 8px; color:#8b96aa; font-size:12px; font-weight:700; }
+.profile-list-panel { grid-template-columns:1fr; gap:10px; padding:18px; }
+.panel-heading { padding:0 0 16px; margin-bottom:2px; border-bottom:1px solid var(--mf-border); color:var(--mf-text); font-size:14px; }
+.panel-count { background:var(--mf-nav-hover); color:#9873e9; }
+.profile-table-head { display:grid; grid-template-columns:42px minmax(160px,1fr) minmax(200px,.8fr) 150px; gap:14px; padding:0 16px 8px; color:var(--mf-text-muted); font-size:11px; font-weight:600; }
 .profile-head-name { grid-column:1 / 3; }
-.profile-list-item { display:grid; grid-template-columns:42px minmax(0,1fr) 220px 180px; padding:14px 16px; cursor:default; }
-.profile-format { overflow:hidden; color:#70807a; font-size:12px; text-overflow:ellipsis; white-space:nowrap; }
-.profile-row-actions { display:flex; gap:4px; margin-left:auto; }
+.profile-list-item { display:grid; grid-template-columns:42px minmax(160px,1fr) minmax(200px,.8fr) 150px; gap:14px; padding:16px; cursor:default; border-color:var(--mf-border); background:var(--mf-surface-muted); }
+.profile-format { overflow:hidden; color:var(--mf-text-muted); font-size:12px; text-overflow:ellipsis; white-space:nowrap; }
+.profile-row-actions { display:flex; justify-content:flex-end; gap:12px; margin-left:0; }
+.profile-row-actions .el-button + .el-button { margin-left:0; }
 :global(.profile-details-dialog),:global(.profile-editor-dialog) { max-width:calc(100vw - 24px); margin-top:3vh !important; }
 :global(.profile-details-dialog) { width:min(1180px, calc(100vw - 32px)) !important; }
 :global(.profile-details-dialog .el-dialog__body),:global(.profile-editor-dialog .el-dialog__body) { max-height:calc(94vh - 120px); overflow-y:auto; }
 @media (min-width:701px) { :global(.profile-details-dialog .el-dialog__body) { max-height:none; overflow:visible; } }
-@media (max-width:700px) { .profile-list-item { display:flex; } .profile-format { display:none; } .profile-row-actions { flex-wrap:wrap; justify-content:flex-end; } }
-@media (max-width:700px) { .profile-table-head { display:none; } }
+@media (max-width:1000px) and (min-width:701px) {
+  .profile-list-item,.profile-table-head { grid-template-columns:42px minmax(140px,1fr) minmax(150px,.8fr) 135px; gap:10px; }
+}
+@media (max-width:700px) {
+  .profile-table-head { display:none; }
+  .profile-list-panel { padding:16px 12px 6px; }
+  .panel-heading { padding:0 4px 14px; }
+  .profile-list-item { grid-template-columns:42px minmax(0,1fr); gap:10px 12px; padding:16px; margin-bottom:2px; }
+  .format-icon { grid-row:1 / 3; align-self:start; }
+  .profile-list-copy { gap:5px; }
+  .profile-list-copy strong { white-space:normal; overflow-wrap:anywhere; line-height:1.5; }
+  .profile-list-copy small { font-size:11px; line-height:1.5; }
+  .profile-format { grid-column:2; display:block; font-size:11px; white-space:normal; line-height:1.6; }
+  .profile-row-actions { grid-column:1 / -1; flex-wrap:wrap; padding-top:12px; margin-top:2px; border-top:1px solid var(--mf-border); }
+}
 </style>

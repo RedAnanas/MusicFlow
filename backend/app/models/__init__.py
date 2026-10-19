@@ -122,7 +122,7 @@ class DeliveryTarget(BaseModel):
 class WatchFolder(BaseModel):
     id: str
     name: str
-    input_dir: str
+    input_dir: str = ""
     profile_ids: List[str] = []
     targets: List[DeliveryTarget] = []
     auto_process: bool = True

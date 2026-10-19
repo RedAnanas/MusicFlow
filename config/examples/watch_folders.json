@@ -12,5 +12,16 @@
     "recursive_scan": true,
     "scan_interval_minutes": 5,
     "enabled": false
+  },
+  "manual-apple": {
+    "id": "manual-apple",
+    "name": "手动补齐 Apple Music（示例，使用前修改路径）",
+    "input_dir": "",
+    "default_target": "all",
+    "targets": [
+      { "type": "convert", "profile_id": "apple-music-aac-256", "output_dir": "/music/apple-output" }
+    ],
+    "auto_process": false,
+    "enabled": false
   }
 }

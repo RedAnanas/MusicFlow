@@ -25,6 +25,15 @@ const showConvertDialog = ref(false)
 const currentFile = ref<FileItem | null>(null)
 const conversionFiles = ref<FileItem[]>([])
 const selectedProfile = ref('apple-music-aac-256')
+const selectedProcessingPlan = ref('')
+function applyProcessingPlan() {
+  const plan = store.watchFolders.find(item => item.id === selectedProcessingPlan.value)
+  conversionTargets.value = plan ? plan.targets.map(target => ({ ...target })) : [createDefaultDeliveryTarget()]
+}
+watch(selectedProcessingPlan, applyProcessingPlan)
+watch(() => store.watchFolders, plans => {
+  if (selectedProcessingPlan.value && !plans.some(plan => plan.id === selectedProcessingPlan.value)) selectedProcessingPlan.value = ''
+}, { deep: true })
 const conversionTargets = ref<DeliveryTarget[]>([])
 const coverErrors = ref(new Set<string>())
 const showFileBrowser = ref(false)
@@ -79,6 +88,9 @@ onMounted(() => {
   window.addEventListener('scroll', loadMoreMobileFiles, { passive: true })
   store.fetchFiles()
   store.fetchProfiles()
+  store.fetchWatchFolders().then(() => {
+    if (store.watchFolders.length) selectedProcessingPlan.value = store.watchFolders[0].id
+  })
   store.fetchLibrarySources()
 })
 
@@ -264,7 +276,7 @@ const handleView = (file: FileItem) => {
 const handleConvert = (file: FileItem) => {
   currentFile.value = file
   conversionFiles.value = [file]
-  conversionTargets.value = [createDefaultDeliveryTarget()]
+  applyProcessingPlan()
   showConvertDialog.value = true
 }
 
@@ -277,6 +289,7 @@ const executeConvert = async () => {
   try {
     const response = await axios.post('/api/files/batch-deliver', {
       file_ids: conversionFiles.value.map(file => file.id),
+      processing_plan_id: selectedProcessingPlan.value || undefined,
       targets: conversionTargets.value.map(target => ({
         type: target.type,
         output_dir: target.outputDir.trim(),
@@ -292,7 +305,8 @@ const executeConvert = async () => {
     if (copied) ElMessage.success(`已原样复制 ${copied} 个文件`)
     if (!created && !copied) ElMessage.info('目标文件或活动任务已存在，未创建新内容')
     if (response.data.errors.length) {
-      ElMessage.warning(`${response.data.errors.length} 条输出规则执行失败`)
+      ElMessage.warning(`${response.data.errors.length} 条输出规则执行失败：${response.data.errors[0].error}`)
+      return
     }
     showConvertDialog.value = false
     await store.fetchTasks()
@@ -329,7 +343,7 @@ const handleBatchConvert = () => {
   }
   currentFile.value = selectedFiles.value[0]
   conversionFiles.value = [...selectedFiles.value]
-  conversionTargets.value = [createDefaultDeliveryTarget()]
+  applyProcessingPlan()
   showConvertDialog.value = true
 }
 
@@ -569,20 +583,21 @@ const selectOutputDirectory = (paths: string[]) => {
 
         <section class="conversion-settings-panel">
           <div class="conversion-stepper"><span class="done"><i>1</i>选择内容</span><b></b><span class="active"><i>2</i>输出规则</span><b></b><span><i>3</i>确认提交</span></div>
-          <div class="settings-heading"><div><strong>输出规则</strong><span>与监控目录一致，可同时转换和原样复制</span></div><el-tag effect="plain">{{ conversionTargets.length }} 条规则</el-tag></div>
+          <div class="settings-heading"><div><strong>输出规则</strong><span>选择转换方案，直接复用转换、输出和上传设置</span></div><el-tag effect="plain">{{ conversionTargets.length }} 条规则</el-tag></div>
+          <el-form label-position="top"><el-form-item label="转换方案"><el-select v-model="selectedProcessingPlan" placeholder="选择完整方案"><el-option v-for="plan in store.watchFolders" :key="plan.id" :label="plan.name" :value="plan.id" /><el-option label="临时输出规则（仅本次）" value="" /></el-select></el-form-item><RouterLink to="/processing-plans">管理转换方案</RouterLink></el-form>
           <div class="delivery-rule-list">
             <section v-for="(target, index) in conversionTargets" :key="index" class="delivery-rule-card">
-              <div class="delivery-rule-head"><strong>规则 {{ index + 1 }} · {{ target.type === 'convert' ? '转换输出' : '原样复制' }}</strong><el-button v-if="conversionTargets.length > 1" link type="danger" @click="removeDeliveryTarget(index)">删除</el-button></div>
-              <el-form label-position="top" class="delivery-target-form">
+              <div class="delivery-rule-head"><strong>规则 {{ index + 1 }} · {{ target.type === 'convert' ? '转换输出' : '原样复制' }}</strong><el-button v-if="!selectedProcessingPlan && conversionTargets.length > 1" link type="danger" @click="removeDeliveryTarget(index)">删除</el-button></div>
+              <el-form :disabled="!!selectedProcessingPlan" label-position="top" class="delivery-target-form">
                 <el-form-item label="处理方式"><el-radio-group v-model="target.type"><el-radio value="convert">转换输出</el-radio><el-radio value="copy">原样复制</el-radio></el-radio-group></el-form-item>
                 <el-form-item v-if="target.type === 'convert'" label="转换方案" required><el-select v-model="target.profileId" placeholder="请选择转换方案"><el-option v-for="profile in store.profiles" :key="profile.id" :label="profile.name" :value="profile.id" /></el-select></el-form-item>
                 <el-form-item label="输出目录" required><el-input v-model="target.outputDir" readonly placeholder="请选择输出目录"><template #append><el-button @click="outputTargetIndex = index; showOutputBrowser = true"><el-icon><FolderOpened /></el-icon>选择</el-button></template></el-input><small>{{ target.type === 'convert' ? '按方案转换后输出；同名目标或活动任务会安全跳过。' : '保留原文件格式、标签和文件名；同名文件不会覆盖。' }}</small></el-form-item>
               </el-form>
             </section>
-            <el-button plain class="add-delivery-rule" @click="addDeliveryTarget"><el-icon><Plus /></el-icon>添加输出规则</el-button>
+            <el-button v-if="!selectedProcessingPlan" plain class="add-delivery-rule" @click="addDeliveryTarget"><el-icon><Plus /></el-icon>添加输出规则</el-button>
           </div>
           <div class="output-estimate"><div><el-icon><Document /></el-icon><span>文件数<strong>{{ conversionFiles.length }}</strong></span></div><div><el-icon><Files /></el-icon><span>源文件大小<strong>{{ formatSize(conversionTotalSize) }}</strong></span></div><div><el-icon><Timer /></el-icon><span>总时长<strong>{{ formatDuration(conversionTotalDuration) }}</strong></span></div><div><el-icon><Connection /></el-icon><span>输出规则<strong>{{ conversionTargets.length }}</strong></span></div></div>
-          <div class="duplicate-warning"><el-icon><WarningFilled /></el-icon><span>转换和复制会并行执行；同名文件、已有目标和活动任务都会安全跳过，不会覆盖现有文件。</span></div>
+          <div class="duplicate-warning"><el-icon><WarningFilled /></el-icon><span>使用所选歌曲作为输入，不扫描监控目录；已有输出或已提交的任务会安全跳过。</span></div>
           <div class="delivery-preview"><strong>本次将执行</strong><span v-for="summary in deliverySummary" :key="summary">{{ summary }}</span></div>
         </section>
       </div>

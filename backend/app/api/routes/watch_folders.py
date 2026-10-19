@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 class WatchFolderCreate(BaseModel):
     name: str
-    input_dir: str
+    input_dir: str = ""
     profile_ids: List[str] = []
     targets: List[DeliveryTarget] = []
     auto_process: bool = True
@@ -61,10 +61,14 @@ def validate_input_directory(directory: str):
 
 def prepare_output_directory(directory: str, input_directory: str):
     path = Path(directory)
+    if not path.is_absolute():
+        raise HTTPException(status_code=400, detail="输出目录必须为绝对路径")
     if not path.exists():
         raise HTTPException(status_code=400, detail=f"Directory does not exist: {directory}")
     if not path.is_dir():
         raise HTTPException(status_code=400, detail=f"Path is not a directory: {directory}")
+    if not input_directory:
+        return
     try:
         path.resolve().relative_to(Path(input_directory).resolve())
     except ValueError:
@@ -104,6 +108,12 @@ def validate_targets(targets: List[DeliveryTarget], input_directory: str):
             raise HTTPException(status_code=400, detail="转换输出规则必须选择转换方案")
         if target.type == DeliveryTargetType.COPY and target.profile_id:
             raise HTTPException(status_code=400, detail="原样复制规则不能关联转换方案")
+        if target.type == DeliveryTargetType.CONVERT:
+            from app.services.profile_manager import profile_manager
+
+            profile = profile_manager.get_profile(target.profile_id)
+            if not profile or not profile.enabled:
+                raise HTTPException(status_code=400, detail="转换参数不存在或已停用")
         prepare_output_directory(target.output_dir, input_directory)
 
 
@@ -153,7 +163,8 @@ async def get_watch_folder(folder_id: str):
 
 @router.post("/", response_model=WatchFolderResponse)
 async def create_watch_folder(folder_create: WatchFolderCreate):
-    validate_input_directory(folder_create.input_dir)
+    if folder_create.input_dir:
+        validate_input_directory(folder_create.input_dir)
     folder_data = folder_create.model_dump()
     folder_data["targets"] = normalize_targets(folder_data)
     validate_targets(folder_data["targets"], folder_create.input_dir)

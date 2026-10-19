@@ -57,7 +57,8 @@ class FileBatchConvertRequest(FileConvertRequest):
 
 class FileBatchDeliveryRequest(BaseModel):
     file_ids: List[str]
-    targets: List[DeliveryTarget]
+    targets: List[DeliveryTarget] = []
+    processing_plan_id: Optional[str] = None
 
 
 class FileImportRequest(BaseModel):
@@ -590,6 +591,27 @@ async def batch_deliver_files(request: FileBatchDeliveryRequest):
     """按监控目录输出规则对已选文件执行转换和原样复制。"""
     if not request.file_ids:
         raise HTTPException(status_code=400, detail="至少选择一个文件")
+    if request.processing_plan_id:
+        from app.services.watch_folder_manager import watch_folder_manager
+
+        folder = watch_folder_manager.get_watch_folder(request.processing_plan_id)
+        if not folder:
+            raise HTTPException(status_code=404, detail="处理方案不存在，请重新选择")
+        deliveries, errors = [], []
+        for file_id in request.file_ids:
+            try:
+                file = files_cache.get(file_id)
+                if not file:
+                    raise ValueError("文件不存在，请刷新操作台")
+                result = await watch_folder_manager.process_selected_file(folder, Path(file["path"]))
+                for item in result["outputs"]:
+                    if item["state"] in {"failed", "blocked"}:
+                        errors.append({"file_id": file_id, "error": item.get("error")})
+                deliveries.extend([{"file_id": file_id, "status": "queued"}] * result["created_tasks"])
+                deliveries.extend([{"file_id": file_id, "status": "copied"}] * result["copied_files"])
+            except (ValueError, OSError) as exc:
+                errors.append({"file_id": file_id, "error": str(exc)})
+        return {"status": "success", "deliveries": deliveries, "errors": errors}
     if not request.targets:
         raise HTTPException(status_code=400, detail="至少配置一条输出规则")
 

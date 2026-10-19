@@ -11,7 +11,7 @@ from app.config import settings
 from app.core.watcher import is_metadata_temp_audio, watcher_service
 from app.models import DeliveryTarget, DeliveryTargetType, WatchFolder
 from app.services.config_manager import config_manager
-from app.services.watch_routing import watch_routing
+from app.services.watch_routing import target_library, watch_routing
 
 logger = logging.getLogger(__name__)
 
@@ -101,11 +101,12 @@ class WatchFolderManager:
         if not old_folder:
             return None
 
-        if old_folder.default_target == "all" and folder.default_target != "all":
+        if folder.input_dir and old_folder.default_target == "all" and folder.default_target != "all":
             for path in self._scan_directory(folder.input_dir, folder.recursive_scan):
                 if not watch_routing.get(folder.id, path):
                     watch_routing.register(folder, path, path, False, False, review="旧目录历史文件，请选择目标后确认处理")
-        watcher_service.stop_watch(old_folder.input_dir)
+        if old_folder.input_dir:
+            watcher_service.stop_watch(old_folder.input_dir)
         self.watch_folders[folder_id] = folder
         self.save_watch_folders()
         self._schedule_next_scan(folder)
@@ -120,7 +121,8 @@ class WatchFolderManager:
         if not folder:
             return False
 
-        watcher_service.stop_watch(folder.input_dir)
+        if folder.input_dir:
+            watcher_service.stop_watch(folder.input_dir)
         del self.watch_folders[folder_id]
         self.runtime_status.pop(folder_id, None)
         self.event_history.pop(folder_id, None)
@@ -140,7 +142,8 @@ class WatchFolderManager:
             self._schedule_next_scan(folder)
             self._schedule_initial_scan(folder)
         else:
-            watcher_service.stop_watch(folder.input_dir)
+            if folder.input_dir:
+                watcher_service.stop_watch(folder.input_dir)
         self.save_watch_folders()
         state = "启用" if folder.enabled else "停用"
         self._record_event(folder_id, "configured", f"监控已{state}")
@@ -151,6 +154,8 @@ class WatchFolderManager:
         if not folder:
             return []
 
+        if not folder.input_dir:
+            raise FileNotFoundError("此处理方案未配置监控目录，请在操作台选择文件")
         files = self._scan_directory(folder.input_dir, folder.recursive_scan)
         status = self._ensure_runtime(folder_id)
         status["last_scan"] = datetime.now().isoformat()
@@ -183,7 +188,7 @@ class WatchFolderManager:
         if not folder:
             return {}
         status = dict(self._ensure_runtime(folder_id))
-        status["watching"] = folder.enabled and watcher_service.is_watching(folder.input_dir)
+        status["watching"] = bool(folder.input_dir) and folder.enabled and watcher_service.is_watching(folder.input_dir)
         status["enabled"] = folder.enabled
         status["next_scan_at"] = self._next_scan_iso(folder_id)
         return status
@@ -192,6 +197,8 @@ class WatchFolderManager:
         return list(reversed(self.event_history.get(folder_id, [])[-limit:]))
 
     def _start_watching(self, folder: WatchFolder):
+        if not folder.input_dir:
+            return
         if not self.loop:
             self._ensure_runtime(folder.id)["last_error"] = "服务尚未完成启动"
             return
@@ -245,6 +252,35 @@ class WatchFolderManager:
         finally:
             self._processing_files.discard(key)
 
+    async def process_selected_file(self, folder: WatchFolder, source_path: Path, *, apple_only: bool = False) -> Dict[str, Any]:
+        """手动入口复用方案输出，不扫描或改动监控目录。"""
+        from app.services.profile_manager import profile_manager
+
+        if not source_path.is_file():
+            raise FileNotFoundError("本地文件不可读取，请重新定位文件或搜索下载")
+        targets = folder.targets
+        if apple_only:
+            targets = [target for target in targets if target.type == DeliveryTargetType.CONVERT and target_library(target) == "apple"
+                       and (profile := profile_manager.get_profile(target.profile_id or ""))
+                       and profile.enabled and profile.apple_music_delivery_mode != "none"]
+        if not targets:
+            raise ValueError("所选处理方案没有可用的 Apple Music 输出规则" if apple_only else "处理方案没有输出规则")
+        manual = folder.model_copy(update={
+            "id": f"manual:{folder.id}:{'apple' if apple_only else 'all'}",
+            "input_dir": "", "targets": targets, "default_target": "all",
+        })
+        key = str(source_path.resolve())
+        if key in self._processing_files:
+            raise ValueError("文件正在处理，请稍后再试")
+        self._processing_files.add(key)
+        try:
+            await asyncio.to_thread(watch_routing.register, manual, source_path, source_path, True, True, replace=True)
+            result = await self._process_file_outputs(manual, str(source_path), "手动处理")
+            plan = await asyncio.to_thread(watch_routing.get, manual.id, source_path)
+            return {**result, "outputs": plan["outputs"]}
+        finally:
+            self._processing_files.discard(key)
+
     async def _process_file_outputs(self, folder: WatchFolder, file_path: str, trigger: str) -> Dict[str, int]:
         from app.api.routes.tasks import TaskCreate, enqueue_conversion_task, tasks_cache
         from app.services.profile_manager import profile_manager
@@ -266,7 +302,7 @@ class WatchFolderManager:
                 target = DeliveryTarget.model_validate(item)
                 if target.type == DeliveryTargetType.CONVERT:
                     profile = profile_manager.get_profile(target.profile_id or "")
-                    if not profile or not profile.enabled or (plan and (profile.apple_music_delivery_mode == "none"
+                    if not profile or not profile.enabled or (plan and folder.default_target != "all" and (profile.apple_music_delivery_mode == "none"
                             or (profile.apple_music_delivery_mode == "client_import" and not profile.apple_music_import_dir))):
                         if plan:
                             item.update(state="failed", error="转换方案不可用，请恢复方案后重试")
@@ -291,7 +327,7 @@ class WatchFolderManager:
                         item.update(state="submitted", task_id=task.id, error=None)
                         if plan:
                             await asyncio.to_thread(watch_routing.save, folder.id, source_path, plan)
-                        if plan and task.status.value not in {"failed", "cancelled"}:
+                        if plan and profile.apple_music_delivery_mode != "none" and task.status.value not in {"failed", "cancelled"}:
                             from app.core import metadata_service
                             from app.services.dual_library_service import dual_library_service
                             metadata = await asyncio.to_thread(metadata_service.read_metadata, str(source_path)) or {}
@@ -360,7 +396,7 @@ class WatchFolderManager:
     def _build_output_path(self, folder: WatchFolder, source_path: Path, target: DeliveryTarget, profile=None) -> Path:
         output_root = Path(target.output_dir)
         try:
-            relative_path = source_path.relative_to(Path(folder.input_dir))
+            relative_path = source_path.relative_to(Path(folder.input_dir)) if folder.input_dir else Path(source_path.name)
         except ValueError:
             relative_path = Path(source_path.name)
 
@@ -390,7 +426,7 @@ class WatchFolderManager:
                 now = time.monotonic()
                 for folder in list(self.watch_folders.values()):
                     due_at = self.next_scan_at.get(folder.id, now)
-                    if folder.enabled and folder.auto_process and now >= due_at:
+                    if folder.input_dir and folder.enabled and folder.auto_process and now >= due_at:
                         try:
                             await self.process_watch_folder(folder.id, "periodic")
                             self._ensure_runtime(folder.id)["last_error"] = None
@@ -408,12 +444,15 @@ class WatchFolderManager:
                 await asyncio.sleep(5)
 
     def _schedule_next_scan(self, folder: WatchFolder):
+        if not folder.input_dir:
+            self.next_scan_at.pop(folder.id, None)
+            return
         interval_seconds = max(folder.scan_interval_minutes, 1) * 60
         self.next_scan_at[folder.id] = time.monotonic() + interval_seconds
 
     def _schedule_initial_scan(self, folder: WatchFolder):
         """在新增或重新启用目录后补偿处理已有文件。"""
-        if not folder.auto_process or not self.loop or self.loop.is_closed():
+        if not folder.input_dir or not folder.auto_process or not self.loop or self.loop.is_closed():
             return
 
         async def process_existing_files():

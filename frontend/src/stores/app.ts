@@ -205,6 +205,9 @@ export const useAppStore = defineStore('app', () => {
         codec: profile.codec,
         bitrate: profile.bitrate,
         sample_rate: profile.sampleRate,
+        channels: profile.channels,
+        bit_depth: profile.bitDepth,
+        output_dir: profile.outputDir,
         metadata_policy: profile.metadataPolicy,
         cover_policy: profile.coverPolicy,
         filename_template: profile.filenameTemplate,
@@ -382,7 +385,7 @@ export const useAppStore = defineStore('app', () => {
       // 转换字段名为下划线格式
       const apiData: Record<string, any> = {}
       if (folder.name) apiData.name = folder.name
-      if (folder.inputDir) apiData.input_dir = folder.inputDir
+      if (folder.inputDir !== undefined) apiData.input_dir = folder.inputDir
       if (folder.defaultTarget) apiData.default_target = folder.defaultTarget
       if (folder.profileIds) apiData.profile_ids = folder.profileIds
       if (folder.targets) apiData.targets = folder.targets.map(target => ({ type: target.type, output_dir: target.outputDir, profile_id: target.profileId || null, library: target.library }))

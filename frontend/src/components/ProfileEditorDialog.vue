@@ -8,7 +8,7 @@ export interface ProfileEditorForm {
   outputFormat: Profile['outputFormat']
   codec: string
   bitrate: number
-  sampleRate: number
+  sampleRate?: number
   metadataPolicy: Profile['metadataPolicy']
   coverPolicy: Profile['coverPolicy']
   filenameTemplate: string
@@ -41,7 +41,7 @@ const selectAppleMusicDirectory = (paths: string[]) => {
 </script>
 
 <template>
-  <el-dialog :model-value="modelValue" :title="mode === 'create' ? '新建转换方案' : '编辑转换方案'" width="880px" class="workspace-dialog profile-editor-dialog" destroy-on-close @update:model-value="emit('update:modelValue', $event)">
+  <el-dialog :model-value="modelValue" :title="mode === 'create' ? '新建转换方案' : '编辑转换方案'" width="880px" append-to-body class="workspace-dialog profile-editor-dialog" destroy-on-close @update:model-value="emit('update:modelValue', $event)">
     <div class="editor-layout">
       <el-form :model="form" label-position="top" class="editor-form">
         <section>

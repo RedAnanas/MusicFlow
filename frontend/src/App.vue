@@ -13,11 +13,10 @@ const navItems = [
   { path: '/library-reconciliation', label: '资料库对账', icon: Collection },
   { path: '/discovery', label: '发现音乐', icon: Headset },
   { path: '/tasks', label: '操作记录', icon: Document },
-  { path: '/profiles', label: '转换方案', icon: Document },
-  { path: '/watch-folders', label: '监控目录', icon: FolderOpened },
+  { path: '/processing-plans', label: '转换方案', icon: FolderOpened },
   { path: '/system', label: '系统设置', icon: Setting },
 ]
-const mobileNavItems = navItems.filter(item => ['/', '/files', '/library-reconciliation', '/discovery', '/tasks', '/profiles', '/watch-folders', '/system'].includes(item.path))
+const mobileNavItems = navItems.filter(item => ['/', '/files', '/library-reconciliation', '/discovery', '/tasks', '/processing-plans', '/system'].includes(item.path))
 const themeOptions = [
   { value: 'light' as const, label: '日间模式', icon: Sunny },
   { value: 'dark' as const, label: '夜间模式', icon: Moon },

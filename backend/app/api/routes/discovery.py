@@ -121,10 +121,10 @@ async def get_discovery_status():
         "musicdl": health,
         "musicdl_error": error,
         "nas_watch_folder_configured": bool(
-            nas_folder and nas_folder.enabled and nas_folder.auto_process and any(item.type.value == "copy" for item in nas_folder.targets)
+            nas_folder and nas_folder.input_dir and nas_folder.enabled and nas_folder.auto_process and any(item.type.value == "copy" for item in nas_folder.targets)
         ),
         "apple_watch_folder_configured": bool(
-            apple_folder and apple_folder.enabled and apple_folder.auto_process and any(item.type.value == "convert" for item in apple_folder.targets)
+            apple_folder and apple_folder.input_dir and apple_folder.enabled and apple_folder.auto_process and any(item.type.value == "convert" for item in apple_folder.targets)
         ),
     }
 
@@ -154,7 +154,7 @@ async def update_dual_library_config(request: DualLibraryConfigRequest):
         raise HTTPException(status_code=400, detail="Apple 曲库地区必须是两位国家或地区代码")
     if request.unified_watch_folder_id:
         folder = watch_folder_manager.get_watch_folder(request.unified_watch_folder_id)
-        if not folder or not folder.enabled or not folder.auto_process or folder.default_target == "all":
+        if not folder or not folder.input_dir or not folder.enabled or not folder.auto_process or folder.default_target == "all":
             raise HTTPException(status_code=400, detail="请选择已启用自动处理和目标分流的统一监控目录")
         from app.api.routes.watch_folders import validate_routing
         validate_routing({**folder.model_dump(), "targets": folder.targets})
@@ -171,7 +171,7 @@ async def update_dual_library_config(request: DualLibraryConfigRequest):
         folder = watch_folder_manager.get_watch_folder(folder_id)
         if not folder:
             raise HTTPException(status_code=400, detail="选择的监控目录不存在")
-        if not folder.enabled or not folder.auto_process:
+        if not folder.input_dir or not folder.enabled or not folder.auto_process:
             raise HTTPException(status_code=400, detail="双库补齐只能使用已启用自动处理的监控目录")
         has_copy = any(item.type.value == "copy" for item in folder.targets)
         has_apple = any(
@@ -241,7 +241,34 @@ async def precheck_apple_fill(request: ApplePrecheckRequest):
         catalog_error = ""
     except OSError as exc:
         catalog, catalog_error = [], str(exc)
-    return {"personal": personal, "catalog": catalog, "catalog_error": catalog_error, "country": country}
+    return {"personal": personal, "catalog": catalog, "catalog_error": catalog_error, "country": country,
+            "local_available": Path(track["path"]).is_file() if request.local_file_id else None}
+
+
+class LocalAppleFillRequest(BaseModel):
+    local_file_id: str
+    processing_plan_id: str
+
+
+@router.post("/discovery/fill-local-apple")
+async def fill_local_apple(request: LocalAppleFillRequest):
+    """对账补齐直接使用本地原曲，不调用 musicdl 下载。"""
+    tracks = await asyncio.to_thread(media_library_service.load_tracks, False)
+    local = next((track for track in tracks if track["id"] == request.local_file_id), None)
+    if not local or not Path(local["path"]).is_file():
+        raise HTTPException(status_code=404, detail="本地文件不可读取，请重新定位文件或搜索下载")
+    candidates = await asyncio.to_thread(dual_library_service.find_apple_candidates, local)
+    if candidates:
+        raise HTTPException(status_code=409, detail="个人资料库已有疑似记录或待处理任务，请先核对，避免重复上传")
+    folder = watch_folder_manager.get_watch_folder(request.processing_plan_id)
+    if not folder:
+        raise HTTPException(status_code=404, detail="处理方案不存在，请重新选择")
+    try:
+        result = await watch_folder_manager.process_selected_file(folder, Path(local["path"]), apple_only=True)
+    except (ValueError, OSError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    invalidate_presence_index()
+    return result
 
 
 @router.get("/discovery/download-settings")

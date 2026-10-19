@@ -30,10 +30,11 @@ const routes: RouteRecordRaw[] = [
   {
     path: '/profiles',
     name: 'Profiles',
-    component: () => import('../views/Profiles.vue'),
+    redirect: { path: '/processing-plans', query: { tab: 'parameters' } },
   },
   {
-    path: '/watch-folders',
+    path: '/processing-plans',
+    alias: '/watch-folders',
     name: 'WatchFolders',
     component: () => import('../views/WatchFolders.vue'),
   },
