@@ -50,7 +50,7 @@ const counts = computed(() => ({ converting: store.tasks.filter(item => item.sta
 onMounted(async () => {
   clock = setInterval(() => { now.value = Date.now() }, 1000)
   await Promise.all([store.fetchTasks(), store.fetchLogs(200), store.fetchProfiles().finally(() => { profilesLoaded.value = true })])
-  timer = setInterval(() => { store.fetchTasks(); if (view.value === 'logs') store.fetchLogs(200) }, 5000)
+  timer = setInterval(() => { store.fetchTasks(true); if (view.value === 'logs') store.fetchLogs(200, true) }, 5000)
 })
 onUnmounted(() => { if (timer) clearInterval(timer); if (clock) clearInterval(clock) })
 watch(() => route.query.tab, tab => { view.value = tab === 'logs' ? 'logs' : 'records' })

@@ -99,13 +99,15 @@ def test_manual_conversion_reuses_all_outputs_and_survives_reload(setup_plan, tm
     assert WatchRoutingService(tmp_path / 'routes.db').list_files('manual:plan:all')
 
 
-def test_local_fill_only_uploads_local_source_without_downloading(setup_plan, monkeypatch, tmp_path):
-    """本地补齐不下载、不执行本地复制，也不执行普通转换规则。"""
+@pytest.mark.parametrize('candidates', [[], [{'title': '歌曲'}], [{'title': '歌曲', 'verification_status': 'pending'}]])
+def test_local_fill_only_uploads_local_source_without_downloading(setup_plan, monkeypatch, tmp_path, candidates):
+    """疑似已有仅作提醒，本地补齐仍只执行 Apple 输出且不重新下载。"""
     ctx = setup_plan
     monkeypatch.setattr(media_library_service, 'load_tracks', lambda _refresh: [
         {'id': 'local', 'path': str(ctx.source), 'title': '歌曲', 'artist': '歌手'},
     ])
     monkeypatch.setattr(discovery.musicdl_client, 'start_download', lambda *_args: pytest.fail('不得重新下载'))
+    monkeypatch.setattr(discovery.dual_library_service, 'find_apple_candidates', lambda _track: candidates)
     result = asyncio.run(discovery.fill_local_apple(discovery.LocalAppleFillRequest(
         local_file_id='local', processing_plan_id=ctx.folder.id)))
     assert result['created_tasks'] == 1
@@ -114,19 +116,20 @@ def test_local_fill_only_uploads_local_source_without_downloading(setup_plan, mo
     assert ctx.queued[0].source_file == str(ctx.source)
     assert not (tmp_path / 'library').exists()
     assert len(ctx.incremental) == 1
+    repeated = asyncio.run(discovery.fill_local_apple(discovery.LocalAppleFillRequest(
+        local_file_id='local', processing_plan_id=ctx.folder.id)))
+    assert repeated['created_tasks'] == 0
+    assert len(ctx.queued) == 1
 
 
-@pytest.mark.parametrize('missing,candidates,expected', [(True, [], 404), (False, [{'title': '歌曲'}], 409)])
-def test_local_fill_rejects_missing_source_and_possible_duplicates(setup_plan, monkeypatch, missing, candidates, expected):
-    """本地失效和个人库疑似重复均停止处理，不能隐式下载或上传。"""
+def test_local_fill_rejects_missing_source(setup_plan, monkeypatch):
+    """本地文件失效仍停止处理，不隐式下载或上传。"""
     ctx = setup_plan
-    if missing:
-        ctx.source.unlink()
+    ctx.source.unlink()
     monkeypatch.setattr(media_library_service, 'load_tracks', lambda _refresh: [{'id': 'local', 'path': str(ctx.source)}])
-    monkeypatch.setattr(discovery.dual_library_service, 'find_apple_candidates', lambda _track: candidates)
     with pytest.raises(HTTPException) as error:
         asyncio.run(discovery.fill_local_apple(discovery.LocalAppleFillRequest(local_file_id='local', processing_plan_id='plan')))
-    assert error.value.status_code == expected
+    assert error.value.status_code == 404
     assert not ctx.queued
 
 

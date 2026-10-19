@@ -188,6 +188,7 @@ class Worker:
         event_lock = threading.RLock()
         current = {"state": "staging", "stage": "download", "action": job["action"], "stage_token": time.time()}
         signature_started = None
+        preparing = False
         pending = None
         last_progress_sent = 0.0
         original_upload_asset = uploader_module.upload_asset
@@ -280,7 +281,7 @@ class Worker:
                 changes.update(state="cloud_processing", stage="extras-waiting")
             if stage == "asset-bytes":
                 changes = {"stage": current.get("stage")}
-            if stage == "download":
+            if stage == "download" or preparing:
                 changes["state"] = "staging"
             if isinstance(value, dict):
                 changes.update(value)
@@ -351,10 +352,20 @@ class Worker:
 
                 managed = getattr(self, "managed", False)
                 if managed:
+                    preparing = True
+                    if action == "upload_media_extras":
+                        uploader.prepare_extras(source)
+                    else:
+                        uploader.prepare(source, fingerprints=job.get("precompute_fingerprints", False))
+                    preparing = False
                     progress("session-wait")
                 # 状态查询可能返回同资料库的其他会话，协议期间必须独占。
                 with exclusive_lock("apple-session.lock", wait=wait_for_session) if managed else nullcontext():
                     check_stop()
+                    if managed:
+                        ready = self.readiness()
+                        if not all(ready[key] for key in ("authorization_saved", "client_exited", "compatible", "context_matches")):
+                            raise WorkerError("上传前本机就绪状态发生变化")
                     with event_lock:
                         saved["apple_started"] = True
                         if managed:

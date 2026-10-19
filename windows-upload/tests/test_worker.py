@@ -14,6 +14,92 @@ from worker import Worker, WorkerError, recovery_action, validate_url
 
 
 class WorkerTests(unittest.TestCase):
+    def test_本地准备在会话锁外且取得锁后重新校验环境(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            worker, records, job = self.make_worker(directory)
+            worker.managed = True
+            job['precompute_fingerprints'] = True
+            steps = []
+
+            @contextmanager
+            def locked(name, wait):
+                steps.append('lock')
+                yield
+
+            def upload(source):
+                steps.append('upload')
+                worker.save(directory / f"upload-{job['sha256']}.dpapi", {'completed': True, 'complete_received': True})
+                return {'extras_completed': True}
+
+            with patch('worker.PRIVATE', directory), patch('worker.exclusive_lock', locked), patch('prototype.uploader.WindowsSongUploader') as uploader:
+                def prepare(*args, **kwargs):
+                    steps.append('prepare')
+                    uploader.call_args.args[4]('full-lowres', 10)
+
+                uploader.return_value.prepare.side_effect = prepare
+                uploader.return_value.upload.side_effect = upload
+                worker.execute(job)
+                uploader.return_value.prepare.assert_called_once_with(worker.download.return_value, fingerprints=True)
+            self.assertEqual(steps, ['prepare', 'lock', 'upload'])
+            self.assertEqual(worker.readiness.call_count, 2)
+            events = [call.args[1] for call in worker.json_request.call_args_list]
+            self.assertTrue(any(event.get('stage') == 'full-lowres' and event['state'] == 'staging' for event in events))
+            self.assertEqual(worker.json_request.call_args.args[1]['state'], 'cloud_completed')
+
+    def test_准备失败或停止不取得会话锁且可重试原成品(self):
+        for stopped in (False, True):
+            with self.subTest(stopped=stopped), tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary)
+                worker, records, job = self.make_worker(directory)
+                worker.managed = True
+
+                def prepare(*args, **kwargs):
+                    if stopped:
+                        (directory / f"{job['job_id']}.stop").touch()
+                        uploader.call_args.args[4]('full-lowres', 10)
+                    raise RuntimeError('本地准备失败')
+
+                with patch('worker.PRIVATE', directory), patch('worker.exclusive_lock') as lock, patch('prototype.uploader.WindowsSongUploader') as uploader:
+                    original_open = uploader.return_value.opener.open
+                    uploader.return_value.prepare.side_effect = prepare
+                    worker.execute(job)
+                    lock.assert_not_called()
+                    uploader.return_value.upload.assert_not_called()
+                    original_open.assert_not_called()
+                final = worker.json_request.call_args.args[1]
+                self.assertEqual(final['state'], 'stopped' if stopped else 'failed')
+                self.assertEqual(final['action'], 'upload')
+                self.assertFalse(worker.load(directory / f"{job['job_id']}.dpapi").get('apple_started'))
+
+    def test_等待会话期间环境变化禁止发送请求(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            worker, records, job = self.make_worker(directory)
+            worker.managed = True
+            ready = worker.readiness.return_value
+            worker.readiness.side_effect = [ready, {**ready, 'context_matches': False}]
+            with patch('worker.PRIVATE', directory), patch('worker.exclusive_lock', return_value=nullcontext()), patch('prototype.uploader.WindowsSongUploader') as uploader:
+                worker.execute(job)
+                uploader.return_value.prepare.assert_called_once()
+                uploader.return_value.upload.assert_not_called()
+            self.assertEqual(worker.json_request.call_args.args[1]['state'], 'failed')
+            self.assertFalse(worker.load(directory / f"{job['job_id']}.dpapi").get('apple_started'))
+
+    def test_只补附加资产时不预计算音频指纹(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            worker, records, job = self.make_worker(directory)
+            worker.managed = True
+            job['precompute_fingerprints'] = True
+            worker.save(directory / f"upload-{job['sha256']}.dpapi", {'completed': True, 'complete_received': True})
+            with patch('worker.PRIVATE', directory), patch('worker.exclusive_lock', return_value=nullcontext()), patch('prototype.uploader.WindowsSongUploader') as uploader:
+                uploader.return_value.upload_media_extras.return_value = {'extras_completed': True}
+                worker.execute(job)
+                uploader.return_value.prepare.assert_not_called()
+                uploader.return_value.prepare_extras.assert_called_once_with(worker.download.return_value)
+            self.assertEqual(worker.json_request.call_args.args[1]['state'], 'cloud_completed')
+
     def test_会话变化保留明确错误且不自动重传(self):
         from prototype.uploader import UploadSessionChanged
         with tempfile.TemporaryDirectory() as temporary:

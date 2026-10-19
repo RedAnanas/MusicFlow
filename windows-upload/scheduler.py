@@ -155,6 +155,7 @@ class UploadScheduler:
                 if not result.get("job"):
                     break
                 try:
+                    result["job"]["precompute_fingerprints"] = control["concurrency"] > 1
                     self.spawn(result["job"])
                 except Exception:
                     self.blocked = True

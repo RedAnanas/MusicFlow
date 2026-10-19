@@ -98,6 +98,10 @@ class WindowsSongUploader:
             raise SongUploadError("当前授权与旧任务不属于同一资料库，停止恢复或补传")
 
     def _media(self, source, directory):
+        identity = (source.resolve(), hashlib.sha256(source.read_bytes()).hexdigest())
+        prepared = getattr(self, "_prepared_media", None)
+        if prepared and prepared[:2] == identity:
+            return dict(prepared[2])
         self.progress("media")
         probe = subprocess.run([str(self.ffprobe), "-v", "error", "-show_streams", "-show_format", "-of", "json", str(source)],
                                capture_output=True, check=True)
@@ -115,9 +119,12 @@ class WindowsSongUploader:
             raise SongUploadError("清理 M4A 后音频数据验证失败")
         self.signature = None
         self._fingerprints = {}
+        self._fingerprint_pcm = None
+        self._asset_metadata_cache = {}
         self.source = source
         self.directory = directory
         self.extras = extract_media_extras(source, info, self.ffmpeg, directory)
+        self._prepared_extras = (*identity, self.extras)
         tags = {key.casefold(): value for key, value in info.get("format", {}).get("tags", {}).items()}
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         track = {"persistent-id": secrets.token_hex(8).upper(), "item-name": tags.get("title") or source.stem,
@@ -148,7 +155,41 @@ class WindowsSongUploader:
                         track[f"{prefix}-{suffix}"] = int(value)
         if self.extras["lyrics"]:
             track["has-lyrics"] = True
+        self._prepared_media = (*identity, track)
         return track
+
+    def prepare(self, source, *, fingerprints=False):
+        """仅准备本地资产，不创建 Apple 会话或上传检查点。"""
+        source = Path(source).resolve()
+        digest = hashlib.sha256(source.read_bytes()).hexdigest()
+        directory = self.private / f"media-{digest}"
+        directory.mkdir(parents=True, exist_ok=True)
+        self._media(source, directory)
+        if fingerprints:
+            for kind in ("partial", "full-lowres", "signature"):
+                self._fingerprint(kind)
+        self.progress("hash")
+        self._asset_metadata("audio")
+        self._asset_metadata("audio", clean_audio=True)
+        for kind, available in (("artwork", self.extras.get("cover")), ("lyrics", self.extras.get("lyrics"))):
+            if available:
+                self._asset_metadata(kind)
+
+    def prepare_extras(self, source):
+        """附加项恢复只提取封面与歌词，不重新计算音频指纹。"""
+        source = Path(source).resolve()
+        identity = (source, hashlib.sha256(source.read_bytes()).hexdigest())
+        prepared = getattr(self, "_prepared_extras", None)
+        if prepared and prepared[:2] == identity:
+            return prepared[2]
+        self.progress("media")
+        directory = self.private / f"media-{identity[1]}"
+        directory.mkdir(parents=True, exist_ok=True)
+        probe = subprocess.run([str(self.ffprobe), "-v", "error", "-show_streams", "-show_format", "-of", "json", str(source)],
+                               capture_output=True, check=True)
+        extras = extract_media_extras(source, json.loads(probe.stdout), self.ffmpeg, directory)
+        self._prepared_extras = (*identity, extras)
+        return extras
 
     def _signature(self):
         if self.signature is None:
@@ -194,12 +235,14 @@ class WindowsSongUploader:
             raise SongUploadError("服务端请求了尚未验证的指纹类型")
         cache = getattr(self, "_fingerprints", {})
         if kind not in cache:
-            self.progress("decode")
             pcm = self.directory / "fingerprint.pcm"
-            result = subprocess.run([str(self.ffmpeg), "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i", str(self.source),
-                                     "-ac", "2", "-ar", "44100", "-f", "s16le", str(pcm)], capture_output=True)
-            if result.returncode:
-                raise SongUploadError("生成旧版指纹 PCM 失败")
+            if getattr(self, "_fingerprint_pcm", None) != pcm:
+                self.progress("decode")
+                result = subprocess.run([str(self.ffmpeg), "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i", str(self.source),
+                                         "-ac", "2", "-ar", "44100", "-f", "s16le", str(pcm)], capture_output=True)
+                if result.returncode:
+                    raise SongUploadError("生成旧版指纹 PCM 失败")
+                self._fingerprint_pcm = pcm
             try:
                 sdk = Path(os.environ.get("MUSICFLOW_APPLE_SDK_DIRECTORY", windows_sap.TARGET.parent))
                 self.progress(kind)
@@ -220,11 +263,7 @@ class WindowsSongUploader:
         self._check_job_context(original)
         if not original.get("completed") or not original.get("cloud_id"):
             raise SongUploadError("没有该文件的成功上传记录，不能补传资产")
-        directory = self.private / f"media-{digest}"
-        directory.mkdir(parents=True, exist_ok=True)
-        probe = subprocess.run([str(self.ffprobe), "-v", "error", "-show_streams", "-show_format", "-of", "json", str(source)],
-                               capture_output=True, check=True)
-        extras = extract_media_extras(source, json.loads(probe.stdout), self.ffmpeg, directory)
+        extras = self.prepare_extras(source)
         assets = {}
         if extras["lyrics"]:
             assets["lyrics"] = extras["lyrics"].encode("utf-8")
@@ -262,8 +301,8 @@ class WindowsSongUploader:
             for kind, asset in action["assets"].items():
                 if asset != {"hash-type": "sha256"}:
                     raise SongUploadError("未验证的资产哈希任务")
-                data = self._asset_data(kind)
-                reply["assets"][kind].update({"hash-value": hashlib.sha256(data).hexdigest(), "status": 0})
+                metadata = self._asset_metadata(kind)
+                reply["assets"][kind].update({"hash-value": metadata["hash-values"]["sha256"], "status": 0})
         elif name == "prepare-fingerprint":
             if action.get("fingerprint-type") not in ("partial", "full-lowres", "signature") or action.get("hash-type") != "md5":
                 raise SongUploadError("服务端请求了尚未实现的旧版音频指纹")
@@ -283,8 +322,8 @@ class WindowsSongUploader:
                 expected = {"hash-type": "md5", "upload-type": "clean"} if kind == "audio" else {"hash-type": "md5"}
                 if asset != expected:
                     raise SongUploadError("未验证的资产准备任务")
-                data = self._asset_data(kind, clean_audio=True)
-                reply["assets"][kind].update({"file-size": len(data), "hash-value": hashlib.md5(data).hexdigest(), "status": 0})
+                metadata = self._asset_metadata(kind, clean_audio=True)
+                reply["assets"][kind].update({"file-size": metadata["file-size"], "hash-value": metadata["hash-values"]["md5"], "status": 0})
         elif name == "upload-track":
             for kind, asset in reply["assets"].items():
                 self.progress("upload-track" if kind == "audio" else f"upload-{kind}")
@@ -305,6 +344,16 @@ class WindowsSongUploader:
         else:
             raise SongUploadError("服务端请求了尚未实现的工作任务")
         return reply
+
+    def _asset_metadata(self, kind, clean_audio=False):
+        from prototype.extra_asset_upload import asset_metadata
+
+        cache = getattr(self, "_asset_metadata_cache", {})
+        key = (kind, clean_audio if kind == "audio" else False)
+        if key not in cache:
+            cache[key] = asset_metadata(self._asset_data(kind, clean_audio))
+            self._asset_metadata_cache = cache
+        return cache[key]
 
     def _asset_data(self, kind, clean_audio=False):
         """哈希针对资产原字节，整首音频上传使用清理后的容器。"""

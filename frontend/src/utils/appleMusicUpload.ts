@@ -2,7 +2,7 @@ import type { AppleMusicUpload } from '../types'
 
 export const uploadStateLabel = (value: string) => ({
   queued: '等待上传', waiting_worker: '等待上传执行器就绪', waiting_authorization: '需要重新获取并导入桌面授权',
-  waiting_client_exit: '等待退出官方客户端', staging: '获取成品', validating: '校验成品', uploading: '上传中',
+  waiting_client_exit: '等待退出官方客户端', staging: '本地准备', validating: '校验成品', uploading: '上传中',
   cloud_processing: '等待云端处理', media_completed_extras_pending: '音频完成，歌词或封面待处理',
   cloud_completed: '云端协议完成，待快照确认', requires_review: '结果不确定，需要人工核对',
   failed: '上传失败', cancelled: '已取消排队', stopping: '正在停止', stopped: '已停止，可恢复',

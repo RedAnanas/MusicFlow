@@ -11,6 +11,21 @@ import scheduler
 
 
 class SchedulerTests(unittest.TestCase):
+    def test_并发大于一才启用预计算且不超过任务名额(self):
+        for concurrency in (1, 2, 5):
+            with self.subTest(concurrency=concurrency), tempfile.TemporaryDirectory() as directory:
+                worker = Mock()
+                worker.binding = {'account_scope': 'scope'}
+                worker.readiness.return_value = dict(authorization_saved=True, client_exited=True, compatible=True, context_matches=True)
+                jobs = [{'job_id': str(index)} for index in range(concurrency)]
+                worker.json_request.side_effect = [{'concurrency': concurrency, 'jobs': []}] + [{'job': job} for job in jobs]
+                with patch.object(scheduler, 'PRIVATE', Path(directory)):
+                    runner = scheduler.UploadScheduler(worker, Mock())
+                    runner.spawn = Mock(side_effect=lambda job: runner.processes.update({job['job_id']: {}}))
+                    runner.tick()
+                self.assertEqual(runner.spawn.call_count, concurrency)
+                self.assertTrue(all(job['precompute_fingerprints'] == (concurrency > 1) for job in jobs))
+
     def test_心跳不能替代进展且正常等待不误判(self):
         self.assertFalse(scheduler.stalled({'stage':'signature','last_progress_at':0}, 179))
         self.assertTrue(scheduler.stalled({'stage':'signature','last_progress_at':0}, 181))

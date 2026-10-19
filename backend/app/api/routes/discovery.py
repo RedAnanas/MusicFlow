@@ -257,9 +257,6 @@ async def fill_local_apple(request: LocalAppleFillRequest):
     local = next((track for track in tracks if track["id"] == request.local_file_id), None)
     if not local or not Path(local["path"]).is_file():
         raise HTTPException(status_code=404, detail="本地文件不可读取，请重新定位文件或搜索下载")
-    candidates = await asyncio.to_thread(dual_library_service.find_apple_candidates, local)
-    if candidates:
-        raise HTTPException(status_code=409, detail="个人资料库已有疑似记录或待处理任务，请先核对，避免重复上传")
     folder = watch_folder_manager.get_watch_folder(request.processing_plan_id)
     if not folder:
         raise HTTPException(status_code=404, detail="处理方案不存在，请重新选择")

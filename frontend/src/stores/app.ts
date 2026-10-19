@@ -150,15 +150,15 @@ export const useAppStore = defineStore('app', () => {
   }
 
   // 任务操作
-  async function fetchTasks() {
-    tasksLoading.value = true
+  async function fetchTasks(silent: boolean = false) {
+    if (!silent) tasksLoading.value = true
     try {
       const response = await axios.get('/api/tasks/', { params: { limit: 1000 } })
       tasks.value = response.data
     } catch (error) {
       console.error('Failed to fetch tasks:', error)
     } finally {
-      tasksLoading.value = false
+      if (!silent) tasksLoading.value = false
     }
   }
 
@@ -471,15 +471,15 @@ export const useAppStore = defineStore('app', () => {
   }
 
   // 日志操作
-  async function fetchLogs(limit: number = 100) {
-    logsLoading.value = true
+  async function fetchLogs(limit: number = 100, silent: boolean = false) {
+    if (!silent) logsLoading.value = true
     try {
       const response = await axios.get('/api/logs/', { params: { limit } })
       logs.value = response.data
     } catch (error) {
       console.error('Failed to fetch logs:', error)
     } finally {
-      logsLoading.value = false
+      if (!silent) logsLoading.value = false
     }
   }
 

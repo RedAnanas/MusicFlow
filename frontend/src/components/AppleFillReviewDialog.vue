@@ -95,7 +95,7 @@ function proceed() {
     <div v-loading="loading" class="review-content">
       <section v-if="result.personal.length" class="review-section">
         <h3>个人资料库疑似已有</h3>
-        <p>这些记录已在快照或增量记录中；请核对是否为同一首作品。</p>
+        <p>这些记录已在快照或增量记录中；请核对是否为同一首作品。{{ mode === 'local' ? '疑似匹配仅作提醒，不阻止使用本地文件转换并补齐，请留意重复入库。' : '' }}</p>
         <div v-for="(track, index) in result.personal" :key="index" class="personal-item"><strong>{{ track.title }}</strong><span>{{ track.artist }} · {{ track.album || '未知专辑' }}{{ track.verification_status === 'pending' ? ' · 待确认' : '' }}</span></div>
       </section>
       <section v-if="result.catalog.length" class="review-section">
@@ -117,7 +117,7 @@ function proceed() {
     <template #footer>
       <el-button @click="emit('update:modelValue', false)">取消</el-button>
       <el-button v-if="mode === 'local' && !loading && result.local_available === false" @click="emit('search')">去发现页搜索下载</el-button>
-      <el-button type="primary" :disabled="loading || confirmDisabled || ((mode === 'confirm' || mode === 'local') && (!!result.catalog_error || recordedIds.length > 0)) || (mode === 'local' && (result.local_available !== true || result.personal.length > 0))" @click="proceed">{{ mode === 'search' ? '去发现页搜索' : recordedIds.length ? '已记录，等待确认' : mode === 'local' ? '使用本地文件转换并补齐' : '确认补齐所选版本' }}</el-button>
+      <el-button type="primary" :disabled="loading || confirmDisabled || ((mode === 'confirm' || mode === 'local') && (!!result.catalog_error || recordedIds.length > 0)) || (mode === 'local' && result.local_available !== true)" @click="proceed">{{ mode === 'search' ? '去发现页搜索' : recordedIds.length ? '已记录，等待确认' : mode === 'local' ? '使用本地文件转换并补齐' : '确认补齐所选版本' }}</el-button>
     </template>
   </el-dialog>
 </template>

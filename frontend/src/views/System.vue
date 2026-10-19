@@ -172,7 +172,7 @@ onMounted(refreshAll)
           <h3>服务端状态</h3>
           <div class="upload-inputs"><label>上传并发数（所有目录和方案共用）<el-input-number v-model="concurrency" :min="1" :max="5" :step="1" step-strictly :precision="0" aria-label="上传并发数" /></label><el-button :loading="concurrencySaving" @click="saveConcurrency">保存上传并发</el-button></div>
           <p>正在处理 {{ upload.worker.active_count || 0 }} 首 · 排队 {{ upload.worker.queued_count || 0 }} 首 · 已保存并发 {{ upload.worker.concurrency || 1 }}。名额包含计算、上传和云端等待。</p>
-          <p>安全兼容模式：并发名额用于本地成品准备；Apple 协议会话依次执行，避免同一资料库的会话冲突。</p>
+          <p>并发大于 1 时，多首歌曲可提前解析音频、提取歌词封面并计算指纹；Apple 上传会话仍逐首执行。并发为 1 时按需计算指纹，避免额外准备。</p>
           <p v-if="(upload.worker.active_count || 0) > (upload.worker.concurrency || 1)">现有任务结束后逐步降至目标并发，不打断在途上传。</p>
           <p>{{ upload.worker.online ? '上传执行器在线' : '上传执行器尚未就绪' }}。FFmpeg / FFprobe 使用上方受管依赖。</p>
           <p v-if="upload.worker.scheduler_error" class="musicdl-warning">上传执行器无法启动新任务，已暂停领取。请检查服务器可用资源并重启执行器。</p>
