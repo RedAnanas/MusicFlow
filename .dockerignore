@@ -16,6 +16,8 @@ windows-upload/prototype/*
 !windows-upload/worker.py
 !windows-upload/runtime.py
 !windows-upload/server.py
+!windows-upload/scheduler.py
+!windows-upload/upload_task.py
 !windows-upload/import-server-authorization.py
 !windows-upload/requirements-server.txt
 **/__pycache__

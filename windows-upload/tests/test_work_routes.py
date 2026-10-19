@@ -45,8 +45,9 @@ class WorkRouteTests(unittest.TestCase):
         value = self.uploader()
         previous = value.state['status']
         value._post = Mock(return_value={**self.fresh, 'session-id': 'another-session'})
-        with self.assertRaises(SongUploadError):
+        with self.assertRaises(SongUploadError) as caught:
             value._refresh_work_status()
+        self.assertEqual(getattr(caught.exception, 'code', None), 'session_changed')
         self.assertEqual(value.state['status'], previous)
         save.assert_not_called()
 

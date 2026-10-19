@@ -7,6 +7,8 @@ import subprocess
 import sys
 import tempfile
 import zipfile
+from contextlib import contextmanager
+import time
 
 from app.config import settings
 
@@ -23,6 +25,34 @@ EXPECTED = {
 
 def binary_directory():
     return Path(os.environ.get('MUSICFLOW_APPLE_BINARY', str(Path(settings.DATA_DIR) / 'config/apple-upload/binaries/AMPLibraryAgent.exe'))).parent
+
+
+@contextmanager
+def algorithm_install_lock():
+    """Linux 安装算法前先排空上传，和授权导入使用相同互斥锁。"""
+    if sys.platform != 'linux':
+        yield
+        return
+    import fcntl
+    private = Path(os.environ.get('MUSICFLOW_UPLOAD_PRIVATE_DIR', str(Path(settings.DATA_DIR) / 'config/apple-upload/state')))
+    private.mkdir(parents=True, exist_ok=True, mode=0o700)
+    pause = private / '.pause-for-authorization'
+    pause.touch(mode=0o600)
+    deadline = time.monotonic() + 30
+    with (private / 'worker.lock').open('a+b') as lock:
+        while True:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise ValueError('已暂停领取，请等在途上传结束后重试安装算法') from None
+                time.sleep(1)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+    pause.unlink(missing_ok=True)
 
 
 def preparation_status():
@@ -53,14 +83,15 @@ def install_algorithms(files):
         target = directory / name
         if target.is_symlink():
             raise ValueError('算法目标不能为符号链接')
-    for name, content in files.items():
-        with tempfile.NamedTemporaryFile(dir=directory, delete=False) as output:
-            temporary = Path(output.name)
-            output.write(content)
-        try:
-            temporary.replace(directory / name)
-        finally:
-            temporary.unlink(missing_ok=True)
+    with algorithm_install_lock():
+        for name, content in files.items():
+            with tempfile.NamedTemporaryFile(dir=directory, delete=False) as output:
+                temporary = Path(output.name)
+                output.write(content)
+            try:
+                temporary.replace(directory / name)
+            finally:
+                temporary.unlink(missing_ok=True)
 
 
 def import_account(account, key=None):

@@ -1,6 +1,7 @@
 """主动领取 MusicFlow 成品，串行执行所在服务端的独立上传。"""
 
 import argparse
+from contextlib import nullcontext
 import hashlib
 import json
 import os
@@ -20,6 +21,10 @@ AUTHORIZATION_FILE = "apple-client-authorization.dpapi" if os.name == "nt" else 
 
 class WorkerError(Exception):
     """对外仅返回错误类别，不包含远端响应、账号或令牌。"""
+
+
+class UploadStopped(WorkerError):
+    """停止后保留持久证据，由调度器确认进程退出再释放名额。"""
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -82,6 +87,8 @@ class Worker:
         self.rejected_authorization_mtime = state.get("rejected_authorization_mtime")
 
     def save_state(self):
+        if getattr(self, "managed", False):
+            return
         self.save(PRIVATE / "worker-state.dpapi", {"server_verified_at": self.server_verified_at,
                   "rejected_authorization_mtime": self.rejected_authorization_mtime})
 
@@ -153,7 +160,7 @@ class Worker:
             part.unlink(missing_ok=True)
 
     def execute(self, job):
-        from prototype.uploader import WindowsSongUploader
+        from prototype.uploader import WindowsSongUploader, UploadSessionChanged
         from prototype import uploader as uploader_module, extra_asset_upload
 
         job_id = str(__import__("uuid").UUID(job["job_id"]))
@@ -172,10 +179,12 @@ class Worker:
             saved.pop("reported", None)
         previously_started = saved.get("apple_started", False)
         saved.update(lease_token=job["lease_token"], sequence=0, attempt=job["attempt"])
+        saved["monitor"] = {"last_progress_at": time.time(), "stage": "download", "wait_seconds": 0}
         self.save(local, saved)
         event_path = f"/api/apple-music/uploads/{job_id}/events"
         stop = threading.Event()
         lost = threading.Event()
+        requested_stop = threading.Event()
         event_lock = threading.RLock()
         current = {"state": "staging", "stage": "download", "action": job["action"], "stage_token": time.time()}
         signature_started = None
@@ -183,7 +192,12 @@ class Worker:
         last_progress_sent = 0.0
         original_upload_asset = uploader_module.upload_asset
 
+        def check_stop():
+            if requested_stop.is_set() or (getattr(self, "managed", False) and (PRIVATE / f"{job_id}.stop").exists()):
+                raise UploadStopped("已请求停止本地上传")
+
         def guarded_asset(*args, **kwargs):
+            check_stop()
             with event_lock:
                 saved["asset_uncertain"] = True
                 self.save(local, saved)
@@ -204,7 +218,7 @@ class Worker:
                 extras_path = PRIVATE / f"asset-upload-{job['sha256']}.dpapi"
                 extras = self.load(extras_path) if extras_path.exists() else {}
                 uncertain = (saved.get("records_missing", False) or saved.get("asset_uncertain", False)
-                             or (record is None and (saved.get("apple_started", False) or extras_path.exists()))
+                             or (record is None and (saved.get("request_started", saved.get("apple_started", False)) or extras_path.exists()))
                              or any(item.get("state") != "received" for item in extras.get("requests", [])))
                 return record, recovery_action(record, uncertain)
             except Exception:
@@ -214,7 +228,9 @@ class Worker:
             nonlocal pending
             with event_lock:
                 if pending is not None:
-                    self.json_request(event_path, pending)
+                    response = self.json_request(event_path, pending)
+                    if response.get("stop_requested"):
+                        requested_stop.set()
                     saved["sequence"] = pending["sequence"]
                     pending = None
                 if changes:
@@ -226,13 +242,19 @@ class Worker:
                 if signature_started is not None and current.get("stage") == "signature" and current.get("signature_progress", 0) < 100:
                     current["signature_elapsed_seconds"] = round(time.monotonic() - signature_started, 1)
                 pending = {**current, "sequence": saved["sequence"] + 1, "lease_token": job["lease_token"]}
-                self.json_request(event_path, pending)
+                response = self.json_request(event_path, pending)
+                if response.get("stop_requested"):
+                    requested_stop.set()
                 saved["sequence"] = pending["sequence"]
                 pending = None
                 self.save(local, saved)
 
         def heartbeat():
             while not stop.wait(self.HEARTBEAT_SECONDS):
+                if getattr(self, "parent_pid", None) and os.getppid() != self.parent_pid:
+                    # 父调度器已退出，结束整个任务进程组，避免遗留 FFmpeg 或网络操作。
+                    import signal
+                    os.killpg(os.getpgrp(), signal.SIGKILL)
                 try:
                     send()
                 except HTTPError as exc:
@@ -244,13 +266,14 @@ class Worker:
 
         def progress(stage, value=None):
             nonlocal signature_started, last_progress_sent
+            check_stop()
             if lost.is_set():
                 raise WorkerError("任务租约已失效")
             stages = {"prepare-fingerprint": "processing", "get-fingerprint": "processing", "upload-fingerprint": "fingerprint-upload", "signature": "signature",
                       "hash-track": "hash", "prepare-track": "prepare-track", "media": "media", "decode": "decode",
                       "partial": "partial", "full-lowres": "full-lowres", "download": "download",
                       "upload-track": "audio", "create-session": "metadata", "check-session": "processing",
-                      "metadata-processing": "waiting", "waiting": "waiting", "complete": "processing"}
+                      "metadata-processing": "waiting", "waiting": "waiting", "complete": "processing", "session-wait": "session-wait"}
             changes = {"state": "cloud_processing" if stage in {"waiting", "metadata-processing"} else "uploading",
                        "stage": "extras" if stage.startswith("extras-") or stage in {"upload-artwork", "upload-lyrics"} else stages.get(stage, "processing")}
             if stage == "extras-waiting":
@@ -273,6 +296,13 @@ class Worker:
                     signature_started = time.monotonic()
                 changes.update(signature_progress=value, signature_elapsed_seconds=round(time.monotonic() - signature_started, 1))
             with event_lock:
+                monitor = saved["monitor"]
+                marker = [changes.get("stage"), changes.get("stage_progress"), changes.get("bytes_sent")]
+                if stage in {"waiting", "metadata-processing", "extras-waiting"}:
+                    monitor["wait_seconds"] += value or 0
+                    monitor["wait_until"] = time.time() + (value or 0)
+                if marker != monitor.get("marker"):
+                    monitor.update(marker=marker, last_progress_at=time.time(), stage=changes.get("stage"))
                 if changes.get("stage") == current.get("stage") and value is not None and not changes.get("new_step") and changes.get("stage_progress") != 100 and time.monotonic() - last_progress_sent < 1:
                     current.update(changes)
                     return
@@ -290,6 +320,7 @@ class Worker:
                 self.save(local, saved)
                 return
             send()
+            check_stop()
             source = self.download(job, progress)
             send({"state": "validating", "stage": "validation"})
             ready = self.readiness()
@@ -297,14 +328,39 @@ class Worker:
                 raise WorkerError("上传前本机就绪状态发生变化")
             bundle = PRIVATE / AUTHORIZATION_FILE
             uploader = WindowsSongUploader(bundle, bundle, PRIVATE, self.ffmpeg, progress)
+            if getattr(self, "managed", False):
+                original_open = uploader.opener.open
+
+                def guarded_open(*args, **kwargs):
+                    check_stop()
+                    with event_lock:
+                        saved["request_started"] = True
+                        self.save(local, saved)
+                    return original_open(*args, **kwargs)
+
+                uploader.opener.open = guarded_open
             record, action = inspect_records()
             if action is None:
                 final = {"state": "requires_review", "error_code": "request_uncertain"}
             else:
-                with event_lock:
-                    saved["apple_started"] = True
-                    self.save(local, saved)
-                result = getattr(uploader, action)(source)
+                def wait_for_session():
+                    check_stop()
+                    if lost.is_set():
+                        raise WorkerError("任务租约已失效")
+                    time.sleep(0.5)
+
+                managed = getattr(self, "managed", False)
+                if managed:
+                    progress("session-wait")
+                # 状态查询可能返回同资料库的其他会话，协议期间必须独占。
+                with exclusive_lock("apple-session.lock", wait=wait_for_session) if managed else nullcontext():
+                    check_stop()
+                    with event_lock:
+                        saved["apple_started"] = True
+                        if managed:
+                            saved.setdefault("request_started", previously_started)
+                        self.save(local, saved)
+                    result = getattr(uploader, action)(source)
                 record = self.load(PRIVATE / f"upload-{job['sha256']}.dpapi")
                 complete = bool(record.get("completed") and record.get("complete_received") and result.get("extras_completed"))
                 if not complete:
@@ -320,7 +376,8 @@ class Worker:
                 self.save_state()
             record, action = inspect_records()
             message = str(exc)
-            code = ("unsupported_fingerprint" if any(word in message for word in ("指纹", "工作任务")) else
+            code = ("session_changed" if isinstance(exc, UploadSessionChanged) else
+                    "unsupported_fingerprint" if any(word in message for word in ("指纹", "工作任务")) else
                     "unsupported_media" if "AAC LC" in message else
                     "incompatible_version" if "版本" in message else
                     "context_mismatch" if "资料库" in message else
@@ -334,12 +391,17 @@ class Worker:
             if state == "requires_review":
                 code = "request_uncertain" if code == "upload_failed" else code
             final = {"state": state, "error_code": code, "action": action or "upload"}
+            if isinstance(exc, UploadStopped):
+                final = {"state": "requires_review" if action is None else "stopped", "action": action or "report_completed",
+                         "error_code": "request_uncertain" if action is None else None}
         finally:
             stop.set()
             thread.join(timeout=35)
             uploader_module.upload_asset = original_upload_asset
             extra_asset_upload.upload_asset = original_upload_asset
         saved["final_event"] = final
+        saved["server_verified_at"] = self.server_verified_at
+        saved["rejected_authorization_mtime"] = self.rejected_authorization_mtime
         saved["final_sequence"] = saved["sequence"] + 1
         saved["reported"] = False
         self.save(local, saved)

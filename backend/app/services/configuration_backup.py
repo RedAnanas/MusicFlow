@@ -28,6 +28,7 @@ class GeneralSettings(BaseModel):
     music_output_dir: str = ''
     music_archive_dir: str = ''
     max_concurrent_tasks: int = Field(default=2, ge=1, le=32)
+    apple_music_upload_concurrency: int = Field(default=1, ge=1, le=5, strict=True)
     ffmpeg_threads: int = Field(default=2, ge=1, le=128)
     file_stable_seconds: int = Field(default=30, ge=0, le=86400)
 

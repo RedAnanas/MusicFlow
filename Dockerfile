@@ -20,7 +20,7 @@ COPY windows-upload/requirements-server.txt ./requirements-upload.txt
 RUN pip install --no-cache-dir -r requirements-upload.txt
 COPY backend/app ./app
 COPY windows-upload/prototype ./upload-runtime/prototype
-COPY windows-upload/worker.py windows-upload/runtime.py windows-upload/server.py windows-upload/import-server-authorization.py ./upload-runtime/
+COPY windows-upload/worker.py windows-upload/runtime.py windows-upload/server.py windows-upload/scheduler.py windows-upload/upload_task.py windows-upload/import-server-authorization.py ./upload-runtime/
 COPY VERSION ./VERSION
 COPY --from=frontend-build /frontend/dist /usr/share/nginx/html
 COPY docker/nginx.conf /etc/nginx/conf.d/default.conf

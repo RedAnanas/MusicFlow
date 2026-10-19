@@ -1,6 +1,7 @@
 """工作进程只使用假上传器验证恢复，不发送 Apple 请求或读取真实授权。"""
 
 from copy import deepcopy
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 import tempfile
 import time
@@ -13,6 +14,46 @@ from worker import Worker, WorkerError, recovery_action, validate_url
 
 
 class WorkerTests(unittest.TestCase):
+    def test_会话变化保留明确错误且不自动重传(self):
+        from prototype.uploader import UploadSessionChanged
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            worker, records, job = self.make_worker(directory)
+
+            def upload(source):
+                worker.save(directory / f"upload-{job['sha256']}.dpapi", {'cloud_id': 7,
+                            'requests': [{'state': 'received', 'route': None}]})
+                raise UploadSessionChanged('会话变化')
+
+            with patch('worker.PRIVATE', directory), patch('prototype.uploader.WindowsSongUploader') as uploader:
+                uploader.return_value.upload.side_effect = upload
+                worker.execute(job)
+            final = worker.json_request.call_args.args[1]
+            self.assertEqual(final['state'], 'requires_review')
+            self.assertEqual(final['error_code'], 'session_changed')
+            uploader.return_value.upload.assert_called_once()
+
+    def test_等待会话时停止不产生Apple请求(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            worker, records, job = self.make_worker(directory)
+            worker.managed = True
+
+            @contextmanager
+            def blocked(name, wait):
+                self.assertEqual(name, 'apple-session.lock')
+                (directory / f"{job['job_id']}.stop").touch()
+                wait()
+                yield
+
+            with patch('worker.PRIVATE', directory), patch('worker.exclusive_lock', blocked), patch('prototype.uploader.WindowsSongUploader') as uploader:
+                worker.execute(job)
+            uploader.return_value.upload.assert_not_called()
+            final = worker.json_request.call_args.args[1]
+            self.assertEqual(final['state'], 'stopped')
+            self.assertEqual(final['action'], 'upload')
+            self.assertFalse(worker.load(directory / f"{job['job_id']}.dpapi").get('apple_started'))
+
     def test_独立指纹阶段字节进度及每轮等待均保留标识(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
@@ -217,6 +258,37 @@ class WorkerTests(unittest.TestCase):
             self.assertTrue(any(item.get('signature_progress') == 50 for item in signature_events))
             self.assertEqual(signature_events[-1]['signature_progress'], 100)
             self.assertGreaterEqual(signature_events[-1]['signature_elapsed_seconds'], 0)
+
+    def test_服务端停止指令在下载前生效且不发起上传(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            worker, records, job = self.make_worker(directory)
+            worker.managed = True
+            worker.json_request.return_value = {'accepted': True, 'stop_requested': True}
+            with patch('worker.PRIVATE', directory), patch('prototype.uploader.WindowsSongUploader') as uploader:
+                worker.execute(job)
+            uploader.assert_not_called()
+            worker.download.assert_not_called()
+            self.assertEqual(worker.json_request.call_args.args[1]['state'], 'stopped')
+
+    def test_计算中停止且尚未发请求时可恢复原成品(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            worker, records, job = self.make_worker(directory)
+            worker.managed = True
+
+            def upload(source):
+                progress = uploader.call_args.args[4]
+                progress('signature', 20)
+                (directory / f"{job['job_id']}.stop").touch()
+                progress('signature', 21)
+
+            with patch('worker.PRIVATE', directory), patch('worker.exclusive_lock', return_value=nullcontext()), patch('prototype.uploader.WindowsSongUploader') as uploader:
+                uploader.return_value.upload.side_effect = upload
+                worker.execute(job)
+            final = worker.json_request.call_args.args[1]
+            self.assertEqual(final['state'], 'stopped')
+            self.assertEqual(final['action'], 'upload')
 
 
 if __name__ == "__main__":

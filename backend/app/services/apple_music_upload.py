@@ -15,10 +15,10 @@ from app.config import settings
 UPLOAD_STATES = {
     "queued", "waiting_worker", "waiting_authorization", "waiting_client_exit",
     "staging", "validating", "uploading", "cloud_processing",
-    "media_completed_extras_pending", "cloud_completed", "requires_review", "failed", "cancelled",
+    "media_completed_extras_pending", "cloud_completed", "requires_review", "failed", "cancelled", "stopping", "stopped",
 }
 RESUME_ACTIONS = {"upload", "resume_pending", "resume_work", "upload_media_extras", "report_completed"}
-TERMINAL_STATES = {"cloud_completed", "requires_review", "failed", "cancelled", "media_completed_extras_pending"}
+TERMINAL_STATES = {"cloud_completed", "requires_review", "failed", "cancelled", "media_completed_extras_pending", "stopped"}
 ERRORS = {
     "authorization_required": "请在桌面客户端重新获取授权并导入服务端",
     "client_running": "请正常退出 Apple Music 和资料库进程",
@@ -28,7 +28,10 @@ ERRORS = {
     "content_changed": "成品已变化或下载校验失败",
     "context_mismatch": "当前授权与绑定资料库不一致",
     "request_uncertain": "请求结果不确定，需要核对本地记录",
+    "session_changed": "Apple 返回了其他上传会话，已停止处理并保留原任务记录；请核对并发上传与原会话",
     "upload_failed": "上传未完成，请核对上传执行器的加密记录",
+    "stalled": "上传长期无进展，已停止本地执行并保留恢复记录",
+    "worker_interrupted": "上传进程已退出，已保留恢复记录",
 }
 
 
@@ -82,12 +85,22 @@ class AppleMusicUploadService:
                 CREATE INDEX IF NOT EXISTS apple_upload_timeline_job ON apple_upload_timeline(upload_id, id);
             """)
             columns = {row["name"] for row in connection.execute("PRAGMA table_info(apple_uploads)")}
-            if not {"signature_progress", "signature_elapsed_seconds"}.issubset(columns):
+            additions = {"signature_progress": "INTEGER", "signature_elapsed_seconds": "REAL",
+                         "stop_requested": "INTEGER NOT NULL DEFAULT 0", "running": "INTEGER NOT NULL DEFAULT 0",
+                         "deleted": "INTEGER NOT NULL DEFAULT 0", "queued_at": "REAL"}
+            if not additions.keys() <= columns:
                 connection.execute("BEGIN IMMEDIATE")
                 columns = {row["name"] for row in connection.execute("PRAGMA table_info(apple_uploads)")}
-                for name, kind in (("signature_progress", "INTEGER"), ("signature_elapsed_seconds", "REAL")):
+                for name, kind in additions.items():
                     if name not in columns:
                         connection.execute(f"ALTER TABLE apple_uploads ADD COLUMN {name} {kind}")
+            columns = {row["name"] for row in connection.execute("PRAGMA table_info(apple_upload_links)")}
+            if "deleted" not in columns:
+                try:
+                    connection.execute("ALTER TABLE apple_upload_links ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0")
+                except sqlite3.OperationalError:
+                    if "deleted" not in {row["name"] for row in connection.execute("PRAGMA table_info(apple_upload_links)")}:
+                        raise
 
     def bind_worker(self, save_binding=None):
         """仅由后端本地管理命令调用；首版不自动替换已有绑定。"""
@@ -109,11 +122,14 @@ class AppleMusicUploadService:
         self.initialize()
         with self.connect() as connection:
             row = connection.execute("SELECT * FROM upload_worker LIMIT 1").fetchone()
+            active = connection.execute("SELECT COUNT(*) FROM apple_uploads WHERE running = 1 OR (lease_until >= ? AND state NOT IN ('cloud_completed','requires_review','failed','cancelled','media_completed_extras_pending','stopped'))", (time.time(),)).fetchone()[0]
+            queued = connection.execute("SELECT COUNT(*) FROM apple_uploads WHERE state = 'queued' AND deleted = 0").fetchone()[0]
+        counts = {"concurrency": settings.APPLE_MUSIC_UPLOAD_CONCURRENCY, "active_count": active, "queued_count": queued}
         if row is None:
-            return {"bound": False, "online": False}
+            return {"bound": False, "online": False, **counts}
         return {"bound": True, "worker_id": row["id"], "account_scope": row["account_scope"],
                 "online": bool(row["last_seen"] and time.time() - row["last_seen"] < self.LEASE_SECONDS),
-                "last_seen": row["last_seen"], **json.loads(row["readiness"])}
+                "last_seen": row["last_seen"], **json.loads(row["readiness"]), **counts}
 
     def authenticate(self, worker_id, token):
         self.initialize()
@@ -157,7 +173,7 @@ class AppleMusicUploadService:
             if inserted.rowcount:
                 connection.execute("INSERT INTO apple_upload_timeline(upload_id, stage, state, started_at) VALUES (?, 'queued', 'queued', ?)", (job_id, now))
             row = connection.execute("SELECT id FROM apple_uploads WHERE account_scope = ? AND sha256 = ?", (account_scope, digest)).fetchone()
-            connection.execute("INSERT INTO apple_upload_links VALUES (?, ?, ?)", (task_id, row["id"], source_file))
+            connection.execute("INSERT INTO apple_upload_links(conversion_task_id, upload_id, source_file) VALUES (?, ?, ?)", (task_id, row["id"], source_file))
             job_id = row["id"]
         return self.get(job_id)
 
@@ -177,7 +193,12 @@ class AppleMusicUploadService:
         for item in timeline:
             item["elapsed_seconds"] = max(0, (item["ended_at"] or finished or time.time()) - item["started_at"])
         result["error"] = ERRORS.get(row["error_code"])
-        result["allowed_actions"] = [row["action"]] if row["state"] in {"failed", "media_completed_extras_pending"} and row["action"] != "report_completed" else []
+        result["allowed_actions"] = [row["action"]] if row["state"] in {"failed", "media_completed_extras_pending", "stopped", "cancelled"} and row["action"] != "report_completed" and not row["running"] and not row["deleted"] else []
+        result.update(running=bool(row["running"]), deleted=bool(row["deleted"]), stop_requested=bool(row["stop_requested"]),
+                      can_stop=row["state"] not in TERMINAL_STATES | {"queued", "stopping"},
+                      can_delete=row["state"] in TERMINAL_STATES and not row["running"])
+        with self.connect() as connection:
+            result["sources"] = [dict(item) for item in connection.execute("SELECT conversion_task_id, source_file FROM apple_upload_links WHERE upload_id = ? AND deleted = 0", (job_id,))]
         if row["error_code"] in {"unsupported_fingerprint", "unsupported_media", "context_mismatch"}:
             result["allowed_actions"] = []
         if row["state"] == "queued" and not self.worker_status()["online"]:
@@ -198,7 +219,15 @@ class AppleMusicUploadService:
         self.initialize()
         with self.connect() as connection:
             row = connection.execute("SELECT upload_id FROM apple_upload_links WHERE conversion_task_id = ?", (task_id,)).fetchone()
-        return self.get(row["upload_id"]) if row else None
+        if not row:
+            return None
+        result = self.get(row["upload_id"])
+        with self.connect() as connection:
+            link = connection.execute("SELECT deleted FROM apple_upload_links WHERE conversion_task_id = ?", (task_id,)).fetchone()
+        result["deleted"] = result["deleted"] or bool(link["deleted"])
+        if result["deleted"]:
+            result["allowed_actions"] = []
+        return result
 
     def for_source(self, source_file):
         self.initialize()
@@ -207,7 +236,7 @@ class AppleMusicUploadService:
                 WHERE l.source_file = ? ORDER BY u.created_at DESC LIMIT 1""", (source_file,)).fetchone()
         return self.get(row["upload_id"]) if row else None
 
-    def claim(self, worker_id, scope, readiness):
+    def claim(self, worker_id, scope, readiness, managed=False):
         now = time.time()
         with self.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -217,23 +246,26 @@ class AppleMusicUploadService:
                 return None
             # 过期任务只交还原工作进程，由本地记录决定能否恢复。
             row = connection.execute("""SELECT * FROM apple_uploads WHERE account_scope = ? AND
-                ((worker_id = ? AND lease_token IS NOT NULL AND lease_until < ? AND state NOT IN
-                  ('cloud_completed', 'requires_review', 'failed', 'cancelled', 'media_completed_extras_pending')) OR
-                 (state = 'queued' AND lease_token IS NULL))
-                ORDER BY CASE WHEN lease_token IS NOT NULL THEN 0 ELSE 1 END, created_at LIMIT 1""", (scope, worker_id, now)).fetchone()
+                ((worker_id = ? AND running = 0 AND lease_token IS NOT NULL AND lease_until < ? AND state NOT IN
+                  ('cloud_completed', 'requires_review', 'failed', 'cancelled', 'media_completed_extras_pending', 'stopped')) OR
+                 (state = 'queued' AND lease_token IS NULL AND deleted = 0))
+                ORDER BY CASE WHEN lease_token IS NOT NULL THEN 0 ELSE 1 END, COALESCE(queued_at, created_at), id LIMIT 1""", (scope, worker_id, now)).fetchone()
             if not row:
                 return None
-            active = connection.execute("""SELECT 1 FROM apple_uploads WHERE lease_token IS NOT NULL AND lease_until >= ?
-                AND state NOT IN ('cloud_completed', 'requires_review', 'failed', 'cancelled', 'media_completed_extras_pending')""", (now,)).fetchone()
-            if active:
+            active = connection.execute("""SELECT COUNT(*) FROM apple_uploads WHERE id != ? AND account_scope = ? AND
+                (running = 1 OR (lease_token IS NOT NULL AND lease_until >= ? AND state NOT IN
+                ('cloud_completed', 'requires_review', 'failed', 'cancelled', 'media_completed_extras_pending', 'stopped')))""", (row['id'], scope, now)).fetchone()[0]
+            if active >= (settings.APPLE_MUSIC_UPLOAD_CONCURRENCY if managed else 1):
                 return None
             lease = secrets.token_urlsafe(32)
             connection.execute("""UPDATE apple_uploads SET worker_id = ?, lease_token = ?, lease_until = ?,
-                sequence = 0, state = 'staging', updated_at = ? WHERE id = ?""",
-                (worker_id, lease, now + self.LEASE_SECONDS, now, row["id"]))
+                sequence = 0, state = CASE WHEN stop_requested = 1 THEN 'stopping' ELSE 'staging' END,
+                running = ?, updated_at = ? WHERE id = ?""",
+                (worker_id, lease, now + self.LEASE_SECONDS, int(managed), now, row["id"]))
         return {"job_id": row["id"], "lease_token": lease, "lease_until": now + self.LEASE_SECONDS,
                 "sha256": row["sha256"], "size": row["size"], "action": row["action"], "attempt": row["attempt"],
                 "recovery_required": bool(row["lease_token"]),
+                "stop_requested": bool(row["stop_requested"]),
                 "content_url": f"/api/apple-music/uploads/{row['id']}/content"}
 
     @staticmethod
@@ -265,14 +297,17 @@ class AppleMusicUploadService:
             row = connection.execute("SELECT * FROM apple_uploads WHERE id = ?", (job_id,)).fetchone()
             self.check_lease(row, worker_id, event["lease_token"])
             if event["sequence"] <= row["sequence"]:
-                return {"accepted": True, "sequence": row["sequence"]}
+                return {"accepted": True, "sequence": row["sequence"], "stop_requested": bool(row["stop_requested"])}
             if event["sequence"] != row["sequence"] + 1:
                 raise UploadConflict("事件序号不连续")
-            if row["state"] in {"cloud_completed", "requires_review", "failed", "cancelled", "media_completed_extras_pending"}:
+            if row["state"] in TERMINAL_STATES:
                 raise UploadConflict("终态任务不能继续上报新阶段")
             if state in {"queued", "waiting_worker"}:
                 raise UploadConflict("工作进程不能重置上传队列")
-            terminal = state in {"cloud_completed", "requires_review", "failed", "cancelled", "media_completed_extras_pending"}
+            terminal = state in TERMINAL_STATES
+            if row["stop_requested"] and not terminal:
+                state = "stopping"
+                event = {**event, "state": state}
             self.record_timing(connection, row, event, now, terminal)
             connection.execute("""UPDATE apple_uploads SET state = ?, stage = ?, error_code = ?, action = ?, evidence = ?,
                 bytes_sent = ?, bytes_total = ?, signature_progress = ?, signature_elapsed_seconds = ?, sequence = ?, lease_until = ?, updated_at = ? WHERE id = ?""",
@@ -282,7 +317,13 @@ class AppleMusicUploadService:
             if terminal:
                 connection.execute("UPDATE apple_uploads SET lease_until = ? WHERE id = ?", (now + 86400, job_id))
             connection.execute("UPDATE upload_worker SET last_seen = ? WHERE id = ?", (now, worker_id))
-        return {"accepted": True, "sequence": event["sequence"]}
+        return {"accepted": True, "sequence": event["sequence"], "stop_requested": bool(row["stop_requested"])}
+
+    def list_uploads(self):
+        self.initialize()
+        with self.connect() as connection:
+            ids = [row["id"] for row in connection.execute("SELECT id FROM apple_uploads WHERE deleted = 0 ORDER BY created_at DESC LIMIT 100")]
+        return [self.get(job_id) for job_id in ids]
 
     @staticmethod
     def record_timing(connection, row, event, now, terminal=False):
@@ -307,12 +348,60 @@ class AppleMusicUploadService:
             row = connection.execute("SELECT * FROM apple_uploads WHERE id = ?", (job_id,)).fetchone()
             if not row:
                 raise KeyError("上传任务不存在")
-            if row["state"] not in {"failed", "media_completed_extras_pending"} or row["action"] != action or action == "report_completed" or row["error_code"] in {"unsupported_fingerprint", "unsupported_media", "context_mismatch"}:
+            if row["running"] or row["deleted"] or row["state"] not in {"failed", "media_completed_extras_pending", "stopped", "cancelled"} or row["action"] != action or action == "report_completed" or row["error_code"] in {"unsupported_fingerprint", "unsupported_media", "context_mismatch"}:
                 raise UploadConflict("当前任务不允许此恢复动作，请核对本地记录")
-            connection.execute("UPDATE apple_uploads SET state = 'queued', lease_token = NULL, lease_until = NULL, signature_progress = NULL, signature_elapsed_seconds = NULL, attempt = attempt + 1, updated_at = ? WHERE id = ?",
-                               (time.time(), job_id))
+            connection.execute("UPDATE apple_uploads SET state = 'queued', stop_requested = 0, lease_token = NULL, lease_until = NULL, signature_progress = NULL, signature_elapsed_seconds = NULL, attempt = attempt + 1, queued_at = ?, updated_at = ? WHERE id = ?",
+                               (time.time(), time.time(), job_id))
             connection.execute("INSERT INTO apple_upload_timeline(upload_id, stage, state, started_at) VALUES (?, 'queued', 'queued', ?)", (job_id, time.time()))
         return self.get(job_id)
+
+    def stop(self, job_id):
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute("SELECT * FROM apple_uploads WHERE id = ?", (job_id,)).fetchone()
+            if not row:
+                raise KeyError("上传任务不存在")
+            if row["state"] in TERMINAL_STATES:
+                return self.get(job_id)
+            if row["state"] == "queued":
+                raise UploadConflict("尚未执行的任务请取消排队")
+            connection.execute("UPDATE apple_uploads SET stop_requested = 1, state = 'stopping' WHERE id = ?", (job_id,))
+        return self.get(job_id)
+
+    def delete(self, job_id, task_id=None):
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute("SELECT * FROM apple_uploads WHERE id = ?", (job_id,)).fetchone()
+            if not row:
+                raise KeyError("上传任务不存在")
+            if row["running"] or row["state"] not in TERMINAL_STATES:
+                raise UploadConflict("请先取消排队或停止上传，等待进程退出后再删除记录")
+            if task_id is not None:
+                changed = connection.execute("UPDATE apple_upload_links SET deleted = 1 WHERE upload_id = ? AND conversion_task_id = ?", (job_id, task_id))
+                if not changed.rowcount:
+                    raise UploadConflict("记录不属于此上传任务")
+            else:
+                connection.execute("UPDATE apple_uploads SET deleted = 1 WHERE id = ?", (job_id,))
+        return {"deleted": True}
+
+    def controls(self, worker_id, readiness):
+        """仅向已认证执行器提供其任务租约，用于进程退出后的收尾。"""
+        with self.connect() as connection:
+            connection.execute("UPDATE upload_worker SET last_seen = ?, readiness = ? WHERE id = ?", (time.time(), json.dumps(readiness), worker_id))
+            connection.execute("UPDATE apple_uploads SET lease_until = ? WHERE worker_id = ? AND running = 1", (time.time() + self.LEASE_SECONDS, worker_id))
+            rows = connection.execute("SELECT id, sha256, attempt, lease_token, sequence, state, stop_requested, running FROM apple_uploads WHERE worker_id = ? AND running = 1", (worker_id,)).fetchall()
+        return {"concurrency": settings.APPLE_MUSIC_UPLOAD_CONCURRENCY, "jobs": [dict(row) for row in rows]}
+
+    def settled(self, job_id, worker_id, lease):
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute("SELECT * FROM apple_uploads WHERE id = ?", (job_id,)).fetchone()
+            if not row or row["worker_id"] != worker_id or not secrets.compare_digest(row["lease_token"] or "", lease):
+                raise UploadConflict("任务租约已变化")
+            if row["state"] not in TERMINAL_STATES:
+                raise UploadConflict("请先保存任务结束状态")
+            connection.execute("UPDATE apple_uploads SET running = 0 WHERE id = ?", (job_id,))
+        return {"settled": True}
 
     def cancel(self, job_id):
         with self.connect() as connection:

@@ -18,4 +18,4 @@ async def update_settings(settings_update: SettingsResponse):
     if not config_manager.save('settings.json', settings_update.model_dump()):
         raise HTTPException(500, '保存通用设置失败')
     apply_general(settings_update)
-    return {'status': 'success', 'message': '设置已保存，并发参数重启后生效'}
+    return {'status': 'success', 'message': '设置已保存，上传并发立即生效；转换并发重启后生效'}

@@ -1,5 +1,6 @@
 from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field
 from typing import List
 
 
@@ -28,6 +29,7 @@ class Settings(BaseSettings):
 
     # 任务配置
     MAX_CONCURRENT_TASKS: int = 2
+    APPLE_MUSIC_UPLOAD_CONCURRENCY: int = Field(default=1, ge=1, le=5, strict=True)
     FFMPEG_THREADS: int = 2
     FILE_STABLE_SECONDS: int = 30
     APPLE_MUSIC_REQUIRE_NETWORK_MOUNT: bool = False

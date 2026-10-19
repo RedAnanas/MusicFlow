@@ -33,6 +33,12 @@ class SongUploadError(Exception):
     """对外错误不包含认证头、云标识或工作票据。"""
 
 
+class UploadSessionChanged(SongUploadError):
+    """云端返回其他会话时保留原检查点，不继续处理该响应。"""
+
+    code = "session_changed"
+
+
 class WindowsSongUploader:
     """单线程单曲上传；保留每次请求的受保护记录，避免自动重复新增歌曲。"""
 
@@ -403,7 +409,7 @@ class WindowsSongUploader:
         initial = plistlib.loads(base64.b64decode(self.state["initial"]))
         status = self._await_status(initial)
         if not previous.get("session-id") or status.get("session-id") != previous["session-id"]:
-            raise SongUploadError("工作路由刷新返回了其他会话；保留原记录供核对")
+            raise UploadSessionChanged("工作路由刷新返回了其他会话；保留原记录供核对")
         self.state["status"] = base64.b64encode(plistlib.dumps(status)).decode("ascii")
         save_session(self.job, self.state)
         return status

@@ -86,11 +86,14 @@ def upload_asset(descriptor: dict, asset: bytes, user_agent: str, progress=None)
     sent = 0
     for request in requests:
         if progress:
+            progress(sent, total)
+        if progress:
             body = request.data
 
             def chunks():
                 nonlocal sent
                 for offset in range(0, len(body), 64 * 1024):
+                    progress(min(sent, total - 1), total)
                     chunk = body[offset:offset + 64 * 1024]
                     yield chunk
                     sent += len(chunk)

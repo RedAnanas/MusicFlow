@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, onUnmounted, ref } from 'vue'
 import axios from 'axios'
 import ConfigurationBackup from '../components/ConfigurationBackup.vue'
 import { ElMessage } from 'element-plus'
@@ -21,13 +21,37 @@ interface MusicdlStatus {
   error: string | null
 }
 
-interface UploadPreparation { supported: boolean; authorization_saved: boolean; key_saved: boolean; files: { name: string; valid: boolean }[]; worker: { online?: boolean; server_verified_at?: number } }
+interface UploadPreparation { supported: boolean; authorization_saved: boolean; key_saved: boolean; files: { name: string; valid: boolean }[]; worker: { online?: boolean; server_verified_at?: number; concurrency?: number; active_count?: number; queued_count?: number; scheduler_error?: string } }
 const upload = ref<UploadPreparation | null>(null)
 const uploadBusy = ref(false)
 const algorithmFiles = ref<File[]>([])
 const accountFile = ref<File | null>(null)
 const keyFile = ref<File | null>(null)
 const uploadError = ref('')
+const concurrency = ref(1)
+const concurrencySaving = ref(false)
+let uploadTimer: ReturnType<typeof setInterval> | undefined
+let concurrencyLoaded = false
+async function refreshUploadStatus() {
+  try {
+    const status = await axios.get('/api/apple-music/workers/status')
+    if (upload.value) upload.value.worker = status.data
+    if (!concurrencyLoaded) { concurrency.value = status.data.concurrency; concurrencyLoaded = true }
+    uploadError.value = ''
+  } catch { uploadError.value = '上传状态刷新失败，当前显示可能已过期' }
+}
+async function saveConcurrency() {
+  concurrencySaving.value = true
+  try {
+    const { data } = await axios.put('/api/apple-music/workers/concurrency', { concurrency: concurrency.value })
+    if (upload.value) upload.value.worker = data
+    concurrency.value = data.concurrency
+    ElMessage.success(data.online ? '上传并发已保存，执行器下轮调度生效' : '上传并发已保存，执行器恢复后生效')
+  } catch { ElMessage.error('上传并发保存失败，请重试') }
+  finally { concurrencySaving.value = false }
+}
+onMounted(() => { void refreshUploadStatus(); uploadTimer = setInterval(() => { void refreshUploadStatus() }, 5000) })
+onUnmounted(() => { if (uploadTimer) clearInterval(uploadTimer) })
 function chooseFiles(event: Event, kind: string) {
   const files = Array.from((event.target as HTMLInputElement).files || [])
   if (kind === 'algorithms') algorithmFiles.value = files
@@ -146,7 +170,12 @@ onMounted(refreshAll)
           <p v-for="file in upload.files" :key="file.name">{{ file.name }} · {{ file.valid ? '校验通过' : '未就绪或版本不匹配' }}</p>
           <div class="upload-inputs"><label>算法文件 <input type="file" multiple accept=".exe,.dll" @change="chooseFiles($event, 'algorithms')" /></label><el-button :disabled="algorithmFiles.length !== 4" @click="importUpload('algorithms')">校验并安装</el-button></div>
           <h3>服务端状态</h3>
+          <div class="upload-inputs"><label>上传并发数（所有目录和方案共用）<el-input-number v-model="concurrency" :min="1" :max="5" :step="1" step-strictly :precision="0" aria-label="上传并发数" /></label><el-button :loading="concurrencySaving" @click="saveConcurrency">保存上传并发</el-button></div>
+          <p>正在处理 {{ upload.worker.active_count || 0 }} 首 · 排队 {{ upload.worker.queued_count || 0 }} 首 · 已保存并发 {{ upload.worker.concurrency || 1 }}。名额包含计算、上传和云端等待。</p>
+          <p>安全兼容模式：并发名额用于本地成品准备；Apple 协议会话依次执行，避免同一资料库的会话冲突。</p>
+          <p v-if="(upload.worker.active_count || 0) > (upload.worker.concurrency || 1)">现有任务结束后逐步降至目标并发，不打断在途上传。</p>
           <p>{{ upload.worker.online ? '上传执行器在线' : '上传执行器尚未就绪' }}。FFmpeg / FFprobe 使用上方受管依赖。</p>
+          <p v-if="upload.worker.scheduler_error" class="musicdl-warning">上传执行器无法启动新任务，已暂停领取。请检查服务器可用资源并重启执行器。</p>
           <p>{{ upload.worker.server_verified_at ? `最近服务端授权验证：${new Date(upload.worker.server_verified_at * 1000).toLocaleString('zh-CN')}` : '尚未验证服务端授权，本地保存成功不代表服务端授权有效。' }}</p>
           <el-button @click="loadUpload">刷新准备状态</el-button>
         </template>

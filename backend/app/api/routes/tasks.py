@@ -4,9 +4,9 @@ import json
 import sqlite3
 from pathlib import Path
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, field_serializer
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from app.config import settings
 
@@ -55,6 +55,11 @@ class TaskResponse(BaseModel):
     apple_music_delivery_mode: Optional[str] = None
     apple_music_account_scope: Optional[str] = None
     apple_music_upload: Optional[dict] = None
+
+    @field_serializer('start_time', 'end_time', when_used='json')
+    def serialize_task_time(self, value):
+        # 旧记录使用服务端本地时间，响应统一带 UTC 时区，避免浏览器按自身时区猜测。
+        return value.astimezone(timezone.utc).isoformat() if value else None
 
 
 def register_direct_upload(task):
@@ -136,9 +141,9 @@ def save_tasks():
             task_dict = task.dict()
             # 转换 datetime 为字符串
             if task_dict.get('start_time'):
-                task_dict['start_time'] = task_dict['start_time'].isoformat()
+                task_dict['start_time'] = task_dict['start_time'].astimezone(timezone.utc).isoformat()
             if task_dict.get('end_time'):
-                task_dict['end_time'] = task_dict['end_time'].isoformat()
+                task_dict['end_time'] = task_dict['end_time'].astimezone(timezone.utc).isoformat()
             data[task_id] = task_dict
 
         with open(TASKS_FILE, 'w', encoding='utf-8') as f:
@@ -211,6 +216,7 @@ async def delete_task(task_id: str):
     if task_id not in tasks_cache:
         raise HTTPException(status_code=404, detail="Task not found")
 
+    delete_upload_links([task_id])
     del tasks_cache[task_id]
     save_tasks()
     logger.info(f"Deleted task record {task_id}")
@@ -336,6 +342,7 @@ async def batch_delete_tasks(action: TaskBatchAction):
     if missing_ids:
         raise HTTPException(status_code=404, detail="Some tasks were not found")
 
+    delete_upload_links(task_ids)
     for task_id in task_ids:
         del tasks_cache[task_id]
 
@@ -344,6 +351,18 @@ async def batch_delete_tasks(action: TaskBatchAction):
         logger.info(f"Deleted {len(task_ids)} task records")
 
     return {"status": "success", "deleted": len(task_ids)}
+
+
+def delete_upload_links(task_ids):
+    """删除转换记录前检查上传状态，避免隐藏仍在执行的任务。"""
+    from app.services.apple_music_upload import apple_music_upload_service
+    uploads = [(task_id, apple_music_upload_service.for_task(task_id)) for task_id in task_ids
+               if tasks_cache[task_id].apple_music_delivery_mode == "direct_upload"]
+    if any(upload and not upload["can_delete"] for _, upload in uploads):
+        raise HTTPException(409, "请先取消排队或停止关联上传，等待进程退出后再删除记录")
+    for task_id, upload in uploads:
+        if upload:
+            apple_music_upload_service.delete(upload["id"], task_id)
 
 
 async def submit_retry(task: TaskResponse) -> TaskResponse:

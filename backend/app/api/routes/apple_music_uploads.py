@@ -7,6 +7,8 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from app.services.apple_music_upload import apple_music_upload_service as service, UploadConflict
+from app.services.configuration_backup import current_general, apply_general
+from app.services.config_manager import config_manager
 
 router = APIRouter()
 
@@ -27,11 +29,12 @@ class Readiness(BaseModel):
     compatible: bool = False
     context_matches: bool = False
     server_verified_at: float | None = None
+    scheduler_error: Literal["process_start_failed"] | None = None
 
 
 class Claim(BaseModel):
     account_scope: str
-    protocol_version: Literal[1]
+    protocol_version: Literal[1, 2]
     readiness: Readiness
 
 
@@ -46,7 +49,7 @@ class Event(BaseModel):
     sequence: int = Field(ge=1)
     state: str = Field(max_length=48)
     stage: Literal["download", "validation", "signature", "metadata", "audio", "extras", "processing", "complete",
-                   "media", "hash", "partial", "full-lowres", "decode", "fingerprint-upload", "prepare-track", "waiting", "extras-waiting"] | None = None
+                   "media", "hash", "partial", "full-lowres", "decode", "fingerprint-upload", "prepare-track", "waiting", "extras-waiting", "session-wait"] | None = None
     action: str = "upload"
     error_code: str | None = Field(default=None, max_length=48)
     evidence: Evidence = Field(default_factory=Evidence)
@@ -67,6 +70,56 @@ class RetryUpload(BaseModel):
     action: str
 
 
+class UploadConcurrency(BaseModel):
+    concurrency: int = Field(ge=1, le=5, strict=True)
+
+
+class Lease(BaseModel):
+    lease_token: str = Field(min_length=20, max_length=128)
+
+
+@router.put("/workers/concurrency")
+def save_concurrency(request: UploadConcurrency):
+    value = current_general().model_copy(update={"apple_music_upload_concurrency": request.concurrency})
+    if not config_manager.save("settings.json", value.model_dump()):
+        raise HTTPException(500, "上传并发保存失败")
+    apply_general(value)
+    return service.worker_status()
+
+
+@router.post("/workers/control")
+def controls(request: Readiness, identity=Depends(worker_identity)):
+    return service.controls(identity[0], request.model_dump())
+
+
+@router.post("/uploads/{job_id}/settled")
+def settled(job_id: str, request: Lease, identity=Depends(worker_identity)):
+    try:
+        return service.settled(job_id, identity[0], request.lease_token)
+    except UploadConflict as exc:
+        raise HTTPException(409, str(exc)) from None
+
+
+@router.post("/uploads/{job_id}/stop")
+def stop_upload(job_id: str):
+    try:
+        return service.stop(job_id)
+    except KeyError:
+        raise HTTPException(404, "上传任务不存在") from None
+    except UploadConflict as exc:
+        raise HTTPException(409, str(exc)) from None
+
+
+@router.delete("/uploads/{job_id}")
+def delete_upload(job_id: str, conversion_task_id: str | None = None):
+    try:
+        return service.delete(job_id, conversion_task_id)
+    except KeyError:
+        raise HTTPException(404, "上传任务不存在") from None
+    except UploadConflict as exc:
+        raise HTTPException(409, str(exc)) from None
+
+
 @router.get("/workers/status")
 def worker_status():
     return service.worker_status()
@@ -77,7 +130,8 @@ def claim(request: Claim, identity=Depends(worker_identity)):
     worker_id, scope = identity
     if request.account_scope != scope:
         raise HTTPException(403, "账号绑定不一致")
-    return {"job": service.claim(worker_id, scope, request.readiness.model_dump()), "retry_after": 10}
+    return {"job": service.claim(worker_id, scope, request.readiness.model_dump(), managed=request.protocol_version == 2),
+            "concurrency": current_general().apple_music_upload_concurrency, "retry_after": 5}
 
 
 @router.post("/uploads")
@@ -99,6 +153,20 @@ def create_upload(request: CreateUpload):
         return register_direct_upload(task)
     except (UploadConflict, OSError) as exc:
         raise HTTPException(409, str(exc)) from None
+
+
+@router.get("/uploads")
+def list_uploads():
+    from app.api.routes.tasks import tasks_cache
+    from app.services.profile_manager import profile_manager
+
+    uploads = service.list_uploads()
+    for upload in uploads:
+        for source in upload["sources"]:
+            task = tasks_cache.get(source["conversion_task_id"])
+            profile = profile_manager.get_profile(task.profile_id) if task else None
+            source["profile_name"] = profile.name if profile else "原转换方案不可用"
+    return uploads
 
 
 @router.get("/uploads/{job_id}")

@@ -2,6 +2,7 @@
 
 from contextlib import contextmanager
 import csv
+import errno
 import os
 from pathlib import Path
 import subprocess
@@ -26,33 +27,43 @@ def secure_directory(directory=None):
 
 
 @contextmanager
-def exclusive_lock():
+def exclusive_lock(name="worker.lock", wait=None):
     secure_directory()
     if os.name != "nt":
         import fcntl
-        with (PRIVATE / "worker.lock").open("a+b") as lock:
-            try:
-                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except OSError:
-                raise RuntimeError("已有服务端上传进程运行") from None
-            try:
-                yield
-            finally:
-                fcntl.flock(lock, fcntl.LOCK_UN)
+        with (PRIVATE / name).open("a+b") as lock:
+            while True:
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except OSError as exc:
+                    if wait is None:
+                        raise RuntimeError("已有服务端上传进程运行") from None
+                    if exc.errno not in {errno.EACCES, errno.EAGAIN}:
+                        raise
+                    wait()
+            # 子进程继承文件描述符，父进程退出后仍保持授权互斥，直至所有任务退出。
+            yield lock
         return
     import msvcrt
-    with (PRIVATE / "worker.lock").open("a+b") as lock:
+    with (PRIVATE / name).open("a+b") as lock:
         lock.seek(0)
         if not lock.read(1):
             lock.write(b"0")
             lock.flush()
         lock.seek(0)
+        while True:
+            try:
+                msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+                break
+            except OSError as exc:
+                if wait is None:
+                    raise RuntimeError("已有上传或授权进程运行，请先正常退出") from None
+                if exc.errno not in {errno.EACCES, errno.EAGAIN}:
+                    raise
+                wait()
         try:
-            msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
-        except OSError:
-            raise RuntimeError("已有上传或授权进程运行，请先正常退出") from None
-        try:
-            yield
+            yield lock
         finally:
             lock.seek(0)
             msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)

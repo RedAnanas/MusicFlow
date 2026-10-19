@@ -53,12 +53,13 @@ def main():
             if (not key or not Path(key).is_file() or not (PRIVATE / AUTHORIZATION_FILE).is_file() or not ffmpeg
                     or not all(target.with_name(name).is_file() and checksum(target.with_name(name)) == digest for name, digest in expected.items())):
                 raise RuntimeError('服务端上传材料尚未就绪')
-            with exclusive_lock():
+            with exclusive_lock() as lock:
                 bundle = load_session(PRIVATE / AUTHORIZATION_FILE)
                 from worker import identity
                 identity(bundle)
                 binding = server_binding(apple_music_upload_service)
-                Worker(binding, Path(ffmpeg), target).run()
+                from scheduler import UploadScheduler
+                UploadScheduler(Worker(binding, Path(ffmpeg), target), lock).run()
             time.sleep(1)
         except KeyboardInterrupt:
             return

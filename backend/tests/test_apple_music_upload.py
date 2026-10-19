@@ -64,6 +64,20 @@ def event(job, sequence=1, **changes):
     return {"lease_token": job["lease_token"], "sequence": sequence, "state": "uploading", "stage": "audio", **changes}
 
 
+def test_会话等待事件通过HTTP校验并保存阶段(queue, monkeypatch):
+    service, binding, _ = queue
+    enqueue(queue)
+    job = claim(queue)
+    monkeypatch.setattr(api, 'service', service)
+    app = FastAPI()
+    app.include_router(api.router, prefix='/api/apple-music')
+    headers = {'Authorization': 'Bearer ' + binding['token'], 'X-Worker-Id': binding['worker_id']}
+    response = asgi_request(app, 'POST', f"/api/apple-music/uploads/{job['job_id']}/events",
+                            event(job, stage='session-wait'), headers)
+    assert response.status_code == 200
+    assert service.get(job['job_id'])['stage'] == 'session-wait'
+
+
 def test_重复提交和并发提交只生成一个上传任务(queue):
     service, _, _ = queue
     with ThreadPoolExecutor(max_workers=3) as executor:
@@ -236,8 +250,9 @@ def test_取消只允许尚未领取的任务(queue):
     job = enqueue(queue)
     service.cancel(job["id"])
     assert claim(queue) is None
-    with pytest.raises(UploadConflict):
-        service.retry(job["id"], "upload")
+    assert service.get(job["id"])["allowed_actions"] == ["upload"]
+    service.retry(job["id"], "upload")
+    assert claim(queue)["job_id"] == job["id"]
 
 
 def test_接口鉴权成品下载和事件校验(queue, monkeypatch):
@@ -442,3 +457,181 @@ def test_阶段进度拒绝非有限数及越界输入():
     for changes in ({"stage_progress": 101}, {"stage_progress": float("nan")}, {"stage_token": float("inf")}, {"wait_seconds": 601}):
         with pytest.raises(ValidationError):
             Event(lease_token="x" * 32, sequence=1, state="uploading", **changes)
+
+
+@pytest.mark.parametrize("value", [0, 6, 1.5, True, "3"])
+def test_上传并发严格限制整数范围(value):
+    from app.services.configuration_backup import GeneralSettings
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError):
+        api.UploadConcurrency(concurrency=value)
+    with pytest.raises(ValidationError):
+        GeneralSettings(apple_music_upload_concurrency=value)
+
+
+def test_旧配置默认单并发():
+    from app.services.configuration_backup import GeneralSettings
+    assert GeneralSettings().apple_music_upload_concurrency == 1
+
+
+def managed_claim(queue):
+    service, binding, _ = queue
+    return service.claim(binding['worker_id'], binding['account_scope'], READY, managed=True)
+
+
+def test_多来源共用名额且并行领取不超上限(queue, monkeypatch):
+    from app.config import settings
+    monkeypatch.setattr(settings, 'APPLE_MUSIC_UPLOAD_CONCURRENCY', 3)
+    service, binding, source = queue
+    ids = []
+    for index in range(10):
+        source.write_bytes(f'song-{index}'.encode())
+        ids.append(enqueue(queue, f'task-{index}')['id'])
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        jobs = list(executor.map(lambda _: managed_claim(queue), range(10)))
+    assert len({job['job_id'] for job in jobs if job}) == 3
+    assert service.worker_status()['active_count'] == 3
+    monkeypatch.setattr(settings, 'APPLE_MUSIC_UPLOAD_CONCURRENCY', 1)
+    assert managed_claim(queue) is None
+    for job in [job for job in jobs if job][:2]:
+        service.event(job['job_id'], binding['worker_id'], event(job, state='stopped'))
+        assert service.get(job['job_id'])['running']
+        service.settled(job['job_id'], binding['worker_id'], job['lease_token'])
+    assert managed_claim(queue) is None
+    monkeypatch.setattr(settings, 'APPLE_MUSIC_UPLOAD_CONCURRENCY', 5)
+    assert managed_claim(queue) is not None
+
+
+def test_停止请求保留完成结果并等待进程退出(queue):
+    service, binding, _ = queue
+    upload = enqueue(queue)
+    job = managed_claim(queue)
+    service.stop(upload['id'])
+    response = service.event(job['job_id'], binding['worker_id'], event(job))
+    assert response['stop_requested']
+    assert service.get(upload['id'])['state'] == 'stopping'
+    with pytest.raises(UploadConflict):
+        service.delete(upload['id'])
+    service.event(job['job_id'], binding['worker_id'], event(job, 2, state='cloud_completed', evidence={key: True for key in ('complete_received','all_work_completed','extras_completed')}))
+    assert service.get(upload['id'])['state'] == 'cloud_completed'
+    assert not service.get(upload['id'])['can_delete']
+    service.settled(upload['id'], binding['worker_id'], job['lease_token'])
+    service.stop(upload['id'])
+    assert service.get(upload['id'])['state'] == 'cloud_completed'
+    assert service.get(upload['id'])['can_delete']
+
+
+def test_停止恢复排到队尾并拒绝旧租约(queue):
+    service, binding, source = queue
+    first = enqueue(queue)
+    job = managed_claim(queue)
+    service.stop(first['id'])
+    service.event(first['id'], binding['worker_id'], event(job, state='stopped', action='resume_work'))
+    with pytest.raises(UploadConflict):
+        service.retry(first['id'], 'resume_work')
+    service.settled(first['id'], binding['worker_id'], job['lease_token'])
+    source.write_bytes(b'second')
+    second = enqueue(queue, 'second')
+    service.retry(first['id'], 'resume_work')
+    assert managed_claim(queue)['job_id'] == second['id']
+    with pytest.raises(UploadConflict):
+        service.event(first['id'], binding['worker_id'], event(job, 2))
+
+
+def test_删除关联保留共享任务且扫描不复活(queue):
+    service, _, _ = queue
+    upload = enqueue(queue, 'first')
+    enqueue(queue, 'second')
+    service.cancel(upload['id'])
+    service.delete(upload['id'], 'first')
+    assert service.for_task('first')['deleted']
+    assert not service.for_task('second')['deleted']
+    assert enqueue(queue, 'first')['state'] == 'cancelled'
+    service.delete(upload['id'])
+    assert not service.list_uploads()
+    assert service.for_task('second')['deleted']
+    assert enqueue(queue, 'third')['id'] == upload['id']
+    assert claim(queue) is None
+
+
+def test_重启保留停止决定和运行标记(queue):
+    service, _, _ = queue
+    upload = enqueue(queue)
+    managed_claim(queue)
+    service.stop(upload['id'])
+    restored = AppleMusicUploadService(service.database_path)
+    assert restored.get(upload['id'])['stop_requested']
+    assert restored.get(upload['id'])['running']
+    with pytest.raises(UploadConflict):
+        restored.delete(upload['id'])
+
+
+def test_上传设置保存失败不改变运行配置(queue, monkeypatch):
+    from app.config import settings
+    monkeypatch.setattr(settings, 'APPLE_MUSIC_UPLOAD_CONCURRENCY', 1)
+    monkeypatch.setattr(api.config_manager, 'save', lambda *args: False)
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException):
+        api.save_concurrency(api.UploadConcurrency(concurrency=3))
+    assert settings.APPLE_MUSIC_UPLOAD_CONCURRENCY == 1
+
+
+def test_执行器控制接口鉴权及停止删除闭环(queue, monkeypatch):
+    service, binding, _ = queue
+    monkeypatch.setattr(api, 'service', service)
+    app = FastAPI()
+    app.include_router(api.router, prefix='/api/apple-music')
+    upload = enqueue(queue)
+    headers = {'Authorization':'Bearer '+binding['token'], 'X-Worker-Id':binding['worker_id']}
+    payload = {'protocol_version':2,'account_scope':binding['account_scope'],'readiness':READY}
+    job = asgi_request(app,'POST','/api/apple-music/workers/claim',payload,headers).json()['job']
+    assert asgi_request(app,'POST','/api/apple-music/workers/control',READY).status_code == 401
+    assert asgi_request(app,'POST',f"/api/apple-music/uploads/{upload['id']}/stop").status_code == 200
+    response = asgi_request(app,'POST','/api/apple-music/workers/control',READY,headers).json()
+    assert response['jobs'][0]['stop_requested']
+    assert asgi_request(app,'DELETE',f"/api/apple-music/uploads/{upload['id']}").status_code == 409
+    service.event(upload['id'],binding['worker_id'],event(job,state='stopped'))
+    assert asgi_request(app,'POST',f"/api/apple-music/uploads/{upload['id']}/settled",{'lease_token':job['lease_token']}).status_code == 401
+    assert asgi_request(app,'POST',f"/api/apple-music/uploads/{upload['id']}/settled",{'lease_token':job['lease_token']},headers).status_code == 200
+    assert asgi_request(app,'DELETE',f"/api/apple-music/uploads/{upload['id']}").status_code == 200
+
+
+def test_删除转换记录不能绕过上传停止保护(queue, monkeypatch):
+    from app.api.routes import tasks
+    from app.services import apple_music_upload as module
+    from fastapi import HTTPException
+    service, _, source = queue
+    upload = enqueue(queue)
+    monkeypatch.setattr(module,'apple_music_upload_service',service)
+    monkeypatch.setattr(tasks,'tasks_cache',{'conversion-1': tasks.TaskResponse(id='conversion-1',source_file='source',output_file=str(source),profile_id='p',status='success',apple_music_delivery_mode='direct_upload')})
+    monkeypatch.setattr(tasks,'save_tasks',lambda: None)
+    with pytest.raises(HTTPException):
+        asyncio.run(tasks.delete_task('conversion-1'))
+    assert 'conversion-1' in tasks.tasks_cache
+    service.cancel(upload['id'])
+    asyncio.run(tasks.delete_task('conversion-1'))
+    assert service.for_task('conversion-1')['deleted']
+
+
+def test_过期受管租约在进程收尾前不能重领(queue):
+    service, _, _ = queue
+    upload = enqueue(queue)
+    managed_claim(queue)
+    with service.connect() as connection:
+        connection.execute('UPDATE apple_uploads SET lease_until=0 WHERE id=?',(upload['id'],))
+    assert managed_claim(queue) is None
+    assert claim(queue) is None
+    assert service.get(upload['id'])['running']
+
+
+def test_保存上传并发不覆盖其他通用设置(queue, monkeypatch):
+    from app.config import settings
+    monkeypatch.setattr(settings,'APPLE_MUSIC_UPLOAD_CONCURRENCY',1)
+    monkeypatch.setattr(settings,'MAX_CONCURRENT_TASKS',4)
+    saved=[]
+    monkeypatch.setattr(api.config_manager,'save',lambda name,data: saved.append((name,data)) or True)
+    monkeypatch.setattr(api,'service',queue[0])
+    result=api.save_concurrency(api.UploadConcurrency(concurrency=5))
+    assert result['concurrency']==5
+    assert saved[0][1]['max_concurrent_tasks']==4
+    assert saved[0][1]['apple_music_upload_concurrency']==5

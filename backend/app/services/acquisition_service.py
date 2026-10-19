@@ -520,7 +520,7 @@ class AcquisitionService:
                     job["apple_status"] = upload["state"]
         if routed:
             states = [job[field] for field in ("nas_status", "apple_status") if job[field] != "not_needed"]
-            if any(state in {"failed", "requires_review", "cancelled"} for state in states):
+            if any(state in {"failed", "requires_review", "cancelled", "stopped"} for state in states):
                 job["status"] = "partial"
             elif all(state in {"success", "confirmed_present", "cloud_completed"} for state in states):
                 job["status"] = "completed"

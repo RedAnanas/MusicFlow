@@ -109,6 +109,11 @@ export interface AppleMusicUpload {
   error?: string
   error_code?: string
   allowed_actions: string[]
+  running?: boolean
+  deleted?: boolean
+  can_stop?: boolean
+  can_delete?: boolean
+  sources?: { conversion_task_id: string; source_file: string; profile_name?: string }[]
   created_at: number
   updated_at: number
   finished_at?: number | null

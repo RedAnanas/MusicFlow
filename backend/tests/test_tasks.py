@@ -248,3 +248,24 @@ def test_retry_apple_music_handoff_allows_received_record(monkeypatch):
 
     assert result.id == task.id
     assert retried == [task.id]
+
+
+def test_任务时间接口必须包含时区以免浏览器错算八小时():
+    task = make_task('timezone', tasks_api.TaskStatus.SUCCESS, datetime(2026,10,17,5,28,13))
+    task.end_time = datetime(2026,10,17,5,28,27)
+    payload = task.model_dump(mode='json')
+    parsed_start = datetime.fromisoformat(payload['start_time'])
+    parsed_end = datetime.fromisoformat(payload['end_time'])
+    assert parsed_start.tzinfo is not None
+    assert parsed_end.tzinfo is not None
+    assert parsed_start.timestamp() == task.start_time.timestamp()
+    assert parsed_end.timestamp() - parsed_start.timestamp() == 14
+
+
+def test_已经带时区的任务不重复偏移():
+    from datetime import timezone
+    task = make_task('aware', tasks_api.TaskStatus.SUCCESS, datetime(2026,10,17,5,28,13,tzinfo=timezone.utc))
+    payload = task.model_dump(mode='json')
+    start = datetime.fromisoformat(payload['start_time'])
+    finish = datetime(2026,10,17,13,44,50,tzinfo=timezone(timedelta(hours=8)))
+    assert (finish-start).total_seconds() == 16*60+37
