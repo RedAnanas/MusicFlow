@@ -5,6 +5,8 @@ from pathlib import Path
 import pytest
 from mutagen.flac import FLAC, Picture
 from mutagen.mp4 import MP4, MP4Cover
+from mutagen.mp3 import MP3
+from mutagen.id3 import USLT
 
 from app.config import settings
 from app.core.metadata import MetadataService
@@ -13,6 +15,27 @@ from app.core.metadata import MetadataService
 PNG_DATA = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
 )
+
+
+@pytest.mark.parametrize("suffix,codec", [(".flac", "flac"), (".m4a", "aac"), (".mp3", "libmp3lame")])
+def test_读取内嵌歌词(tmp_path, suffix, codec):
+    """真实音频的歌词标签应由元数据服务返回给播放器。"""
+    path = tmp_path / ("歌词" + suffix)
+    create_audio_file(path, codec)
+    lyrics = "[00:01.00]第一句\n[00:02.50]第二句"
+    if suffix == ".flac":
+        audio = FLAC(path)
+        audio["lyrics"] = lyrics
+    elif suffix == ".m4a":
+        audio = MP4(path)
+        audio["©lyr"] = [lyrics]
+    else:
+        audio = MP3(path)
+        if audio.tags is None:
+            audio.add_tags()
+        audio.tags.add(USLT(encoding=3, lang="zho", desc="", text=lyrics))
+    audio.save()
+    assert MetadataService().read_metadata(str(path))["lyrics"] == lyrics
 
 
 def create_audio_file(path: Path, codec: str) -> None:

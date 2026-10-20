@@ -3,10 +3,85 @@ import io
 import json
 from pathlib import Path
 
+import pytest
+
 from app.services.dual_library_service import DualLibraryService, normalize_text
 
 
 CSV_HEADER = "Track name,Artist name,Album,Playlist name,Type,ISRC,Apple - id\n"
+
+
+def test_file_metadata_reuses_acquisition_record_without_merging_other_versions(tmp_path: Path) -> None:
+    """同一任务的文件标签复用原记录，名称不同的其他任务仍独立保留。"""
+    service = DualLibraryService(tmp_path / "musicflow.db")
+    original = service.upsert_incremental_track({"title": "预谋 (DJ版)", "artist": "DJ", "album": "专辑"}, "handoff", "job-1")
+    service.confirm_incremental_track(original["id"])
+    service.record_incremental_file({"title": "预谋", "artist": "DJ", "album": "专辑"}, "direct_upload", ["job-1"])
+    assert service.lookup_presence({"title": "预谋", "artist": "DJ", "album": "专辑"}, service.build_presence_index([]))["apple_present"]
+    service.upsert_incremental_track({"title": "预谋 (DJ版)", "artist": "DJ", "album": "专辑"}, "direct_upload", "job-1")
+    service.import_snapshot("library.csv", (CSV_HEADER + "预谋,DJ,专辑,资料库,Apple Music,,123\n").encode())
+    entries = service.list_incremental_tracks()
+    assert len(entries) == 1
+    assert entries[0]["id"] == original["id"]
+    assert entries[0]["manual_confirmed_at"]
+    assert entries[0]["snapshot_status"] == "matched"
+    assert entries[0]["metadata_variants"][0]["title"] == "预谋"
+    service.upsert_incremental_track({"title": "预谋 (现场版)", "artist": "DJ", "album": "专辑"}, "handoff", "job-2")
+    assert len(service.list_incremental_tracks()) == 2
+
+
+def test_merge_incremental_records_keeps_confirmation_history_and_pairing(tmp_path: Path) -> None:
+    """人工合并只归并记录，保留原名称、人工确认和已有本地配对。"""
+    service = DualLibraryService(tmp_path / "musicflow.db")
+    source = service.upsert_incremental_track({"title": "预谋 (DJ版)", "artist": "DJ", "album": "专辑"}, "handoff", "job-1")
+    target = service.upsert_incremental_track({"title": "预谋", "artist": "DJ", "album": "专辑"}, "direct_upload")
+    service.confirm_incremental_track(source["id"])
+    service.save_match_decision("local-1", "incremental:" + source["id"], "confirmed")
+    service.merge_incremental_tracks(target["id"], source["id"])
+    entries = service.list_incremental_tracks()
+    assert len(entries) == 1
+    assert entries[0]["id"] == target["id"]
+    assert entries[0]["manual_confirmed_at"]
+    assert entries[0]["acquisition_job_id"] == "job-1"
+    assert entries[0]["metadata_variants"][0]["title"] == "预谋 (DJ版)"
+    with service._connect() as db:
+        assert db.execute("SELECT apple_track_key FROM library_matches").fetchone()[0] == "incremental:" + target["id"]
+        assert db.execute("SELECT merged_into FROM apple_incremental_entries WHERE id=?", (source["id"],)).fetchone()[0] == target["id"]
+    with pytest.raises(ValueError):
+        service.merge_incremental_tracks(target["id"], source["id"])
+    repeated = service.upsert_incremental_track({"title": "预谋 (DJ版)", "artist": "DJ", "album": "专辑"}, "handoff", "job-1")
+    assert repeated["id"] == target["id"]
+    assert len(service.list_incremental_tracks()) == 1
+    assert service.lookup_presence({"title": "预谋 (DJ版)", "artist": "DJ", "album": "专辑"}, service.build_presence_index([]))["apple_present"]
+    service.delete_incremental_track(target["id"])
+    assert service.list_incremental_tracks() == []
+    with service._connect() as db:
+        assert db.execute("SELECT COUNT(*) FROM apple_incremental_entries").fetchone()[0] == 0
+
+
+def test_merge_conflicting_records_is_atomic(tmp_path: Path) -> None:
+    """不同强标识不能合并，拒绝后两条记录保持完整。"""
+    service = DualLibraryService(tmp_path / "musicflow.db")
+    source = service.upsert_incremental_track({"title": "歌曲", "artist": "歌手", "apple_id": "123"}, "catalog")
+    target = service.upsert_incremental_track({"title": "歌曲", "artist": "歌手", "apple_id": "456"}, "catalog")
+    with pytest.raises(ValueError, match="不同"):
+        service.merge_incremental_tracks(target["id"], source["id"])
+    assert len(service.list_incremental_tracks()) == 2
+
+
+def test_merge_conflicting_local_decisions_is_atomic(tmp_path: Path) -> None:
+    """本地配对相互冲突时不能悄悄覆盖人工结论。"""
+    service = DualLibraryService(tmp_path / "musicflow.db")
+    source = service.upsert_incremental_track({"title": "歌曲 (DJ版)", "artist": "歌手"}, "handoff")
+    target = service.upsert_incremental_track({"title": "歌曲", "artist": "歌手"}, "direct_upload")
+    for entry, local in ((source, "local-1"), (target, "local-2")):
+        service.confirm_incremental_track(entry["id"])
+        service.save_match_decision(local, "incremental:" + entry["id"], "confirmed")
+    with pytest.raises(ValueError, match="本地配对不同"):
+        service.merge_incremental_tracks(target["id"], source["id"])
+    assert len(service.list_incremental_tracks()) == 2
+    with service._connect() as db:
+        assert db.execute("SELECT COUNT(*) FROM library_matches").fetchone()[0] == 2
 
 
 def create_service(tmp_path: Path) -> DualLibraryService:
@@ -159,7 +234,7 @@ def test_replacing_snapshot_rechecks_incremental_evidence(tmp_path: Path) -> Non
     assert created is True
     assert service.get_latest_snapshot()["id"] == second["id"]
     assert {entry["title"]: entry["verification_status"] for entry in service.list_incremental_tracks()} == {
-        "手动曲目": "absent", "自动曲目": "absent"
+        "手动曲目": "manual_confirmed", "自动曲目": "absent"
     }
     index = service.build_presence_index([])
     presence = service.lookup_presence({"song_name": "自动曲目", "singers": "歌手", "album": "专辑"}, index)
@@ -195,6 +270,104 @@ def test_delete_a_then_import_unrelated_b_drops_a_confirmation(tmp_path: Path) -
         {"song_name": "旧歌曲", "singers": "歌手", "album": "旧专辑"},
         service.build_presence_index([]),
     )["apple_present"] is False
+
+
+def test_new_snapshot_preserves_manual_evidence_and_reports_mismatch(tmp_path: Path) -> None:
+    """新快照未匹配时保留人工确认与查重依据，独立显示差异。"""
+    service = DualLibraryService(tmp_path / "musicflow.db")
+    entry = service.upsert_incremental_track(
+        {"title": "离开我的依赖 (DJ铁柱版)", "artist": "王艳薇", "album": "原专辑"}, "direct_upload"
+    )
+    confirmed = service.confirm_incremental_track(entry["id"])
+    service.import_snapshot("new.csv", (CSV_HEADER + "另一首,其他歌手,专辑,资料库,Apple Music,,123\n").encode())
+
+    result = service.list_incremental_tracks()[0]
+    assert result["manual_confirmed_at"] == confirmed["manual_confirmed_at"]
+    assert result["verification_status"] == "manual_confirmed"
+    assert result["snapshot_status"] == "unmatched"
+    assert result["matched_track"] is None
+    presence = service.lookup_presence(entry, service.build_presence_index([]))
+    assert presence["apple_present"] is True
+    assert presence["apple_pending"] is False
+
+
+def test_incremental_snapshot_link_survives_updates_without_merging_names(tmp_path: Path) -> None:
+    """人工关联复用稳定曲目标识，记录原名保持不变，近似项不自动确认。"""
+    service = DualLibraryService(tmp_path / "musicflow.db")
+    entry = service.upsert_incremental_track(
+        {"title": "冬眠2023 (DJ阿布版)", "artist": "DJ阿智、DJ阿布", "album": "旧专辑"}, "direct_upload"
+    )
+    first, _ = service.import_snapshot(
+        "first.csv", (CSV_HEADER + "冬眠2023,DJ阿智,新专辑,资料库,Apple Music,,123\n").encode()
+    )
+    review = service.review_incremental_track(entry["id"])
+    assert review["entry"]["snapshot_status"] == "unmatched"
+    assert review["entry"]["verification_status"] == "absent"
+    assert review["candidates"]
+    key = review["candidates"][0]["track_key"]
+    service.link_incremental_track(entry["id"], key)
+    linked = service.list_incremental_tracks()[0]
+    assert linked["match_reason"] == "manual_link"
+    assert linked["matched_track"]["title"] == "冬眠2023"
+    assert linked["title"] == entry["title"]
+    assert linked["snapshot_status"] == "matched"
+
+    service = DualLibraryService(tmp_path / "musicflow.db")
+    second, _ = service.import_snapshot(
+        "second.csv", (CSV_HEADER + "冬眠2023 (新版名称),DJ阿智,新专辑,收藏,Apple Music,,123\n另一首,其他歌手,,收藏,Apple Music,,456\n").encode(), first["id"]
+    )
+    assert service.list_incremental_tracks()[0]["snapshot_status"] == "matched"
+    assert service.list_incremental_tracks()[0]["match_reason"] == "manual_link"
+    assert service.list_incremental_tracks()[0]["matched_track"]["title"] == "冬眠2023 (新版名称)"
+    service.import_snapshot(
+        "third.csv", (CSV_HEADER + "另一首,其他歌手,,收藏,Apple Music,,456\n").encode(), second["id"]
+    )
+    assert service.list_incremental_tracks()[0]["snapshot_status"] == "unmatched"
+    with pytest.raises(ValueError, match="当前快照"):
+        service.link_incremental_track(entry["id"], key)
+    assert not service.review_incremental_track(entry["id"], "不存在的曲目")["candidates"]
+    with pytest.raises(ValueError, match="不存在"):
+        service.link_incremental_track("missing", key)
+
+
+def test_incremental_review_separates_snapshot_and_manual_evidence(tmp_path: Path) -> None:
+    """没有快照时不伪装为快照确认，关联支持撤销并保留人工确认。"""
+    service = DualLibraryService(tmp_path / "musicflow.db")
+    entry = service.upsert_incremental_track({"title": "记录名", "artist": "歌手"}, "manual")
+    assert service.list_incremental_tracks()[0]["snapshot_status"] == "no_snapshot"
+    assert service.review_incremental_track(entry["id"])["candidates"] == []
+    service.confirm_incremental_track(entry["id"])
+    service.import_snapshot("new.csv", (CSV_HEADER + "快照名,歌手,专辑,资料库,Apple Music,,123\n").encode())
+    review = service.review_incremental_track(entry["id"], "快照名")
+    assert len(review["candidates"]) == 1
+    service.link_incremental_track(entry["id"], review["candidates"][0]["track_key"])
+    service.link_incremental_track(entry["id"], None)
+    result = service.list_incremental_tracks()[0]
+    assert result["snapshot_status"] == "unmatched"
+    assert result["verification_status"] == "manual_confirmed"
+
+
+def test_snapshot_confirmed_entry_can_keep_independent_manual_evidence(tmp_path: Path) -> None:
+    """已匹配快照的记录也能补充人工确认，快照更新后人工依据仍有效。"""
+    service = DualLibraryService(tmp_path / "musicflow.db")
+    entry = service.upsert_incremental_track({"apple_id": "123", "title": "歌曲", "artist": "歌手"}, "catalog")
+    first, _ = service.import_snapshot("first.csv", (CSV_HEADER + "歌曲,歌手,,资料库,Apple Music,,123\n").encode())
+    confirmed = service.confirm_incremental_track(entry["id"])
+    assert confirmed["verification_status"] == "confirmed"
+    assert confirmed["manual_confirmed_at"]
+    service.import_snapshot("second.csv", (CSV_HEADER + "另一首,其他歌手,,资料库,Apple Music,,456\n").encode(), first["id"])
+    assert service.list_incremental_tracks()[0]["verification_status"] == "manual_confirmed"
+
+
+def test_snapshot_link_does_not_follow_ambiguous_apple_id(tmp_path: Path) -> None:
+    """关联目标消失且同一 Apple ID 出现多版本时，不猜测原关联指向。"""
+    service = DualLibraryService(tmp_path / "musicflow.db")
+    entry = service.upsert_incremental_track({"title": "记录原名", "artist": "原歌手"}, "manual")
+    first, _ = service.import_snapshot("first.csv", (CSV_HEADER + "歌曲,歌手,,资料库,Apple Music,,123\n").encode())
+    key = service.review_incremental_track(entry["id"], "歌曲")["candidates"][0]["track_key"]
+    service.link_incremental_track(entry["id"], key)
+    service.import_snapshot("second.csv", (CSV_HEADER + "歌曲(现场),歌手,,资料库,Apple Music,,123\n歌曲(录音室),歌手,,资料库,Apple Music,,123\n").encode(), first["id"])
+    assert service.list_incremental_tracks()[0]["snapshot_status"] == "unmatched"
 
 
 def test_update_can_reuse_an_older_snapshot_csv(tmp_path: Path) -> None:

@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useAppStore } from '../stores/app'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import axios from 'axios'
+import MusicPlayer from '../components/MusicPlayer.vue'
 import TablePagination from '../components/TablePagination.vue'
 import ServerFileBrowser from '../components/ServerFileBrowser.vue'
 import type { DeliveryTarget, FileItem } from '../types'
@@ -14,6 +15,18 @@ interface FolderTreeNode {
 }
 
 const store = useAppStore()
+const player = ref<InstanceType<typeof MusicPlayer> | null>(null)
+const playerTracks = computed(() => filteredFiles.value.map(file => ({
+  token: file.id, song_name: file.title || file.filename, singers: file.artist || '未知艺术家',
+  cover_url: `/api/files/${encodeURIComponent(file.id)}/cover`,
+  stream_url: `/api/files/${encodeURIComponent(file.id)}/stream`,
+  lyrics_url: `/api/files/${encodeURIComponent(file.id)}/lyrics`,
+})))
+function playFile(file: FileItem) {
+  if (player.value?.currentTrack?.token === file.id) { player.value.togglePlayback(); return }
+  const track = playerTracks.value.find(item => item.token === file.id)
+  if (track) player.value?.playTrack(track)
+}
 const selectedFiles = ref<FileItem[]>([])
 const searchQuery = ref('')
 const formatFilter = ref('')
@@ -400,7 +413,7 @@ const selectOutputDirectory = (paths: string[]) => {
 </script>
 
 <template>
-  <div class="files-page product-page">
+  <div class="files-page product-page" :class="{ 'has-player': player?.currentTrack }">
     <section class="workbench-shell">
       <header class="workbench-toolbar">
         <div class="toolbar-path">
@@ -492,9 +505,9 @@ const selectOutputDirectory = (paths: string[]) => {
               </template>
             </el-table-column>
 
-            <el-table-column label="操作" :width="isMobile ? 128 : 148">
+            <el-table-column label="操作" :width="isMobile ? 164 : 196">
               <template #default="{ row }">
-                <div class="file-row-actions"><el-button type="primary" link size="small" @click="handleView(row)">查看</el-button><el-button type="warning" link size="small" @click="handleConvert(row)">转换</el-button><el-button type="danger" link size="small" @click="handleDelete(row)">删除</el-button></div>
+                <div class="file-row-actions"><el-button type="primary" link size="small" @click="playFile(row)">{{ player?.currentTrack?.token === row.id && player?.playing ? '暂停' : '播放' }}</el-button><el-button type="primary" link size="small" @click="handleView(row)">查看</el-button><el-button type="warning" link size="small" @click="handleConvert(row)">转换</el-button><el-button type="danger" link size="small" @click="handleDelete(row)">删除</el-button></div>
               </template>
             </el-table-column>
           </el-table>
@@ -609,11 +622,17 @@ const selectOutputDirectory = (paths: string[]) => {
       :mode="browserMode"
       @select="handleImportPaths"
     />
+    <MusicPlayer ref="player" :tracks="playerTracks" />
     <ServerFileBrowser v-model="showOutputBrowser" mode="directory" @select="selectOutputDirectory" />
   </div>
 </template>
 
 <style scoped>
+.files-page.has-player { padding-bottom: 110px; }
+@media (max-width: 720px) {
+  .files-page.has-player { padding-bottom: 260px; }
+  .files-page.has-player .workbench-actions { bottom: calc(200px + env(safe-area-inset-bottom)); }
+}
 .files-page {
   min-height: calc(100vh - 118px);
   width: calc(100vw - 24px);

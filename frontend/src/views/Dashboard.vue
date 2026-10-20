@@ -14,7 +14,7 @@ const currentTasks = computed(() => store.tasks.filter(task => task.status === '
 const completedTasks = computed(() => store.tasks.filter(task => task.status === 'success'))
 const failedTasks = computed(() => store.tasks.filter(task => task.status === 'failed'))
 const recentTasks = computed(() => [...store.tasks].sort((a, b) => (b.end_time || b.start_time || '').localeCompare(a.end_time || a.start_time || '')).slice(0, 5))
-const formatBytes = (bytes: number) => bytes ? `${(bytes / 1024 / 1024).toFixed(bytes >= 1024 * 1024 * 1024 ? 2 : 0)}${bytes >= 1024 * 1024 * 1024 ? 'GB' : 'MB'}` : '0MB'
+const formatBytes = (bytes: number) => bytes >= 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(2)}GB` : `${(bytes / 1024 ** 2).toFixed(0)}MB`
 const formatDuration = (seconds: number) => `${String(Math.floor(seconds / 3600)).padStart(2, '0')}H${String(Math.floor(seconds % 3600 / 60)).padStart(2, '0')}m`
 const fileName = (path: string) => path.replace(/\\/g, '/').split('/').pop() || '--'
 const taskLabel = (status: string) => ({ waiting: '等待中', converting: '转换中', success: '已完成', failed: '失败', cancelled: '已取消', skipped: '已跳过' }[status] || status)

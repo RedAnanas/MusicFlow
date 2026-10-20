@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
-from app.api.routes import discovery, files, tasks, watch_folders
+from app.api.routes import discovery, files, library, tasks, watch_folders
 from app.core import metadata_service
 from app.models import DeliveryTarget, Profile, Task, WatchFolder
 from app.services.acquisition_service import AcquisitionService
@@ -40,7 +40,9 @@ def setup_plan(monkeypatch, tmp_path):
     monkeypatch.setattr(discovery.dual_library_service, 'find_apple_candidates', lambda _track: [])
     incremental = []
     monkeypatch.setattr(discovery.dual_library_service, 'upsert_incremental_track', lambda *args: incremental.append(args))
+    monkeypatch.setattr(discovery.dual_library_service, 'record_incremental_file', lambda *args: incremental.append(args))
     monkeypatch.setattr(discovery, 'invalidate_presence_index', lambda: None)
+    monkeypatch.setattr(library, 'invalidate_reconciliation_cache', lambda: None)
     queued = []
 
     async def enqueue(request, skip_existing=False):
@@ -81,6 +83,15 @@ def test_manual_only_plan_never_starts_monitoring(setup_plan, monkeypatch):
     assert ctx.manager.get_status(ctx.folder.id)['next_scan_at'] is None
     with pytest.raises(FileNotFoundError):
         ctx.manager.scan_watch_folder(ctx.folder.id)
+
+
+def test_monitoring_passes_acquisition_identity_to_incremental_record(setup_plan):
+    """监控读取投递前保存的任务关联，将文件标签交给同一条添加记录。"""
+    ctx = setup_plan
+    ctx.routing.register(ctx.folder, ctx.source, ctx.source, False, True, job_id='acquisition-1')
+    asyncio.run(ctx.manager._process_file_outputs(ctx.folder, str(ctx.source), '测试'))
+    assert len(ctx.incremental) == 1
+    assert ctx.incremental[0][2] == ['acquisition-1']
 
 
 def test_manual_conversion_reuses_all_outputs_and_survives_reload(setup_plan, tmp_path):

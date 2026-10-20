@@ -185,3 +185,12 @@ export interface LogEntry {
   message: string
   details?: string
 }
+
+export interface PlayerTrack {
+  token: string
+  song_name: string
+  singers: string
+  cover_url?: string
+  stream_url: string
+  lyrics_url?: string
+}

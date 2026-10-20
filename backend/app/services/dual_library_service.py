@@ -24,7 +24,7 @@ REQUIRED_COLUMNS = (
     "ISRC",
     "Apple - id",
 )
-RECONCILIATION_CACHE_VERSION = 5
+RECONCILIATION_CACHE_VERSION = 7
 
 
 def normalize_text(value: Optional[str]) -> str:
@@ -188,6 +188,9 @@ class DualLibraryService:
                 connection.execute(
                     "UPDATE apple_incremental_entries SET manual_confirmed_at = confirmed_at WHERE verification_status = 'manual_confirmed'"
                 )
+            for column in ("linked_track_key", "linked_apple_id", "linked_isrc", "file_metadata_json", "merged_into"):
+                if column not in columns:
+                    connection.execute(f"ALTER TABLE apple_incremental_entries ADD COLUMN {column} TEXT")
 
     def get_cached_reconciliation(self, snapshot_id: str, local_index_version: int) -> Optional[dict]:
         self.initialize()
@@ -443,35 +446,71 @@ class DualLibraryService:
         )
 
     @staticmethod
-    def _sync_incremental_confirmations(connection: sqlite3.Connection) -> None:
+    def _snapshot_tracks(connection: sqlite3.Connection) -> list[dict]:
+        rows = connection.execute(
+            """
+            SELECT t.*, r.row_index FROM apple_snapshot_rows r
+            JOIN apple_tracks t ON t.track_key = r.track_key
+            WHERE r.snapshot_id = (SELECT id FROM apple_library_snapshots ORDER BY imported_at DESC LIMIT 1)
+            ORDER BY r.row_index
+            """
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    @staticmethod
+    def _snapshot_index(tracks: list[dict]) -> dict:
+        unique_ids = {track["apple_id"] for track in tracks}
+        unique_isrcs = {track["isrc"] for track in tracks}
+        for key, values in (("apple_id", unique_ids), ("isrc", unique_isrcs)):
+            seen = set()
+            for track in tracks:
+                if track[key] in seen:
+                    values.discard(track[key])
+                seen.add(track[key])
+        return {
+            "manual_link": {track["track_key"]: track for track in tracks},
+            "linked_apple_id": {track["apple_id"]: track for track in tracks if track["apple_id"] in unique_ids},
+            "linked_isrc": {track["isrc"]: track for track in tracks if track["isrc"] in unique_isrcs},
+            "apple_id": {track["apple_id"]: track for track in tracks if track["apple_id"]},
+            "isrc": {track["isrc"]: track for track in tracks if track["isrc"]},
+            "metadata_exact": {
+                (track["normalized_title"], track["normalized_artist"], track["normalized_album"]): track
+                for track in tracks
+            },
+        }
+
+    @staticmethod
+    def _incremental_snapshot_match(entry: dict, index: dict) -> tuple[Optional[dict], str]:
+        for reason, key in (
+            ("manual_link", entry["linked_track_key"]),
+            ("linked_apple_id", entry["linked_apple_id"]),
+            ("linked_isrc", entry["linked_isrc"]),
+            ("apple_id", entry["apple_id"]),
+            ("isrc", entry["isrc"]),
+            ("metadata_exact", (entry["normalized_title"], entry["normalized_artist"], entry["normalized_album"])),
+        ):
+            if key and (track := index[reason].get(key)):
+                return track, "manual_link" if reason.startswith("linked_") else reason
+        metadata = json.loads(entry["file_metadata_json"] or "{}")
+        if metadata:
+            key = tuple(metadata.get("normalized_" + field, "") for field in ("title", "artist", "album"))
+            if track := index["metadata_exact"].get(key):
+                return track, "file_metadata"
+        return None, "no_match"
+
+    @classmethod
+    def _sync_incremental_confirmations(cls, connection: sqlite3.Connection) -> None:
         """只用当前快照标记 CSV 确认，并保留独立的手动确认。"""
         snapshot = connection.execute(
             "SELECT id, imported_at FROM apple_library_snapshots ORDER BY imported_at DESC LIMIT 1"
         ).fetchone()
-        tracks = connection.execute(
-            """
-            SELECT t.apple_id, t.isrc, t.normalized_title, t.normalized_artist, t.normalized_album
-            FROM apple_snapshot_rows r JOIN apple_tracks t ON t.track_key = r.track_key
-            WHERE r.snapshot_id = ?
-            """,
-            (snapshot["id"] if snapshot else "",),
-        ).fetchall()
-        apple_ids = {track["apple_id"] for track in tracks if track["apple_id"]}
-        isrcs = {track["isrc"] for track in tracks if track["isrc"]}
-        metadata = {
-            (track["normalized_title"], track["normalized_artist"], track["normalized_album"])
-            for track in tracks
-        }
+        index = cls._snapshot_index(cls._snapshot_tracks(connection))
         now = datetime.now(timezone.utc).isoformat()
-        for entry in connection.execute("SELECT * FROM apple_incremental_entries").fetchall():
-            matched = (
-                bool(entry["apple_id"] and entry["apple_id"] in apple_ids)
-                or bool(entry["isrc"] and entry["isrc"] in isrcs)
-                or (entry["normalized_title"], entry["normalized_artist"], entry["normalized_album"]) in metadata
-            )
+        for entry in connection.execute("SELECT * FROM apple_incremental_entries WHERE merged_into IS NULL").fetchall():
+            matched, _ = cls._incremental_snapshot_match(entry, index)
             if matched:
                 status, confirmed_at = "confirmed", snapshot["imported_at"]
-            elif snapshot and entry["manual_confirmed_at"] and entry["manual_confirmed_at"] > snapshot["imported_at"]:
+            elif entry["manual_confirmed_at"]:
                 status, confirmed_at = "manual_confirmed", entry["manual_confirmed_at"]
             elif snapshot and entry["created_at"] <= snapshot["imported_at"]:
                 status, confirmed_at = "absent", None
@@ -524,6 +563,14 @@ class DualLibraryService:
         identity_key, values = self._incremental_identity(track)
         now = datetime.now(timezone.utc).isoformat()
         with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            merged = connection.execute("SELECT merged_into FROM apple_incremental_entries WHERE identity_key = ?", (identity_key,)).fetchone()
+            if merged and merged["merged_into"]:
+                connection.execute(
+                    "UPDATE apple_incremental_entries SET source = ?, acquisition_job_id = COALESCE(?, acquisition_job_id), updated_at = ? WHERE id = ?",
+                    (source, acquisition_job_id, now, merged["merged_into"]),
+                )
+                return dict(connection.execute("SELECT * FROM apple_incremental_entries WHERE id = ?", (merged["merged_into"],)).fetchone())
             connection.execute(
                 """
                 INSERT INTO apple_incremental_entries (
@@ -567,14 +614,133 @@ class DualLibraryService:
             ).fetchone()
         return dict(row)
 
+    def record_incremental_file(self, track: dict, source: str, job_ids: Iterable[str] = ()) -> dict:
+        """文件标签优先挂到同一补齐任务的记录，不能仅凭相似名称合并。"""
+        if source not in {"handoff", "direct_upload"}:
+            raise ValueError("文件添加记录来源无效")
+        job_ids = list(job_ids)
+        if not job_ids:
+            return self.upsert_incremental_track(track, source)
+        self.initialize()
+        _, metadata = self._incremental_identity(track)
+        if job_ids:
+            with self._connect() as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                rows = connection.execute(
+                    "SELECT id FROM apple_incremental_entries WHERE merged_into IS NULL AND acquisition_job_id IN ({})".format(",".join("?" for _ in job_ids)), job_ids,
+                ).fetchall()
+                if rows:
+                    connection.executemany(
+                        "UPDATE apple_incremental_entries SET file_metadata_json = ?, source = ?, updated_at = ? WHERE id = ?",
+                        [(json.dumps(metadata, ensure_ascii=False), source, datetime.now(timezone.utc).isoformat(), row["id"]) for row in rows],
+                    )
+                    return dict(connection.execute("SELECT * FROM apple_incremental_entries WHERE id = ?", (rows[0]["id"],)).fetchone())
+        return self.upsert_incremental_track(track, source)
+
     def list_incremental_tracks(self) -> list[dict]:
         self.initialize()
         with self._connect() as connection:
             self._sync_incremental_confirmations(connection)
             rows = connection.execute(
-                "SELECT * FROM apple_incremental_entries ORDER BY updated_at DESC"
+                "SELECT * FROM apple_incremental_entries WHERE merged_into IS NULL ORDER BY updated_at DESC"
             ).fetchall()
-        return [dict(row) for row in rows]
+            archived = connection.execute("SELECT * FROM apple_incremental_entries WHERE merged_into IS NOT NULL").fetchall()
+            index = self._snapshot_index(self._snapshot_tracks(connection))
+            has_snapshot = connection.execute("SELECT 1 FROM apple_library_snapshots LIMIT 1").fetchone() is not None
+        entries = []
+        for row in rows:
+            track, reason = self._incremental_snapshot_match(row, index)
+            entries.append({
+                **dict(row), "matched_track": track, "match_reason": reason,
+                "snapshot_status": "matched" if track else "unmatched" if has_snapshot else "no_snapshot",
+                "metadata_variants": [dict(item) for item in archived if item["merged_into"] == row["id"]],
+            })
+            if row["file_metadata_json"]:
+                metadata = json.loads(row["file_metadata_json"])
+                if not any(all(item[field] == metadata[field] for field in ("title", "artist", "album")) for item in entries[-1]["metadata_variants"]):
+                    entries[-1]["metadata_variants"].append(metadata)
+        return entries
+
+    def merge_incremental_tracks(self, target_id: str, source_id: str) -> None:
+        """人工归并重复记录，原记录留档，冲突时整笔拒绝。"""
+        if target_id == source_id:
+            raise ValueError("不能合并同一条记录")
+        self.initialize()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            rows = {row["id"]: dict(row) for row in connection.execute(
+                "SELECT * FROM apple_incremental_entries WHERE id IN (?, ?) AND merged_into IS NULL", (target_id, source_id),
+            )}
+            if len(rows) != 2:
+                raise ValueError("记录已变化或不存在，请刷新")
+            target, source = rows[target_id], rows[source_id]
+            for field in ("apple_id", "isrc", "linked_track_key", "acquisition_job_id"):
+                if target[field] and source[field] and target[field] != source[field]:
+                    raise ValueError("记录含不同的曲目标识、关联或任务，请先核对")
+            target_key, source_key = f"incremental:{target_id}", f"incremental:{source_id}"
+            decisions = connection.execute("SELECT * FROM library_matches WHERE apple_track_key IN (?, ?)", (target_key, source_key)).fetchall()
+            if len({row["local_file_id"] for row in decisions if row["decision"] == "confirmed"}) > 1:
+                raise ValueError("已确认的本地配对不同，不能合并")
+            by_local = {}
+            for decision in decisions:
+                if decision["local_file_id"] in by_local and by_local[decision["local_file_id"]] != decision["decision"]:
+                    raise ValueError("已有配对决策冲突，不能合并")
+                by_local[decision["local_file_id"]] = decision["decision"]
+            dates = [value for value in (target["manual_confirmed_at"], source["manual_confirmed_at"]) if value]
+            for field in ("apple_id", "isrc", "linked_track_key", "linked_apple_id", "linked_isrc", "acquisition_job_id"):
+                target[field] = target[field] or source[field]
+            metadata = target["file_metadata_json"] or source["file_metadata_json"] or json.dumps({key: source[key] for key in ("title", "artist", "album", "isrc", "apple_id", "normalized_title", "normalized_artist", "normalized_album")}, ensure_ascii=False)
+            connection.execute(
+                """UPDATE apple_incremental_entries SET apple_id=?, isrc=?, linked_track_key=?, linked_apple_id=?, linked_isrc=?,
+                   acquisition_job_id=?, manual_confirmed_at=?, file_metadata_json=?, updated_at=? WHERE id=?""",
+                (*(target[field] for field in ("apple_id", "isrc", "linked_track_key", "linked_apple_id", "linked_isrc", "acquisition_job_id")),
+                 min(dates) if dates else None, metadata, datetime.now(timezone.utc).isoformat(), target_id),
+            )
+            connection.execute("UPDATE apple_incremental_entries SET merged_into=? WHERE id=? OR merged_into=?", (target_id, source_id, source_id))
+            self._sync_incremental_confirmations(connection)
+            if decisions:
+                self._ensure_incremental_apple_track(connection, target_key)
+                connection.execute("INSERT OR IGNORE INTO library_matches SELECT local_file_id, ?, decision, updated_at FROM library_matches WHERE apple_track_key=?", (target_key, source_key))
+                connection.execute("DELETE FROM library_matches WHERE apple_track_key=?", (source_key,))
+
+    def review_incremental_track(self, entry_id: str, search: str = "") -> dict:
+        """展示原记录、当前快照证据与候选，不依据近似名称自动确认。"""
+        entry = next((entry for entry in self.list_incremental_tracks() if entry["id"] == entry_id), None)
+        if entry is None:
+            raise ValueError("Apple Music 增量记录不存在")
+        with self._connect() as connection:
+            tracks = self._snapshot_tracks(connection)
+        query = normalize_text(search)
+        if query:
+            candidates = [
+                {**track, "match_reason": "search"} for track in tracks
+                if any(query in normalize_text(track.get(key)) for key in ("title", "artist", "album", "isrc", "apple_id"))
+            ]
+        else:
+            snapshot_keys = {track["track_key"] for track in tracks}
+            result = self.reconcile([entry])
+            candidates = [
+                {**item["apple"], "match_reason": item["match_reason"]}
+                for item in result["entries"]
+                if item["apple"] and item["apple"]["track_key"] in snapshot_keys and (item["local"] or item["candidates"])
+            ]
+        return {"entry": entry, "candidates": candidates[:50], "total": len(candidates)}
+
+    def link_incremental_track(self, entry_id: str, track_key: Optional[str]) -> None:
+        """只关联当前快照实际存在的曲目；保留原元数据和独立人工确认。"""
+        self.initialize()
+        with self._connect() as connection:
+            if connection.execute("SELECT 1 FROM apple_incremental_entries WHERE id = ?", (entry_id,)).fetchone() is None:
+                raise ValueError("Apple Music 增量记录不存在")
+            target = next((track for track in self._snapshot_tracks(connection) if track["track_key"] == track_key), None)
+            if track_key is not None and target is None:
+                raise ValueError("所选曲目不在当前快照中，请刷新后重新选择")
+            connection.execute(
+                "UPDATE apple_incremental_entries SET linked_track_key = ?, linked_apple_id = ?, linked_isrc = ?, updated_at = ? WHERE id = ?",
+                (track_key, target["apple_id"] if target else None, target["isrc"] if target else None,
+                 datetime.now(timezone.utc).isoformat(), entry_id),
+            )
+            self._sync_incremental_confirmations(connection)
 
     def confirm_incremental_track(self, entry_id: str) -> dict:
         """将增量记录标记为人工确认，保留后续 CSV 确认的独立状态。"""
@@ -586,11 +752,12 @@ class DualLibraryService:
             ).fetchone()
             if row is None:
                 raise ValueError("Apple Music 增量记录不存在")
-            if row["verification_status"] in {"pending", "absent"}:
+            if not row["manual_confirmed_at"]:
                 connection.execute(
-                    "UPDATE apple_incremental_entries SET verification_status = 'manual_confirmed', confirmed_at = ?, manual_confirmed_at = ?, updated_at = ? WHERE id = ?",
-                    (now, now, now, entry_id),
+                    "UPDATE apple_incremental_entries SET manual_confirmed_at = ?, updated_at = ? WHERE id = ?",
+                    (now, now, entry_id),
                 )
+                self._sync_incremental_confirmations(connection)
             return dict(connection.execute(
                 "SELECT * FROM apple_incremental_entries WHERE id = ?", (entry_id,)
             ).fetchone())
@@ -598,11 +765,13 @@ class DualLibraryService:
     def delete_incremental_track(self, entry_id: str) -> None:
         self.initialize()
         with self._connect() as connection:
-            connection.execute("DELETE FROM library_matches WHERE apple_track_key = ?", (f"incremental:{entry_id}",))
-            connection.execute("DELETE FROM apple_tracks WHERE track_key = ?", (f"incremental:{entry_id}",))
+            ids = [row[0] for row in connection.execute("SELECT id FROM apple_incremental_entries WHERE id = ? OR merged_into = ?", (entry_id, entry_id))]
+            for item_id in ids:
+                connection.execute("DELETE FROM library_matches WHERE apple_track_key = ?", (f"incremental:{item_id}",))
+                connection.execute("DELETE FROM apple_tracks WHERE track_key = ?", (f"incremental:{item_id}",))
             deleted = connection.execute(
-                "DELETE FROM apple_incremental_entries WHERE id = ?",
-                (entry_id,),
+                "DELETE FROM apple_incremental_entries WHERE id = ? OR merged_into = ?",
+                (entry_id, entry_id),
             ).rowcount
         if not deleted:
             raise ValueError("Apple Music 增量记录不存在")
@@ -668,7 +837,7 @@ class DualLibraryService:
         if not track_key.startswith("incremental:"):
             return
         entry = connection.execute(
-            "SELECT * FROM apple_incremental_entries WHERE id = ? AND verification_status = 'manual_confirmed'",
+            "SELECT * FROM apple_incremental_entries WHERE id = ? AND merged_into IS NULL AND verification_status IN ('manual_confirmed', 'confirmed')",
             (track_key.removeprefix("incremental:"),),
         ).fetchone()
         if entry is None:
@@ -690,17 +859,7 @@ class DualLibraryService:
         ).fetchone()
         if not latest:
             return []
-        rows = connection.execute(
-            """
-            SELECT t.*, r.row_index
-            FROM apple_snapshot_rows r
-            JOIN apple_tracks t ON t.track_key = r.track_key
-            WHERE r.snapshot_id = ?
-            ORDER BY r.row_index
-            """,
-            (latest["id"],),
-        ).fetchall()
-        tracks = [dict(row) for row in rows]
+        tracks = self._snapshot_tracks(connection)
         known_ids = {track["apple_id"] for track in tracks if track["apple_id"]}
         known_isrcs = {track["isrc"] for track in tracks if track["isrc"]}
         known_metadata = {
@@ -708,7 +867,7 @@ class DualLibraryService:
             for track in tracks
         }
         for entry in connection.execute(
-            "SELECT * FROM apple_incremental_entries WHERE verification_status = 'manual_confirmed'"
+            "SELECT * FROM apple_incremental_entries WHERE merged_into IS NULL AND verification_status = 'manual_confirmed'"
         ):
             if ((entry["apple_id"] and entry["apple_id"] in known_ids)
                     or (entry["isrc"] and entry["isrc"] in known_isrcs)
@@ -745,6 +904,7 @@ class DualLibraryService:
         local = self._prepare_local_tracks(local_tracks)
         local_by_id = {track["id"]: track for track in local}
         with self._connect() as connection:
+            self._sync_incremental_confirmations(connection)
             apple_tracks = self._latest_tracks(connection)
             decisions = [dict(row) for row in connection.execute("SELECT * FROM library_matches").fetchall()]
 
@@ -1008,9 +1168,13 @@ class DualLibraryService:
             incremental = [
                 dict(row)
                 for row in connection.execute(
-                    "SELECT * FROM apple_incremental_entries WHERE verification_status IN ('pending', 'manual_confirmed', 'confirmed')"
+                    "SELECT * FROM apple_incremental_entries WHERE merged_into IS NULL AND verification_status IN ('pending', 'manual_confirmed', 'confirmed')"
                 ).fetchall()
             ]
+        incremental += [
+            {**json.loads(track["file_metadata_json"]), "verification_status": track["verification_status"]}
+            for track in incremental if track["file_metadata_json"]
+        ]
         pending = [track for track in incremental if track["verification_status"] == "pending"]
         return {
             "local_isrc": {track["isrc"] for track in local if track["isrc"]},

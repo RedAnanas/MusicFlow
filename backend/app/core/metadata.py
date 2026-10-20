@@ -5,7 +5,7 @@ from typing import Dict, Optional, List
 from mutagen import File as MutagenFile
 from mutagen.mp3 import MP3
 from mutagen.flac import FLAC, Picture
-from mutagen.id3 import APIC
+from mutagen.id3 import APIC, ID3
 from mutagen.mp4 import MP4, MP4Cover
 from mutagen.oggvorbis import OggVorbis
 from mutagen.oggopus import OggOpus
@@ -77,6 +77,7 @@ class MetadataService:
                     ("track", "trkn"),
                     ("disc", "disk"),
                     ("copyright", "cprt"),
+                    ("lyrics", "©lyr"),
                 ]:
                     try:
                         if mutagen_key in audio.tags:
@@ -104,6 +105,7 @@ class MetadataService:
                     "genre": "genre",
                     "comment": "comment",
                     "isrc": "isrc",
+                    "lyrics": "lyrics",
                 }
                 for tag_key, mutagen_key in flac_tags.items():
                     try:
@@ -115,6 +117,12 @@ class MetadataService:
                                 metadata[tag_key] = str(value)
                     except (ValueError, TypeError) as e:
                         pass
+
+                if isinstance(audio.tags, ID3):
+                    for frame in audio.tags.getall("USLT"):
+                        if frame.text:
+                            metadata["lyrics"] = frame.text
+                            break
 
                 isrc = self._extract_isrc(audio)
                 if isrc:

@@ -40,6 +40,14 @@ class AppleIncrementalTrackRequest(BaseModel):
     source: Literal["manual", "catalog"] = "manual"
 
 
+class IncrementalSnapshotLinkRequest(BaseModel):
+    track_key: Optional[str]
+
+
+class IncrementalMergeRequest(BaseModel):
+    source_id: str
+
+
 def invalidate_reconciliation_cache() -> None:
     global reconciliation_cache
     reconciliation_cache = None
@@ -184,6 +192,36 @@ async def confirm_apple_incremental_entry(entry_id: str):
     invalidate_presence_index()
     invalidate_reconciliation_cache()
     return entry
+
+
+@router.get("/apple-library/entries/{entry_id}/review")
+async def review_apple_incremental_entry(entry_id: str, search: str = Query("", max_length=200)):
+    try:
+        return await asyncio.to_thread(dual_library_service.review_incremental_track, entry_id, search)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.put("/apple-library/entries/{entry_id}/snapshot-link")
+async def link_apple_incremental_entry(entry_id: str, request: IncrementalSnapshotLinkRequest):
+    try:
+        await asyncio.to_thread(dual_library_service.link_incremental_track, entry_id, request.track_key)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    invalidate_presence_index()
+    invalidate_reconciliation_cache()
+    return {"status": "success"}
+
+
+@router.post("/apple-library/entries/{entry_id}/merge")
+async def merge_apple_incremental_entries(entry_id: str, request: IncrementalMergeRequest):
+    try:
+        await asyncio.to_thread(dual_library_service.merge_incremental_tracks, entry_id, request.source_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    invalidate_presence_index()
+    invalidate_reconciliation_cache()
+    return {"status": "success"}
 
 
 @router.get("/apple-library/status")

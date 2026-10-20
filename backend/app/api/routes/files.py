@@ -1,10 +1,13 @@
 import asyncio
 import hashlib
 import logging
+import mimetypes
+import re
 import shutil
 import uuid
 from pathlib import Path
-from fastapi import APIRouter, HTTPException, Query, Response
+from fastapi import APIRouter, HTTPException, Query, Request, Response
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import List, Optional
 from app.config import settings
@@ -401,6 +404,58 @@ async def get_file_cover(file_id: str):
     )
 
 
+@router.get("/{file_id}/stream")
+@router.head("/{file_id}/stream")
+async def stream_file(file_id: str, request: Request):
+    """按文件编号播放音乐源音频，支持浏览器单段范围请求。"""
+    file_data = files_cache.get(file_id)
+    if not file_data:
+        raise HTTPException(status_code=404, detail="文件不存在")
+    path = Path(file_data["path"]).resolve()
+    sources = [Path(source).resolve() for source in _load_library_sources()]
+    if not any(path == source or (source.is_dir() and path.is_relative_to(source)) for source in sources):
+        raise HTTPException(status_code=403, detail="禁止播放音乐来源之外的文件")
+    if path.suffix.lower()[1:] not in settings.SUPPORTED_FORMATS:
+        raise HTTPException(status_code=415, detail="不支持的音频文件类型")
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="文件不存在")
+    size = path.stat().st_size
+    start, end, status = 0, size - 1, 200
+    headers = {"Accept-Ranges": "bytes", "Cache-Control": "private, no-store"}
+    byte_range = request.headers.get("range") if request.method == "GET" else None
+    if byte_range and not request.headers.get("if-range"):
+        match = re.fullmatch(r"bytes=(\d{0,20})-(\d{0,20})", byte_range.strip())
+        if not match or not any(match.groups()):
+            return Response(status_code=416, headers={**headers, "Content-Range": f"bytes */{size}"})
+        first, last = match.groups()
+        if first:
+            start = int(first)
+            end = min(int(last), size - 1) if last else size - 1
+        else:
+            start = max(0, size - int(last))
+        if start > end or start >= size or (not first and int(last) == 0):
+            return Response(status_code=416, headers={**headers, "Content-Range": f"bytes */{size}"})
+        status = 206
+        headers["Content-Range"] = f"bytes {start}-{end}/{size}"
+    headers["Content-Length"] = str(max(0, end - start + 1))
+    media_type = {".m4a": "audio/mp4", ".alac": "audio/mp4"}.get(path.suffix.lower()) or mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    if request.method == "HEAD":
+        return Response(headers=headers, media_type=media_type)
+
+    def chunks():
+        with path.open("rb") as source:
+            source.seek(start)
+            remaining = end - start + 1
+            while remaining > 0:
+                data = source.read(min(256 * 1024, remaining))
+                if not data:
+                    break
+                remaining -= len(data)
+                yield data
+
+    return StreamingResponse(chunks(), status_code=status, headers=headers, media_type=media_type)
+
+
 @router.delete("/{file_id}")
 async def delete_file(file_id: str):
     """删除音乐源目录内的文件。"""
@@ -447,6 +502,16 @@ async def get_file_metadata(file_id: str):
         raise HTTPException(status_code=404, detail="Cannot read metadata")
 
     return metadata
+
+
+@router.get("/{file_id}/lyrics")
+async def get_file_lyrics(file_id: str):
+    """仅返回歌词，避免播放器下载整份封面数据。"""
+    file_data = files_cache.get(file_id)
+    if not file_data:
+        raise HTTPException(status_code=404, detail="文件不存在")
+    metadata = await asyncio.to_thread(metadata_service.read_metadata, file_data["path"])
+    return {"lyric": (metadata or {}).get("lyrics") or ""}
 
 
 @router.put("/{file_id}/metadata")

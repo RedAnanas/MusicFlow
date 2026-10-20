@@ -21,15 +21,19 @@ if (-not (Test-Path -LiteralPath $venvPython)) {
 
 Push-Location $projectRoot
 try {
-    Write-Host "[1/5] 后端测试"
+    Write-Host "[1/6] 后端测试"
     & $venvPython -m pytest
     Assert-NativeCommand -Step "后端测试"
 
-    Write-Host "[2/5] Python 编译检查"
+    Write-Host "[2/6] Python 编译检查"
     & $venvPython -m compileall -q backend/app backend/tests
     Assert-NativeCommand -Step "Python 编译检查"
 
-    Write-Host "[3/5] 前端生产构建"
+    Write-Host "[3/6] 前端回归测试"
+    & node --test frontend/tests
+    Assert-NativeCommand -Step "前端回归测试"
+
+    Write-Host "[4/6] 前端生产构建"
     Push-Location (Join-Path $projectRoot "frontend")
     try {
         & npm.cmd run build
@@ -39,7 +43,7 @@ try {
         Pop-Location
     }
 
-    Write-Host "[4/5] Compose 配置检查"
+    Write-Host "[5/6] Compose 配置检查"
     if (Get-Command docker.exe -ErrorAction SilentlyContinue) {
         & docker.exe compose config -q
     }
@@ -51,7 +55,7 @@ try {
     }
     Assert-NativeCommand -Step "Compose 配置检查"
 
-    Write-Host "[5/5] Git 空白字符检查"
+    Write-Host "[6/6] Git 空白字符检查"
     & git.exe diff --check -- . ':(exclude)config/*.json' ':(exclude)logs/**'
     Assert-NativeCommand -Step "Git 空白字符检查"
 

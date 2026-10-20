@@ -332,11 +332,13 @@ class WatchFolderManager:
                             from app.services.dual_library_service import dual_library_service
                             metadata = await asyncio.to_thread(metadata_service.read_metadata, str(source_path)) or {}
                             if metadata.get("title") and metadata.get("artist"):
-                                await asyncio.to_thread(dual_library_service.upsert_incremental_track,
+                                await asyncio.to_thread(dual_library_service.record_incremental_file,
                                                       {key: metadata.get(key) for key in ("title", "artist", "album", "isrc")},
-                                                      "direct_upload" if profile.apple_music_delivery_mode == "direct_upload" else "handoff")
+                                                      "direct_upload" if profile.apple_music_delivery_mode == "direct_upload" else "handoff", plan.get("job_ids", []))
                                 from app.api.routes.discovery import invalidate_presence_index
+                                from app.api.routes.library import invalidate_reconciliation_cache
                                 invalidate_presence_index()
+                                invalidate_reconciliation_cache()
                         created += 1
                         self._record_event(
                             folder.id,

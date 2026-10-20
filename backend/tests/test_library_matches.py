@@ -42,3 +42,47 @@ def test_apple_only_confirmation_consumes_local_only_candidate(monkeypatch, tmp_
         asyncio.run(library.save_library_match(request))
     assert error.value.status_code == 409
     assert service.reconcile(local_tracks)["summary"] == after["summary"]
+
+
+def test_incremental_link_routes_validate_current_snapshot_and_invalidate_caches(monkeypatch, tmp_path: Path) -> None:
+    """人工关联完成后失效查重与对账缓存，失效目标返回冲突且不写关联。"""
+    service = DualLibraryService(tmp_path / "musicflow.db")
+    entry = service.upsert_incremental_track({"title": "记录原名", "artist": "歌手"}, "manual")
+    service.import_snapshot("library.csv", (
+        "Track name,Artist name,Album,Playlist name,Type,ISRC,Apple - id\n"
+        "快照曲名,歌手,专辑,资料库,Apple Music,,123\n"
+    ).encode())
+    invalidated = []
+    monkeypatch.setattr(library, "dual_library_service", service)
+    monkeypatch.setattr(library, "invalidate_presence_index", lambda: invalidated.append("presence"))
+    monkeypatch.setattr(library, "invalidate_reconciliation_cache", lambda: invalidated.append("reconciliation"))
+    review = asyncio.run(library.review_apple_incremental_entry(entry["id"], "快照曲名"))
+    key = review["candidates"][0]["track_key"]
+    request = library.IncrementalSnapshotLinkRequest(track_key=key)
+    asyncio.run(library.link_apple_incremental_entry(entry["id"], request))
+    assert invalidated == ["presence", "reconciliation"]
+    request.track_key = "stale-key"
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(library.link_apple_incremental_entry(entry["id"], request))
+    assert error.value.status_code == 409
+    assert service.list_incremental_tracks()[0]["linked_track_key"] == key
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(library.review_apple_incremental_entry("missing", ""))
+    assert error.value.status_code == 404
+
+
+def test_incremental_merge_route_invalidates_caches_and_rejects_stale_records(monkeypatch, tmp_path: Path) -> None:
+    """合并成功后刷新两类缓存，重复请求返回冲突而非误合并其他记录。"""
+    service = DualLibraryService(tmp_path / "musicflow.db")
+    first = service.upsert_incremental_track({"title": "歌曲", "artist": "歌手"}, "manual")
+    second = service.upsert_incremental_track({"title": "歌曲 (DJ版)", "artist": "歌手"}, "handoff")
+    invalidated = []
+    monkeypatch.setattr(library, "dual_library_service", service)
+    monkeypatch.setattr(library, "invalidate_presence_index", lambda: invalidated.append("presence"))
+    monkeypatch.setattr(library, "invalidate_reconciliation_cache", lambda: invalidated.append("reconciliation"))
+    request = library.IncrementalMergeRequest(source_id=second["id"])
+    asyncio.run(library.merge_apple_incremental_entries(first["id"], request))
+    assert invalidated == ["presence", "reconciliation"]
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(library.merge_apple_incremental_entries(first["id"], request))
+    assert error.value.status_code == 409
