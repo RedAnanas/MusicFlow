@@ -53,5 +53,8 @@ jobs:
         working-directory: frontend
         run: npm run build
 
+      - name: 前端回归测试
+        run: node --test frontend/tests
+
       - name: Compose 配置检查
         run: docker compose config -q

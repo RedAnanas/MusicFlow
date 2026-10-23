@@ -1,0 +1,73 @@
+/* 页面与挂载到 body 的弹出层使用同一组主题变量。 */
+.discovery-theme {
+  --el-color-primary: #7558d9;
+  --el-color-primary-light-3: #8064d8;
+  --el-color-primary-light-5: #bca7ef;
+  --el-color-primary-light-7: #d8ccf7;
+  --el-color-primary-light-9: var(--mf-nav-hover);
+  --el-color-primary-dark-2: #6044b8;
+  --el-bg-color: var(--mf-surface);
+  --el-bg-color-overlay: var(--mf-surface);
+  --el-fill-color-blank: var(--mf-surface);
+  --el-fill-color-light: var(--mf-surface-muted);
+  --el-fill-color: var(--mf-surface-muted);
+  --el-fill-color-dark: var(--mf-nav-hover);
+  --el-border-color: var(--mf-border);
+  --el-border-color-light: var(--mf-border);
+  --el-border-color-lighter: var(--mf-border);
+  --el-text-color-primary: var(--mf-text);
+  --el-text-color-regular: var(--mf-text);
+  --el-text-color-secondary: var(--mf-text-muted);
+  --el-border-radius-base: 10px;
+  color: var(--mf-text);
+}
+.discovery-overlay.el-dialog, .discovery-overlay.el-drawer, .discovery-overlay.el-message-box {
+  border: 1px solid var(--mf-border);
+  background: var(--mf-surface);
+  box-shadow: 0 20px 60px rgb(14 12 28 / 20%);
+}
+.discovery-overlay.el-dialog { padding: 0; overflow: hidden; border-radius: 20px; }
+.discovery-overlay.el-drawer { border-radius: 20px 0 0 20px; }
+.discovery-overlay .el-dialog__header, .discovery-overlay .el-drawer__header {
+  padding: 22px 26px;
+  margin: 0;
+  border-bottom: 1px solid var(--mf-border);
+  color: var(--mf-text);
+}
+.discovery-overlay .el-dialog__title, .discovery-overlay .el-drawer__title { color: var(--mf-text); font-size: 18px; font-weight: 700; }
+.discovery-overlay .el-dialog__headerbtn { top: 12px; right: 12px; }
+.discovery-overlay .el-dialog__headerbtn .el-dialog__close, .discovery-overlay .el-drawer__close-btn { color: var(--mf-text-muted); }
+.discovery-overlay .el-dialog__body, .discovery-overlay .el-drawer__body { padding: 22px 26px; color: var(--mf-text); }
+.discovery-overlay .el-dialog__body > div > p { margin: 0 0 14px; color: var(--mf-text-muted); font-size: 13px; line-height: 1.7; }
+.discovery-overlay .el-dialog__footer, .discovery-overlay .el-drawer__footer { padding: 18px 26px; border-top: 1px solid var(--mf-border); background: var(--mf-surface-muted); }
+.discovery-overlay .el-button { min-height: 36px; border-radius: 10px; }
+.discovery-overlay .drawer-field { padding: 16px; border: 1px solid var(--mf-border); border-radius: 12px; background: var(--mf-surface-muted); }
+.discovery-overlay .drawer-hint, .discovery-overlay .drawer-service { overflow-wrap: anywhere; }
+.discovery-overlay .drawer-empty { padding: 24px; border: 1px dashed var(--mf-border); border-radius: 14px; background: var(--mf-surface-muted); }
+.discovery-overlay .el-table {
+  --el-table-bg-color: var(--mf-surface);
+  --el-table-tr-bg-color: var(--mf-surface);
+  --el-table-header-bg-color: var(--mf-surface-muted);
+  --el-table-row-hover-bg-color: var(--mf-nav-hover);
+  --el-table-border-color: var(--mf-border);
+  --el-table-text-color: var(--mf-text);
+  --el-table-header-text-color: var(--mf-text-muted);
+  border: 1px solid var(--mf-border);
+  border-radius: 12px;
+}
+.discovery-overlay.el-message-box { padding: 24px; border-radius: 18px; }
+.discovery-overlay .el-message-box__title { color: var(--mf-text); }
+.discovery-overlay .el-message-box__content { color: var(--mf-text-muted); }
+.discovery-popper.el-popper { border-color: var(--mf-border); border-radius: 12px; background: var(--mf-surface); }
+.discovery-popper .el-select-dropdown__item { height: 36px; margin: 3px 6px; border-radius: 8px; color: var(--mf-text); line-height: 36px; }
+.discovery-popper .el-select-dropdown__item.is-hovering, .discovery-popper .el-select-dropdown__item.is-selected { color: var(--el-color-primary); background: var(--mf-nav-hover); }
+.discovery-popper .el-popper__arrow::before { border-color: var(--mf-border); background: var(--mf-surface); }
+.discovery-theme .el-button > span, .discovery-theme .el-tag > span { color: inherit; }
+.lyrics-drawer .el-drawer__body { padding: 0; overflow: hidden; }
+@media (max-width: 720px) {
+  .discovery-overlay.el-drawer { border-radius: 16px 0 0 16px; }
+  .discovery-overlay .el-dialog__header, .discovery-overlay .el-drawer__header,
+  .discovery-overlay .el-dialog__body, .discovery-overlay .el-drawer__body,
+  .discovery-overlay .el-dialog__footer, .discovery-overlay .el-drawer__footer { padding: 18px; }
+  .lyrics-drawer .el-drawer__body { padding: 0; }
+}

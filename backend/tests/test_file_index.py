@@ -1,4 +1,8 @@
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+
+import pytest
 
 from app.services.file_index_service import FileIndexService
 
@@ -84,3 +88,70 @@ def test_scopes_share_unchanged_file_metadata(tmp_path: Path) -> None:
     service.refresh("media_library", [str(source)], _reader(calls))
 
     assert calls == [str(song)]
+
+
+def test_snapshot_reads_tracks_and_version_in_one_sqlite_transaction(monkeypatch, tmp_path: Path) -> None:
+    """读取曲目后并发更新索引，返回版本仍必须属于同一份曲目。"""
+    source = tmp_path / "music"
+    source.mkdir()
+    song = source / "song.flac"
+    song.write_bytes(b"audio")
+    service = FileIndexService(tmp_path / "musicflow.db")
+    previous = service.refresh("media_library", [str(source)], _reader([]))
+    version = service.get_version("media_library")
+    with service._connect() as connection:
+        connection.execute("PRAGMA journal_mode=WAL")
+    tracks_read = threading.Event()
+    version_read = threading.Event()
+    original_version = service._version_in_connection
+
+    def paused_version(connection, scope):
+        tracks_read.set()
+        assert version_read.wait(10), "等待读取快照版本超时"
+        return original_version(connection, scope)
+
+    monkeypatch.setattr(service, "_version_in_connection", paused_version)
+    writer = FileIndexService(service.database_path)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(lambda: service.load_snapshot("media_library"))
+        try:
+            assert tracks_read.wait(10), "快照曲目没有读取"
+            writer.upsert("media_library", str(source), {**previous[0], "title": "更新的标题"})
+        finally:
+            version_read.set()
+        tracks, snapshot_version = future.result(timeout=10)
+
+    assert tracks == previous
+    assert snapshot_version == version
+    assert writer.get_version("media_library") == version + 1
+
+
+@pytest.mark.parametrize("legacy_database", [False, True], ids=["新数据库", "已有数据库升级"])
+def test_cross_scope_metadata_lookup_uses_path_index_without_changing_results(tmp_path: Path, legacy_database: bool) -> None:
+    """新建和升级数据库均按路径检索跨库元数据，且保留已有曲目与版本。"""
+    source = tmp_path / "music"
+    source.mkdir()
+    song = source / "song.flac"
+    song.write_bytes(b"audio")
+    calls = []
+    service = FileIndexService(tmp_path / "musicflow.db")
+    expected = service.refresh("workspace", [str(source)], _reader(calls))
+    version = service.get_version("workspace")
+    if legacy_database:
+        with service._connect() as connection:
+            connection.execute("DROP INDEX IF EXISTS idx_file_index_path")
+
+    restarted = FileIndexService(service.database_path)
+    assert restarted.refresh("media_library", [str(source)], _reader(calls)) == expected
+    assert restarted.load("workspace") == expected
+    assert restarted.get_version("workspace") == version
+    assert calls == [str(song)]
+    stat = song.stat()
+    with restarted._connect() as connection:
+        plan = connection.execute(
+            "EXPLAIN QUERY PLAN SELECT data_json FROM file_index "
+            "WHERE path = ? AND size = ? AND mtime_ns = ? LIMIT 1",
+            (str(song), stat.st_size, stat.st_mtime_ns),
+        ).fetchall()
+
+    assert any("SEARCH" in row["detail"] and "idx_file_index_path" in row["detail"] for row in plan), [dict(row) for row in plan]

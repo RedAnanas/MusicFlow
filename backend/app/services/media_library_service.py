@@ -18,10 +18,14 @@ class MediaLibraryService:
 
     def __init__(self, index_service: Optional[FileIndexService] = None):
         self._tracks: list[dict] = []
+        self._version = 0
         self._loaded = False
+        self._generation = 0
+        self._invalidated = False
         self._index_service = index_service or file_index_service
         self._refresh_thread: Optional[threading.Thread] = None
         self._lock = threading.RLock()
+        self._scan_lock = threading.Lock()
 
     def get_sources(self) -> list[str]:
         return [source["path"] for source in self.get_named_sources()]
@@ -87,52 +91,63 @@ class MediaLibraryService:
     def invalidate(self) -> None:
         with self._lock:
             self._tracks = []
+            self._version = 0
             self._loaded = False
+            self._generation += 1
+            self._invalidated = True
 
     def load_tracks(self, refresh: bool = False) -> list[dict]:
+        return self.load_snapshot(refresh)[0]
+
+    def load_snapshot(self, refresh: bool = False) -> tuple[list[dict], int]:
+        """返回内存曲目及其实际版本，不能用已前进的数据库版本标记旧曲目。"""
         with self._lock:
-            if refresh:
-                self._tracks = self._scan_tracks()
+            if refresh or self._invalidated:
+                self._generation += 1
+                self._tracks, self._version = self._scan_snapshot()
                 self._loaded = True
+                self._invalidated = False
             elif not self._loaded:
                 if self._index_service.has_snapshot(self.INDEX_SCOPE):
-                    self._tracks = self._deduplicate(self._index_service.load(self.INDEX_SCOPE))
+                    tracks, self._version = self._index_service.load_snapshot(self.INDEX_SCOPE)
+                    self._tracks = self._deduplicate(tracks)
                     self._loaded = True
                     self._schedule_refresh()
                 else:
-                    self._tracks = self._scan_tracks()
+                    self._tracks, self._version = self._scan_snapshot()
                     self._loaded = True
-            return list(self._tracks)
+            return list(self._tracks), self._version
 
     def get_index_version(self) -> int:
         return self._index_service.get_version(self.INDEX_SCOPE)
 
     def index_output(self, path: Path) -> bool:
         """仅将落在整理媒体库中的新成品增量写入索引。"""
-        source = next(
-            (source for source in self.get_sources() if Path(source) in path.parents),
-            None,
-        )
-        if source is None or not path.is_file():
-            return False
-        track = self._read_track(path)
-        if track is None:
-            return False
-        with self._lock:
+        with self._lock, self._scan_lock:
+            source = next(
+                (source for source in self.get_sources() if Path(source) in path.parents),
+                None,
+            )
+            if source is None or not path.is_file():
+                return False
+            track = self._read_track(path)
+            if track is None:
+                return False
+            self._generation += 1
             self._index_service.upsert(self.INDEX_SCOPE, source, track)
             if self._loaded:
-                self._tracks = self._deduplicate(
-                    [item for item in self._tracks if item["path"] != str(path)] + [track]
-                )
+                tracks, self._version = self._index_service.load_snapshot(self.INDEX_SCOPE)
+                self._tracks = self._deduplicate(tracks)
         return True
 
-    def _scan_tracks(self) -> list[dict]:
-        tracks = self._index_service.refresh(
-            self.INDEX_SCOPE,
-            self.get_sources(),
-            self._read_track,
-        )
-        return self._deduplicate(tracks)
+    def _scan_snapshot(self) -> tuple[list[dict], int]:
+        with self._scan_lock:
+            tracks, version = self._index_service.refresh_snapshot(
+                self.INDEX_SCOPE,
+                self.get_sources(),
+                self._read_track,
+            )
+        return self._deduplicate(tracks), version
 
     @staticmethod
     def _deduplicate(indexed_tracks: list[dict]) -> list[dict]:
@@ -154,11 +169,14 @@ class MediaLibraryService:
         if self._refresh_thread and self._refresh_thread.is_alive():
             return
 
+        generation = self._generation
+
         def refresh_index():
             try:
-                refreshed = self._scan_tracks()
+                tracks, version = self._scan_snapshot()
                 with self._lock:
-                    self._tracks = refreshed
+                    if generation == self._generation and self._loaded:
+                        self._tracks, self._version = tracks, version
             except Exception:
                 return
 

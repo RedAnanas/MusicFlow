@@ -126,3 +126,18 @@ def test_partial_job_retries_only_failed_target(monkeypatch, tmp_path: Path) -> 
     assert retried["nas_status"] == "success"
     assert retried["apple_status"] == "waiting"
     assert retried["status"] == "queued"
+
+
+def test_补齐记录返回关联转换任务标识供操作记录去重(monkeypatch, tmp_path: Path) -> None:
+    from app.services.watch_routing import watch_routing
+
+    service = AcquisitionService(tmp_path / "musicflow.db")
+    monkeypatch.setattr(watch_routing, "for_source", lambda _path: ("folder", {"outputs": [
+        {"library": "nas", "task_id": "local-task", "state": "success"},
+        {"library": "apple", "task_id": "apple-task", "state": "success"},
+        {"library": "nas", "state": "success"},
+    ]}))
+    monkeypatch.setattr(watch_routing, "output_status", lambda item: item["state"])
+    result = service._public_job({"desired_nas": 1, "desired_apple": 1,
+                                  "nas_status": "success", "apple_status": "success"})
+    assert result["conversion_task_ids"] == ["local-task", "apple-task"]

@@ -79,5 +79,17 @@ async function restore() {
 </template>
 
 <style scoped>
-.configuration-backup{padding:24px;border-bottom:1px solid var(--el-border-color-lighter)}h2{font-size:17px;margin-bottom:7px;color:var(--el-text-color-primary)}h3{font-size:14px;margin:16px 0}p{font-size:13px;color:var(--el-text-color-secondary);margin-bottom:8px;line-height:1.7}.backup-actions{display:flex;align-items:center;flex-wrap:wrap;gap:12px;margin:14px 0}.backup-actions label{display:flex;gap:8px;flex-wrap:wrap;font-size:13px}.backup-preview{margin-top:16px}a{display:inline-block;margin:8px 0;color:var(--el-color-primary)}
+.configuration-backup { padding: 24px; }
+h2 { margin: 0 0 10px; color: var(--mf-text); font-size: 19px; }
+h3 { margin: 16px 0; color: var(--mf-text); font-size: 14px; }
+p { margin: 8px 0; color: var(--mf-text-muted); font-size: 13px; line-height: 1.75; }
+.backup-actions { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 16px; margin: 20px 0 0; }
+.backup-actions label { display: grid; min-width: 0; gap: 8px; color: var(--mf-text-muted); font-size: 12px; }
+.backup-preview { margin-top: 20px; padding: 18px; border: 1px solid var(--mf-border); border-radius: 14px; background: var(--mf-surface-muted); }
+.backup-preview .backup-actions { margin: 12px 0; }
+a { display: inline-block; margin: 0; color: var(--el-color-primary); }
+input[type=file] { max-width: 100%; min-width: 0; font: inherit; color: var(--mf-text-muted); }
+input[type=file]::file-selector-button { padding: 7px 11px; margin-right: 9px; border: 1px solid var(--mf-border); border-radius: 8px; background: var(--mf-surface-muted); color: var(--mf-text); font: inherit; cursor: pointer; }
+input[type=file]:focus-visible { outline: 2px solid var(--el-color-primary); outline-offset: 4px; }
+@media (max-width: 760px) { .configuration-backup { padding: 20px; }.backup-actions { align-items: flex-start; flex-direction: column; }.backup-preview { padding: 14px; } }
 </style>

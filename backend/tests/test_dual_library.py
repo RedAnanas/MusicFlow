@@ -1,11 +1,13 @@
 import csv
 import io
 import json
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Barrier
 
 import pytest
 
-from app.services.dual_library_service import DualLibraryService, normalize_text
+from app.services.dual_library_service import DualLibraryService, MatchConflict, normalize_text
 
 
 CSV_HEADER = "Track name,Artist name,Album,Playlist name,Type,ISRC,Apple - id\n"
@@ -100,14 +102,18 @@ def test_reconciliation_result_persists_by_snapshot_and_index_version(tmp_path: 
     assert restarted.get_cached_reconciliation("snapshot-1", 4) is None
 
 
-def test_old_reconciliation_cache_is_recomputed_after_matching_rule_change(tmp_path: Path) -> None:
+@pytest.mark.parametrize("version", [None, 7])
+def test_old_reconciliation_cache_is_recomputed_after_matching_rule_change(tmp_path: Path, version: int | None) -> None:
     """旧规则缓存不得掩盖升级后的匹配结果。"""
     service = create_service(tmp_path)
     service.initialize()
+    cached = {"summary": {}, "entries": []}
+    if version is not None:
+        cached = {"version": version, "result": cached}
     with service._connect() as connection:
         connection.execute(
             "INSERT INTO reconciliation_results VALUES (?, ?, ?, ?)",
-            ("snapshot-1", 3, json.dumps({"summary": {}, "entries": []}), "2026-09-24T00:00:00+00:00"),
+            ("snapshot-1", 3, json.dumps(cached), "2026-09-24T00:00:00+00:00"),
         )
     assert service.get_cached_reconciliation("snapshot-1", 3) is None
 
@@ -792,6 +798,80 @@ def test_save_match_decisions_saves_batch_atomically(tmp_path: Path) -> None:
         {"id": "local-2", "filename": "b.flac", "title": "同名二", "artist": "G.E.M.Apple歌手", "album": "本地专辑", "path": "/music/b.flac"},
     ])
     assert confirmed["summary"]["both"] == 2
+
+
+@pytest.mark.parametrize("shared_side", ["local", "apple"])
+def test_only_unmatched_confirmation_is_atomic_across_connections(tmp_path: Path, shared_side: str) -> None:
+    """两个连接同时消耗同一本地或 Apple 候选时，只允许一个确认成功。"""
+    service = create_service(tmp_path)
+    service.import_snapshot("library.csv", (CSV_HEADER
+        + "Apple歌曲甲,歌手甲,专辑,资料库,Apple Music,,1001\n"
+        + "Apple歌曲乙,歌手乙,专辑,资料库,Apple Music,,1002\n").encode())
+    local_tracks = [
+        {"id": "local-1", "title": "本地歌曲", "artist": "歌手丙"},
+        {"id": "local-2", "title": "远方音轨", "artist": "表演者丁"},
+    ]
+    before = service.reconcile(local_tracks)
+    assert before["summary"] == {"both": 0, "nas_only": 2, "apple_only": 2, "review": 0}
+    keys = [entry["apple"]["track_key"] for entry in before["entries"] if entry["status"] == "apple_only"]
+    pairs = [("local-1", keys[0]), ("local-1", keys[1]) if shared_side == "local" else ("local-2", keys[0])]
+    start = Barrier(2)
+
+    def confirm(pair: tuple[str, str]) -> str:
+        independent = DualLibraryService(service.database_path)
+        start.wait(timeout=5)
+        try:
+            independent.save_match_decision(*pair, "confirmed", only_unmatched_tracks=local_tracks)
+        except MatchConflict as error:
+            assert str(error) == "对账状态已变化，请刷新后重新选择"
+            return "conflict"
+        return "confirmed"
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        assert sorted(executor.map(confirm, pairs)) == ["confirmed", "conflict"]
+    with service._connect() as connection:
+        assert connection.execute("SELECT COUNT(*) FROM library_matches").fetchone()[0] == 1
+    assert service.reconcile(local_tracks)["summary"]["both"] == 1
+
+
+def test_only_unmatched_rejection_keeps_candidates_available_and_legacy_decisions_work(tmp_path: Path) -> None:
+    """排除不消耗双方候选，旧三参数调用仍能保留人工匹配和更正决策。"""
+    service = create_service(tmp_path)
+    service.import_snapshot("library.csv", (CSV_HEADER
+        + "Apple歌曲,歌手甲,专辑,资料库,Apple Music,,1001\n").encode())
+    local_tracks = [{"id": "local-1", "title": "本地歌曲", "artist": "歌手丙"}]
+    before = service.reconcile(local_tracks)
+    key = next(entry["apple"]["track_key"] for entry in before["entries"] if entry["status"] == "apple_only")
+    service.save_match_decision("local-1", key, "rejected", only_unmatched_tracks=local_tracks)
+    assert service.reconcile(local_tracks)["summary"] == before["summary"]
+    service.save_match_decision("local-1", key, "confirmed", only_unmatched_tracks=local_tracks)
+    assert service.reconcile(local_tracks)["summary"]["both"] == 1
+    service.save_match_decision("local-1", key, "rejected")
+    assert service.reconcile(local_tracks)["summary"] == before["summary"]
+
+
+@pytest.mark.parametrize("batch", [False, True])
+def test_only_unmatched_confirmation_rechecks_existing_single_and_batch_decisions(tmp_path: Path, batch: bool) -> None:
+    """其他写入口已消耗候选时，事务内检查必须拒绝旧页面的确认且不改已有结果。"""
+    service = create_service(tmp_path)
+    service.import_snapshot("library.csv", (CSV_HEADER
+        + "Apple歌曲甲,歌手甲,专辑,资料库,Apple Music,,1001\n"
+        + "Apple歌曲乙,歌手乙,专辑,资料库,Apple Music,,1002\n").encode())
+    local_tracks = [
+        {"id": "local-1", "title": "本地歌曲", "artist": "歌手丙"},
+        {"id": "local-2", "title": "远方音轨", "artist": "表演者丁"},
+    ]
+    keys = [entry["apple"]["track_key"] for entry in service.reconcile(local_tracks)["entries"] if entry["status"] == "apple_only"]
+    if batch:
+        service.save_match_decisions([("local-1", keys[0], "confirmed")])
+    else:
+        service.save_match_decision("local-1", keys[0], "confirmed")
+    for local_id, key in (("local-1", keys[1]), ("local-2", keys[0])):
+        with pytest.raises(MatchConflict, match="对账状态已变化"):
+            service.save_match_decision(local_id, key, "confirmed", only_unmatched_tracks=local_tracks)
+    with service._connect() as connection:
+        assert connection.execute("SELECT local_file_id, apple_track_key, decision FROM library_matches").fetchall()[0][:] == ("local-1", keys[0], "confirmed")
+        assert connection.execute("SELECT COUNT(*) FROM library_matches").fetchone()[0] == 1
 
 
 def test_normalize_text_only_applies_safe_exact_normalization() -> None:

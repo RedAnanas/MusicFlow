@@ -183,8 +183,12 @@ class AppleMusicUploadService:
             row = connection.execute("SELECT * FROM apple_uploads WHERE id = ?", (job_id,)).fetchone()
             timeline = [dict(item) for item in connection.execute(
                 "SELECT stage, state, started_at, ended_at, progress, wait_until, bytes_sent, bytes_total FROM apple_upload_timeline WHERE upload_id = ? ORDER BY id", (job_id,))]
+            sources = [dict(item) for item in connection.execute("SELECT conversion_task_id, source_file FROM apple_upload_links WHERE upload_id = ? AND deleted = 0", (job_id,))]
         if not row:
             raise KeyError("上传任务不存在")
+        return self._serialize_upload(row, timeline, sources, self.worker_status() if row["state"] == "queued" else {})
+
+    def _serialize_upload(self, row, timeline, sources, worker, summary=False):
         result = {key: row[key] for key in ("id", "state", "stage", "sha256", "size", "bytes_sent", "bytes_total", "created_at", "updated_at", "signature_progress", "signature_elapsed_seconds")}
         result["error_code"] = row["error_code"]
         finished = row["updated_at"] if row["state"] in TERMINAL_STATES else None
@@ -197,14 +201,12 @@ class AppleMusicUploadService:
         result.update(running=bool(row["running"]), deleted=bool(row["deleted"]), stop_requested=bool(row["stop_requested"]),
                       can_stop=row["state"] not in TERMINAL_STATES | {"queued", "stopping"},
                       can_delete=row["state"] in TERMINAL_STATES and not row["running"])
-        with self.connect() as connection:
-            result["sources"] = [dict(item) for item in connection.execute("SELECT conversion_task_id, source_file FROM apple_upload_links WHERE upload_id = ? AND deleted = 0", (job_id,))]
+        result["sources"] = sources
         if row["error_code"] in {"unsupported_fingerprint", "unsupported_media", "context_mismatch"}:
             result["allowed_actions"] = []
-        if row["state"] == "queued" and not self.worker_status()["online"]:
+        if row["state"] == "queued" and not worker["online"]:
             result["state"] = "waiting_worker"
         elif row["state"] == "queued":
-            worker = self.worker_status()
             if not worker.get("authorization_saved"):
                 result["state"] = "waiting_authorization"
             elif not worker.get("client_exited"):
@@ -213,6 +215,46 @@ class AppleMusicUploadService:
                 result.update(state="waiting_worker", error_code="incompatible_version", error=ERRORS["incompatible_version"])
             elif not worker.get("context_matches"):
                 result.update(state="waiting_authorization", error_code="context_mismatch", error=ERRORS["context_mismatch"])
+        if summary:
+            result["current_timing"] = next((item for item in result.pop("timeline") if item["ended_at"] is None), None)
+        return result
+
+    def for_tasks(self, task_ids, summary=False):
+        """批量读取任务上传状态；摘要只读取当前阶段，保留来源与安全操作限制。"""
+        if not task_ids:
+            return {}
+        self.initialize()
+        placeholders = ','.join('?' for _ in task_ids)
+        with self.connect() as connection:
+            connection.execute("BEGIN")
+            rows = connection.execute(f"""SELECT u.*, l.conversion_task_id, l.deleted AS link_deleted
+                FROM apple_upload_links l JOIN apple_uploads u ON u.id = l.upload_id
+                WHERE l.conversion_task_id IN ({placeholders})""", task_ids).fetchall()
+            if not rows:
+                return {}
+            uploads = {row['id']: row for row in rows}
+            upload_ids = list(uploads)
+            placeholders = ','.join('?' for _ in upload_ids)
+            timelines, sources = {job_id: [] for job_id in upload_ids}, {job_id: [] for job_id in upload_ids}
+            for item in connection.execute(f"""SELECT upload_id, stage, state, started_at, ended_at,
+                progress, wait_until, bytes_sent, bytes_total FROM apple_upload_timeline
+                WHERE upload_id IN ({placeholders}) {'AND ended_at IS NULL' if summary else ''} ORDER BY id""", upload_ids):
+                timing = dict(item)
+                timelines[timing.pop('upload_id')].append(timing)
+            for item in connection.execute(f"""SELECT upload_id, conversion_task_id, source_file
+                FROM apple_upload_links WHERE upload_id IN ({placeholders}) AND deleted = 0""", upload_ids):
+                source = dict(item)
+                sources[source.pop('upload_id')].append(source)
+        worker = self.worker_status() if any(row['state'] == 'queued' for row in uploads.values()) else {}
+        serialized = {job_id: self._serialize_upload(row, timelines[job_id], sources[job_id], worker, summary)
+                      for job_id, row in uploads.items()}
+        result = {}
+        for row in rows:
+            upload = dict(serialized[row['id']])
+            upload['deleted'] = upload['deleted'] or bool(row['link_deleted'])
+            if upload['deleted']:
+                upload['allowed_actions'] = []
+            result[row['conversion_task_id']] = upload
         return result
 
     def for_task(self, task_id):

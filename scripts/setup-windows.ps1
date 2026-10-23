@@ -35,7 +35,7 @@ try {
 
     & $venvPython -m pip install --upgrade pip
     if ($LASTEXITCODE -ne 0) { throw "升级 pip 失败。" }
-    & $venvPython -m pip install -r backend/requirements-dev.txt
+    & $venvPython -m pip install -r backend/requirements-dev.txt -r windows-upload/requirements-server.txt
     if ($LASTEXITCODE -ne 0) { throw "安装后端依赖失败。" }
 
     Push-Location (Join-Path $projectRoot "frontend")

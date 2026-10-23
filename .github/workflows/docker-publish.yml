@@ -51,6 +51,13 @@ jobs:
       - name: 校验版本一致性
         run: node scripts/sync-version.mjs --check
 
+      - name: 安装前端依赖
+        working-directory: frontend
+        run: npm ci
+
+      - name: 前端回归测试
+        run: node --test frontend/tests
+
       - name: 配置 QEMU
         uses: docker/setup-qemu-action@v4
 

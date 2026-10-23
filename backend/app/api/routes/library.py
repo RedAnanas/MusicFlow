@@ -1,18 +1,23 @@
 import asyncio
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import Lock, RLock
 from typing import Literal, Optional
 
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 
-from app.services.dual_library_service import dual_library_service
+from app.services.dual_library_service import MatchConflict, dual_library_service
 from app.services.acquisition_service import acquisition_service
 from app.services.media_library_service import media_library_service
 
 
 router = APIRouter()
 reconciliation_cache: Optional[dict] = None
+_reconciliation_build_lock = Lock()
+_reconciliation_cache_lock = RLock()
+_reconciliation_generation = 0
 
 
 class MatchDecisionRequest(BaseModel):
@@ -49,9 +54,11 @@ class IncrementalMergeRequest(BaseModel):
 
 
 def invalidate_reconciliation_cache() -> None:
-    global reconciliation_cache
-    reconciliation_cache = None
-    dual_library_service.clear_reconciliation_cache()
+    global reconciliation_cache, _reconciliation_generation
+    with _reconciliation_cache_lock:
+        _reconciliation_generation += 1
+        reconciliation_cache = None
+        dual_library_service.clear_reconciliation_cache()
 
 
 def invalidate_presence_index() -> None:
@@ -80,7 +87,7 @@ async def add_media_library_sources(request: MediaLibrarySourceRequest):
         source = await asyncio.to_thread(media_library_service.add_source, request.name, request.path)
     except (ValueError, OSError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    invalidate_reconciliation_cache()
+    await asyncio.to_thread(invalidate_reconciliation_cache)
     return source
 
 
@@ -90,7 +97,7 @@ async def update_media_library_source(source_id: str, request: MediaLibrarySourc
         source = await asyncio.to_thread(media_library_service.update_source, source_id, request.name, request.path)
     except (ValueError, OSError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    invalidate_reconciliation_cache()
+    await asyncio.to_thread(invalidate_reconciliation_cache)
     return source
 
 
@@ -100,7 +107,7 @@ async def remove_media_library_source(source_id: str):
         await asyncio.to_thread(media_library_service.remove_source, source_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    invalidate_reconciliation_cache()
+    await asyncio.to_thread(invalidate_reconciliation_cache)
     return {"status": "success"}
 
 
@@ -133,7 +140,7 @@ async def _save_apple_library_snapshot(file: UploadFile, replace_snapshot_id: Op
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if created:
         await asyncio.to_thread(acquisition_service.confirm_apple_presence)
-        invalidate_reconciliation_cache()
+        await asyncio.to_thread(invalidate_reconciliation_cache)
         invalidate_presence_index()
     return {"created": created, "snapshot": snapshot}
 
@@ -145,7 +152,7 @@ async def delete_apple_library_snapshot(snapshot_id: str):
         await asyncio.to_thread(dual_library_service.delete_snapshot, snapshot_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    invalidate_reconciliation_cache()
+    await asyncio.to_thread(invalidate_reconciliation_cache)
     invalidate_presence_index()
     return {"status": "success"}
 
@@ -168,7 +175,7 @@ async def add_apple_incremental_entry(request: AppleIncrementalTrackRequest):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     invalidate_presence_index()
-    invalidate_reconciliation_cache()
+    await asyncio.to_thread(invalidate_reconciliation_cache)
     return entry
 
 
@@ -179,7 +186,7 @@ async def delete_apple_incremental_entry(entry_id: str):
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     invalidate_presence_index()
-    invalidate_reconciliation_cache()
+    await asyncio.to_thread(invalidate_reconciliation_cache)
     return {"status": "success"}
 
 
@@ -190,7 +197,7 @@ async def confirm_apple_incremental_entry(entry_id: str):
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     invalidate_presence_index()
-    invalidate_reconciliation_cache()
+    await asyncio.to_thread(invalidate_reconciliation_cache)
     return entry
 
 
@@ -209,7 +216,7 @@ async def link_apple_incremental_entry(entry_id: str, request: IncrementalSnapsh
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     invalidate_presence_index()
-    invalidate_reconciliation_cache()
+    await asyncio.to_thread(invalidate_reconciliation_cache)
     return {"status": "success"}
 
 
@@ -220,7 +227,7 @@ async def merge_apple_incremental_entries(entry_id: str, request: IncrementalMer
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     invalidate_presence_index()
-    invalidate_reconciliation_cache()
+    await asyncio.to_thread(invalidate_reconciliation_cache)
     return {"status": "success"}
 
 
@@ -235,6 +242,46 @@ async def get_apple_library_status():
     return {"snapshot": snapshot, "age_days": age_days, "is_stale": age_days >= 30}
 
 
+def _load_reconciliation_cache(refresh_local: bool) -> tuple[dict, dict]:
+    global reconciliation_cache
+    with _reconciliation_build_lock:
+        while True:
+            with _reconciliation_cache_lock:
+                generation = _reconciliation_generation
+            snapshot = dual_library_service.get_latest_snapshot()
+            if not snapshot:
+                raise HTTPException(status_code=409, detail="请先导入 Apple Music CSV 快照")
+            if not media_library_service.get_sources():
+                raise HTTPException(status_code=409, detail="请先添加本地音乐库文件夹")
+            local_tracks, local_index_version = media_library_service.load_snapshot(refresh_local)
+            with _reconciliation_cache_lock:
+                if generation != _reconciliation_generation:
+                    continue
+                cache = reconciliation_cache
+                if (not refresh_local and cache is not None
+                        and cache["snapshot_id"] == snapshot["id"]
+                        and cache["local_index_version"] == local_index_version):
+                    return snapshot, cache
+                result = None if refresh_local else dual_library_service.get_cached_reconciliation(
+                    snapshot["id"], local_index_version)
+            needs_save = result is None
+            if needs_save:
+                result = dual_library_service.reconcile(local_tracks)
+            with _reconciliation_cache_lock:
+                if generation != _reconciliation_generation:
+                    continue
+                # 持久写入与内存发布不能跨过一次缓存失效。
+                if needs_save:
+                    dual_library_service.save_cached_reconciliation(snapshot["id"], local_index_version, result)
+                cache = reconciliation_cache = {
+                    "snapshot_id": snapshot["id"],
+                    "local_index_version": local_index_version,
+                    "result": result,
+                    "revision": uuid.uuid4().hex,
+                }
+                return snapshot, cache
+
+
 @router.get("/library/reconciliation")
 async def get_library_reconciliation(
     status: Optional[Literal["both", "nas_only", "apple_only", "review"]] = None,
@@ -242,42 +289,13 @@ async def get_library_reconciliation(
     refresh_local: bool = Query(False, description="重新扫描本地音乐库"),
     offset: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=1000),
+    expected_revision: Optional[str] = None,
 ):
     """对比最新 Apple Music 快照和本地音乐库。"""
-    snapshot = await asyncio.to_thread(dual_library_service.get_latest_snapshot)
-    if not snapshot:
-        raise HTTPException(status_code=409, detail="请先导入 Apple Music CSV 快照")
-    if not await asyncio.to_thread(media_library_service.get_sources):
-        raise HTTPException(status_code=409, detail="请先添加本地音乐库文件夹")
-    local_tracks = await asyncio.to_thread(media_library_service.load_tracks, refresh_local)
-    local_index_version = await asyncio.to_thread(media_library_service.get_index_version)
-    global reconciliation_cache
-    if (
-        refresh_local
-        or reconciliation_cache is None
-        or reconciliation_cache["snapshot_id"] != snapshot["id"]
-        or reconciliation_cache["local_index_version"] != local_index_version
-    ):
-        result = None if refresh_local else await asyncio.to_thread(
-            dual_library_service.get_cached_reconciliation,
-            snapshot["id"],
-            local_index_version,
-        )
-        if result is None:
-            result = await asyncio.to_thread(dual_library_service.reconcile, local_tracks)
-            await asyncio.to_thread(
-                dual_library_service.save_cached_reconciliation,
-                snapshot["id"],
-                local_index_version,
-                result,
-            )
-        reconciliation_cache = {
-            "snapshot_id": snapshot["id"],
-            "local_index_version": local_index_version,
-            "result": result,
-        }
-    else:
-        result = reconciliation_cache["result"]
+    snapshot, cache = await asyncio.to_thread(_load_reconciliation_cache, refresh_local)
+    result = cache["result"]
+    if expected_revision is not None and expected_revision != cache["revision"]:
+        raise HTTPException(status_code=409, detail="对账结果已变化，请重新查询后选择候选")
     entries = result["entries"]
     if status:
         entries = [entry for entry in entries if entry["status"] == status]
@@ -286,6 +304,7 @@ async def get_library_reconciliation(
         entries = [entry for entry in entries if _entry_contains(entry, query)]
     return {
         "snapshot": snapshot,
+        "revision": cache["revision"],
         "summary": result["summary"],
         "total": len(entries),
         "offset": offset,
@@ -310,28 +329,19 @@ async def save_library_match(request: MatchDecisionRequest):
     local_tracks = await asyncio.to_thread(media_library_service.load_tracks, False)
     if request.local_file_id not in {track["id"] for track in local_tracks}:
         raise HTTPException(status_code=404, detail="本地音乐文件不存在")
-    if request.require_only_unmatched:
-        result = await asyncio.to_thread(dual_library_service.reconcile, local_tracks)
-        apple_only = {
-            entry["apple"]["track_key"]
-            for entry in result["entries"] if entry["status"] == "apple_only"
-        }
-        local_only = {
-            entry["local"]["id"]
-            for entry in result["entries"] if entry["status"] == "nas_only"
-        }
-        if request.apple_track_key not in apple_only or request.local_file_id not in local_only:
-            raise HTTPException(status_code=409, detail="对账状态已变化，请刷新后重新选择")
     try:
         await asyncio.to_thread(
             dual_library_service.save_match_decision,
             request.local_file_id,
             request.apple_track_key,
             request.decision,
+            only_unmatched_tracks=local_tracks if request.require_only_unmatched else None,
         )
+    except MatchConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    invalidate_reconciliation_cache()
+    await asyncio.to_thread(invalidate_reconciliation_cache)
     return {"status": "success"}
 
 
@@ -349,5 +359,5 @@ async def save_library_matches_batch(request: BatchMatchDecisionRequest):
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    invalidate_reconciliation_cache()
+    await asyncio.to_thread(invalidate_reconciliation_cache)
     return {"status": "success", "count": len(request.matches)}

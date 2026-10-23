@@ -1,6 +1,7 @@
 """独立上传队列的幂等、租约、恢复与文件访问回归。"""
 
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 import asyncio
 import hashlib
 import json
@@ -53,6 +54,53 @@ def queue(tmp_path):
 def enqueue(queue, task_id="conversion-1"):
     service, binding, source = queue
     return service.enqueue(task_id, "/source/song.flac", source, binding["account_scope"])
+
+
+def test_批量上传摘要保留当前阶段来源和隐藏关联且不读取完整时间线(queue, monkeypatch):
+    from app.services import apple_music_upload as upload_module
+
+    service, binding, source = queue
+    job = enqueue(queue, 'first')
+    service.enqueue('second', '/source/second.flac', source, binding['account_scope'])
+    with service.connect() as connection:
+        connection.execute("UPDATE apple_uploads SET state = 'uploading', stage = 'audio', running = 1 WHERE id = ?", (job['id'],))
+        connection.execute("UPDATE apple_upload_timeline SET ended_at = 10 WHERE upload_id = ?", (job['id'],))
+        connection.execute("INSERT INTO apple_upload_timeline(upload_id, stage, state, started_at, progress, wait_until) VALUES (?, 'audio', 'uploading', 11, 25, 30)", (job['id'],))
+        connection.execute("UPDATE apple_upload_links SET deleted = 1 WHERE conversion_task_id = 'first'")
+    monkeypatch.setattr(upload_module.time, 'time', lambda: 20)
+    expected = service.for_task('second')
+    summaries = service.for_tasks(['first', 'second', 'missing'], summary=True)
+    assert set(summaries) == {'first', 'second'}
+    expected['current_timing'] = expected.pop('timeline')[-1]
+    assert summaries['second'] == expected
+    assert summaries['first']['deleted'] is True
+    assert summaries['first']['allowed_actions'] == []
+    assert summaries['second']['sources'] == [{'conversion_task_id': 'second', 'source_file': '/source/second.flac'}]
+    assert len(service.get(job['id'])['timeline']) == 2
+
+
+def test_批量读取查询次数不随任务数量增长且等待状态与详情一致(queue, monkeypatch):
+    service, binding, source = queue
+    enqueue(queue, 'task-0')
+    for index in range(1, 40):
+        service.enqueue(f'task-{index}', '/source/song.flac', source, binding['account_scope'])
+    queries = []
+    original_connect = service.connect
+
+    @contextmanager
+    def traced_connect():
+        with original_connect() as connection:
+            connection.set_trace_callback(lambda query: queries.append(query) if query.lstrip().upper().startswith('SELECT') else None)
+            yield connection
+
+    monkeypatch.setattr(service, 'connect', traced_connect)
+    single = service.for_tasks(['task-0'], summary=True)
+    count = len(queries)
+    queries.clear()
+    many = service.for_tasks([f'task-{index}' for index in range(40)], summary=True)
+    assert len(queries) == count
+    assert len(many) == 40
+    assert single['task-0']['state'] == many['task-39']['state'] == service.get(single['task-0']['id'])['state'] == 'waiting_worker'
 
 
 def claim(queue):

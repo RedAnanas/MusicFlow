@@ -1,5 +1,6 @@
 """备份可迁移的用户配置，不包含授权、任务和数据库。"""
 from datetime import datetime, timezone
+import asyncio
 import hashlib
 import json
 import logging
@@ -246,6 +247,6 @@ async def import_bundle(bundle, expected_revision):
     files._replace_file_cache([])
     files._schedule_file_refresh()
     media_library_service.invalidate()
-    library.invalidate_reconciliation_cache()
+    await asyncio.to_thread(library.invalidate_reconciliation_cache)
     discovery.invalidate_presence_index()
     return {'backup_id': backup_id, 'message': '配置已恢复；导入的监控已停用，请核对路径后启用。并发参数重启后生效。'}

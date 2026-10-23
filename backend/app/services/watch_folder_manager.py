@@ -338,7 +338,7 @@ class WatchFolderManager:
                                 from app.api.routes.discovery import invalidate_presence_index
                                 from app.api.routes.library import invalidate_reconciliation_cache
                                 invalidate_presence_index()
-                                invalidate_reconciliation_cache()
+                                await asyncio.to_thread(invalidate_reconciliation_cache)
                         created += 1
                         self._record_event(
                             folder.id,

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import axios from 'axios'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -9,11 +10,42 @@ import UploadActions from '../components/UploadActions.vue'
 import { uploadStateLabel, uploadStageLabel, uploadSignatureProgress } from '../utils/appleMusicUpload'
 import type { Task } from '../types'
 
+interface AcquisitionJob {
+  id: string
+  selected_track?: { song_name?: string; singers?: string }
+  desired_nas: boolean
+  desired_apple: boolean
+  nas_status: string
+  apple_status: string
+  status: string
+  error?: string
+  conversion_task_ids?: string[]
+  local_source_path?: string
+  apple_upload?: Task['apple_music_upload']
+  created_at: string
+  updated_at?: string
+}
+interface OperationRecord {
+  id: string
+  task?: Task
+  job?: AcquisitionJob
+  local: boolean
+  apple: boolean
+  title: string
+  subtitle: string
+  time?: string
+  status: string
+}
+
 const store = useAppStore()
 const route = useRoute()
 const router = useRouter()
 const view = ref(route.query.tab === 'logs' ? 'logs' : 'records')
 const status = ref('all')
+const target = ref('all')
+const acquisitions = ref<AcquisitionJob[]>([])
+const acquisitionsLoading = ref(false)
+const acquisitionsError = ref('')
 const level = ref('all')
 const keyword = ref('')
 const selectedIds = ref<string[]>([])
@@ -24,6 +56,7 @@ const logPageSize = ref(200)
 const profilesLoaded = ref(false)
 const actionLoading = ref(false)
 let timer: ReturnType<typeof setInterval> | undefined
+let unmounted = false
 const now = ref(Date.now())
 let clock: ReturnType<typeof setInterval> | undefined
 
@@ -34,27 +67,66 @@ const dateTime = (value?: string) => {
   const date = new Date(value)
   return Number.isNaN(date.getTime()) ? '--' : date.toLocaleString('zh-CN', { hour12: false })
 }
-const taskLabel = (value: string) => ({ waiting: '等待', converting: '转换中', success: '成功', failed: '失败', cancelled: '已取消', skipped: '已跳过' }[value] || value)
-const taskType = (value: string) => ({ waiting: 'info', converting: 'warning', success: 'success', failed: 'danger', cancelled: 'info', skipped: 'info' }[value] || 'info')
+const taskLabel = (value: string) => ({ waiting: '等待', converting: '处理中', success: '成功', failed: '失败', cancelled: '已取消', skipped: '已跳过', requires_review:'待核对', awaiting_confirmation:'待入库确认' }[value] || value)
+const taskType = (value: string) => ({ waiting: 'info', converting: 'warning', success: 'success', failed: 'danger', cancelled: 'info', skipped: 'info', requires_review:'warning', awaiting_confirmation:'warning' }[value] || 'info')
 const appleMusicLabel = (value?: string) => ({ waiting: '等待 Apple Music 接收', received: 'Apple Music 已接收', failed: 'Apple Music 交接失败', delivery_pending: '等待登记上传成品' }[value || ''] || '')
 const appleMusicType = (value?: string) => ({ waiting: 'warning', received: 'success', failed: 'danger' }[value || ''] || 'info')
 const logType = (value: string) => ({ ERROR: 'danger', WARNING: 'warning', INFO: 'success', DEBUG: 'info' }[value] || 'info')
-const filteredTasks = computed(() => store.tasks.filter(task => (status.value === 'all' || task.status === status.value) && (!keyword.value.trim() || `${fileName(task.source_file)} ${profileName(task.profile_id)}`.toLowerCase().includes(keyword.value.trim().toLowerCase()))))
+const operationStatus = (states: string[]) => {
+  if (states.some(state => ['failed', 'partial'].includes(state))) return 'failed'
+  if (states.some(state => ['requires_review', 'skipped'].includes(state))) return 'requires_review'
+  if (states.some(state => ['cancelled', 'stopped', 'stopping'].includes(state))) return 'cancelled'
+  if (states.every(state => ['success', 'completed', 'cloud_completed', 'confirmed_present', 'not_needed'].includes(state))) return 'success'
+  if (states.every(state => ['success', 'not_needed', 'cloud_completed', 'confirmed_present', 'waiting', 'queued', 'waiting_worker', 'waiting_authorization', 'waiting_client_exit'].includes(state))) return 'waiting'
+  if (states.every(state => ['success', 'cloud_completed', 'confirmed_present', 'handoff_pending', 'received_unverified', 'received', 'media_completed_extras_pending'].includes(state))) return 'awaiting_confirmation'
+  return 'converting'
+}
+const jobStateLabel = (state: string) => ({success:'成功',not_needed:'无需处理',waiting:'等待',submitted:'已进入监控目录',processing:'处理中',failed:'失败',handoff_pending:'等待 Apple Music 接收',received_unverified:'已接收，待快照确认',confirmed_present:'快照已确认'}[state] || uploadStateLabel(state))
+const records = computed<OperationRecord[]>(() => {
+  const linkedTasks = new Set(acquisitions.value.flatMap(job => [...(job.conversion_task_ids || []), ...(job.apple_upload?.sources?.map(source => source.conversion_task_id) || [])]))
+  const conversions = store.tasks.filter(task => !linkedTasks.has(task.id)).map(task => {
+    const profile = store.profiles.find(item => item.id === task.profile_id)
+    const deliveryMode = task.apple_music_delivery_mode ?? profile?.appleMusicDeliveryMode ?? (profile?.appleMusicHandoffEnabled ? 'client_import' : 'none')
+    const apple = !!(task.apple_music_upload || task.apple_music_status || task.apple_music_import_file || ['direct_upload','client_import'].includes(deliveryMode))
+    return { id:`task:${task.id}`, task, local:!apple, apple, title:fileName(task.source_file), subtitle:profileName(task.profile_id), time:task.end_time || task.start_time, status:task.status === 'success' && apple ? operationStatus([task.apple_music_upload?.state || task.apple_music_status || 'success']) : task.status }
+  })
+  const fills = acquisitions.value.map(job => {
+    const states = []
+    if (job.desired_nas && target.value !== 'apple') states.push(job.nas_status)
+    if (job.desired_apple && target.value !== 'local') states.push(job.apple_upload?.state || job.apple_status)
+    return { id:`acquisition:${job.id}`, job, local:job.desired_nas, apple:job.desired_apple, title:job.selected_track?.song_name || fileName(job.local_source_path), subtitle:job.selected_track?.singers || '', time:job.created_at, status:job.status === 'failed' ? 'failed' : operationStatus(states) }
+  })
+  return [...conversions, ...fills].sort((a,b) => (Date.parse(b.time || '') || 0) - (Date.parse(a.time || '') || 0))
+})
+const targetRecords = computed(() => records.value.filter(record => target.value === 'all' || (target.value === 'local' ? record.local : record.apple)))
+const filteredTasks = computed(() => targetRecords.value.filter(record => (status.value === 'all' || record.status === status.value) && (!keyword.value.trim() || `${record.title} ${record.subtitle}`.toLowerCase().includes(keyword.value.trim().toLowerCase()))))
+async function fetchAcquisitions(silent = false) {
+  if (!silent) acquisitionsLoading.value = true
+  try { acquisitions.value = (await axios.get<AcquisitionJob[]>('/api/acquisitions', { params:{limit:1000} })).data; acquisitionsError.value = '' }
+  catch { acquisitionsError.value = '补齐记录加载失败，已保留上次结果，请重试' }
+  finally { acquisitionsLoading.value = false }
+}
+const refreshRecords = () => Promise.all([store.fetchTasks(true), fetchAcquisitions(true)])
+const retryAcquisition = async (job: AcquisitionJob) => {
+  try { await request(`/api/acquisitions/${job.id}/retry`, {method:'POST'}); ElMessage.success('已提交允许恢复的目标'); await refreshRecords() }
+  catch (error) { ElMessage.error(error instanceof Error ? error.message : '重试补齐失败') }
+}
 const pageCount = computed(() => Math.max(1, Math.ceil(filteredTasks.value.length / taskPageSize.value)))
 const tasks = computed(() => filteredTasks.value.slice((page.value - 1) * taskPageSize.value, page.value * taskPageSize.value))
 const logs = computed(() => store.logs.filter(log => (level.value === 'all' || log.level === level.value) && (!keyword.value.trim() || `${log.module} ${log.message}`.toLowerCase().includes(keyword.value.trim().toLowerCase()))))
 const logPageCount = computed(() => Math.max(1, Math.ceil(logs.value.length / logPageSize.value)))
 const paginatedLogs = computed(() => logs.value.slice((logPage.value - 1) * logPageSize.value, logPage.value * logPageSize.value))
-const counts = computed(() => ({ converting: store.tasks.filter(item => item.status === 'converting').length, waiting: store.tasks.filter(item => item.status === 'waiting').length, failed: store.tasks.filter(item => item.status === 'failed').length }))
+const counts = computed(() => ({ converting: targetRecords.value.filter(item => item.status === 'converting').length, waiting: targetRecords.value.filter(item => item.status === 'waiting').length, failed: targetRecords.value.filter(item => item.status === 'failed').length }))
 
 onMounted(async () => {
   clock = setInterval(() => { now.value = Date.now() }, 1000)
-  await Promise.all([store.fetchTasks(), store.fetchLogs(200), store.fetchProfiles().finally(() => { profilesLoaded.value = true })])
-  timer = setInterval(() => { store.fetchTasks(true); if (view.value === 'logs') store.fetchLogs(200, true) }, 5000)
+  await Promise.all([store.fetchTasks(), store.fetchLogs(200), fetchAcquisitions(), store.fetchProfiles().finally(() => { profilesLoaded.value = true })])
+  if (unmounted) return
+  timer = setInterval(() => { refreshRecords(); if (view.value === 'logs') store.fetchLogs(200, true) }, 5000)
 })
-onUnmounted(() => { if (timer) clearInterval(timer); if (clock) clearInterval(clock) })
+onUnmounted(() => { unmounted = true; if (timer) clearInterval(timer); if (clock) clearInterval(clock) })
 watch(() => route.query.tab, tab => { view.value = tab === 'logs' ? 'logs' : 'records' })
-watch([view, status, keyword], () => { page.value = 1; logPage.value = 1 })
+watch([view, status, target, keyword], () => { page.value = 1; logPage.value = 1; selectedIds.value = [] })
 watch(pageCount, total => { if (page.value > total) page.value = total })
 watch(logPageCount, total => { if (logPage.value > total) logPage.value = total })
 watch(view, next => { router.replace({ path: '/tasks', query: next === 'logs' ? { tab: 'logs' } : {} }); keyword.value = ''; if (next === 'logs') store.fetchLogs(200) })
@@ -73,12 +145,12 @@ const deleteSelected = async () => {
 
 <template>
   <div class="operation-page product-page">
-    <header class="hero"><div><span>操作中心</span><h1>操作记录与运行日志</h1><p>集中查看转换任务与服务运行信息，记录保持精简、清晰且可追溯。</p></div><div class="summary"><i>转换中<b>{{ counts.converting }}</b></i><i>等待<b>{{ counts.waiting }}</b></i><i>失败<b>{{ counts.failed }}</b></i></div></header>
+    <header class="hero"><div><span>操作中心</span><h1>操作记录与运行日志</h1><p>集中查看本地入库、转换、Apple Music 处理与服务运行信息，记录保持精简、清晰且可追溯。</p></div><div class="summary"><i>处理中<b>{{ counts.converting }}</b></i><i>等待<b>{{ counts.waiting }}</b></i><i>失败<b>{{ counts.failed }}</b></i></div></header>
     <section class="shell"><nav class="tabs"><button :class="{ active: view === 'records' }" @click="view = 'records'">操作记录</button><button :class="{ active: view === 'logs' }" @click="view = 'logs'">运行日志</button></nav>
       <main>
-        <template v-if="view === 'records'"><header class="heading"><div><h2>全部操作</h2><p>显示转换与 Apple Music 交接状态，不显示文件路径和封面。</p></div><em>{{ filteredTasks.length }} 条记录</em></header>
-          <div class="filters"><el-input v-model="keyword" placeholder="搜索文件名或转换方案" clearable /><el-select v-model="status"><el-option label="全部状态" value="all" /><el-option label="等待" value="waiting" /><el-option label="转换中" value="converting" /><el-option label="成功" value="success" /><el-option label="失败" value="failed" /><el-option label="已取消" value="cancelled" /></el-select><el-button v-if="selectedIds.length" type="danger" plain :loading="actionLoading" @click="deleteSelected">删除 {{ selectedIds.length }} 条</el-button></div>
-          <div class="list" v-loading="store.tasksLoading"><article v-for="task in tasks" :key="task.id" class="row"><el-checkbox :model-value="selectedIds.includes(task.id)" :aria-label="`选择 ${fileName(task.source_file)}`" @change="toggle(task.id)" /><div class="main"><strong>{{ fileName(task.source_file) }}</strong><span>{{ profileName(task.profile_id) }}</span><div v-if="task.apple_music_upload && !task.apple_music_upload.deleted" class="handoff"><el-tag size="small" :type="task.apple_music_upload.state === 'cloud_completed' ? 'success' : 'info'">{{ uploadStateLabel(task.apple_music_upload.state) }}</el-tag><small>{{ uploadStageLabel(task.apple_music_upload.stage) }}{{ uploadSignatureProgress(task.apple_music_upload) }} {{ task.apple_music_upload.error }}</small><UploadProgress :upload="task.apple_music_upload" :now="now" :conversion-start="task.start_time" :conversion-end="task.end_time" /></div><div v-else-if="task.apple_music_status && !task.apple_music_upload?.deleted" class="handoff"><el-tag size="small" :type="appleMusicType(task.apple_music_status)" effect="light">{{ appleMusicLabel(task.apple_music_status) }}</el-tag><small v-if="task.apple_music_error">{{ task.apple_music_error }}</small></div></div><el-tag :type="taskType(task.status)" effect="light">{{ taskLabel(task.status) }}</el-tag><small v-if="task.status === 'converting'">{{ task.progress || 0 }}%</small><time>{{ dateTime(task.end_time || task.start_time) }}</time><div class="actions"><el-button v-if="task.status === 'success' && !task.apple_music_import_file && !task.apple_music_upload && task.output_file.toLowerCase().endsWith('.m4a') && task.apple_music_delivery_mode !== 'client_import'" type="primary" link @click="submitUpload(task)">提交独立上传</el-button><UploadActions v-if="task.apple_music_upload" :upload="task.apple_music_upload" :conversion-task-id="task.id" @changed="store.fetchTasks" /><el-button v-if="task.status === 'failed'" type="warning" link @click="retry(task.id)">重试</el-button><el-button v-if="task.apple_music_delivery_mode !== 'direct_upload' && ['failed', 'received'].includes(task.apple_music_status || '')" type="warning" link @click="retryAppleMusic(task.id, task.apple_music_status === 'received')">{{ task.apple_music_status === 'received' ? '再次交接' : '重试交接' }}</el-button><el-button v-if="['waiting', 'converting'].includes(task.status)" type="danger" link @click="cancel(task.id)">取消</el-button></div></article><el-empty v-if="!tasks.length && !store.tasksLoading" description="暂无匹配的操作记录" :image-size="76" /></div>
+        <template v-if="view === 'records'"><header class="heading"><div><h2>全部操作</h2><p>汇总本地与 Apple Music 处理，同次双库补齐合并显示。</p></div><em>{{ filteredTasks.length }} 条记录</em></header>
+          <div class="filters"><el-input v-model="keyword" placeholder="搜索曲目、歌手、文件名或转换方案" clearable /><el-select v-model="target" aria-label="处理目标"><el-option label="全部目标" value="all"/><el-option label="本地" value="local"/><el-option label="Apple Music" value="apple"/></el-select><el-select v-model="status" aria-label="处理状态"><el-option label="全部状态" value="all" /><el-option label="等待" value="waiting" /><el-option label="处理中" value="converting" /><el-option label="成功" value="success" /><el-option label="失败" value="failed" /><el-option label="已取消" value="cancelled" /><el-option label="待核对" value="requires_review"/><el-option label="待入库确认" value="awaiting_confirmation"/></el-select><el-button v-if="selectedIds.length" type="danger" plain :loading="actionLoading" @click="deleteSelected">删除 {{ selectedIds.length }} 条</el-button></div>
+          <el-alert v-if="acquisitionsError" :title="acquisitionsError" type="error" :closable="false" show-icon><el-button link @click="fetchAcquisitions()">重试加载</el-button></el-alert><div class="list" v-loading="store.tasksLoading || acquisitionsLoading"><template v-for="record in tasks" :key="record.id"><article v-if="record.task" class="row"><el-checkbox :model-value="selectedIds.includes(record.task.id)" :aria-label="`选择 ${fileName(record.task.source_file)}`" @change="toggle(record.task.id)" /><div class="main"><strong>{{ fileName(record.task.source_file) }}</strong><span>{{ profileName(record.task.profile_id) }} · {{ record.apple ? 'Apple Music' : '本地' }}</span><small v-if="record.task.error">{{ record.task.error }}</small><div v-if="record.task.apple_music_upload && !record.task.apple_music_upload.deleted" class="handoff"><el-tag size="small" :type="record.task.apple_music_upload.state === 'cloud_completed' ? 'success' : 'info'">{{ uploadStateLabel(record.task.apple_music_upload.state) }}</el-tag><small>{{ uploadStageLabel(record.task.apple_music_upload.stage) }}{{ uploadSignatureProgress(record.task.apple_music_upload) }} {{ record.task.apple_music_upload.error }}</small><UploadProgress :upload="record.task.apple_music_upload" :now="now" :conversion-start="record.task.start_time" :conversion-end="record.task.end_time" /></div><div v-else-if="record.task.apple_music_status && !record.task.apple_music_upload?.deleted" class="handoff"><el-tag size="small" :type="appleMusicType(record.task.apple_music_status)" effect="light">{{ appleMusicLabel(record.task.apple_music_status) }}</el-tag><small v-if="record.task.apple_music_error">{{ record.task.apple_music_error }}</small></div></div><el-tag :type="taskType(record.status)" effect="light">{{ taskLabel(record.status) }}</el-tag><small v-if="record.task.status === 'converting'">{{ record.task.progress || 0 }}%</small><time>{{ dateTime(record.task.end_time || record.task.start_time) }}</time><div class="actions"><el-button v-if="record.task.status === 'success' && !record.task.apple_music_import_file && !record.task.apple_music_upload && record.task.output_file.toLowerCase().endsWith('.m4a') && record.task.apple_music_delivery_mode !== 'client_import'" type="primary" link @click="submitUpload(record.task)">提交独立上传</el-button><UploadActions v-if="record.task.apple_music_upload" :upload="record.task.apple_music_upload" :conversion-task-id="record.task.id" @changed="refreshRecords" /><el-button v-if="record.task.status === 'failed'" type="warning" link @click="retry(record.task.id)">重试</el-button><el-button v-if="record.task.apple_music_delivery_mode !== 'direct_upload' && ['failed', 'received'].includes(record.task.apple_music_status || '')" type="warning" link @click="retryAppleMusic(record.task.id, record.task.apple_music_status === 'received')">{{ record.task.apple_music_status === 'received' ? '再次交接' : '重试交接' }}</el-button><el-button v-if="['waiting', 'converting'].includes(record.task.status)" type="danger" link @click="cancel(record.task.id)">取消</el-button></div></article><article v-else-if="record.job" class="row acquisition-row"><span/><div class="main"><strong>{{ record.title }}</strong><span>{{ record.subtitle }} · {{ record.local && record.apple ? '本地 / Apple Music' : record.local ? '本地' : 'Apple Music' }}</span><div v-if="record.local && target !== 'apple'" class="handoff"><el-tag size="small" :type="taskType(operationStatus([record.job.nas_status]))">本地：{{ jobStateLabel(record.job.nas_status) }}</el-tag></div><div v-if="record.apple && target !== 'local'" class="handoff"><el-tag size="small" :type="taskType(operationStatus([record.job.apple_upload?.state || record.job.apple_status]))">Apple Music：{{ record.job.apple_upload?.deleted ? '上传记录已隐藏' : jobStateLabel(record.job.apple_upload?.state || record.job.apple_status) }}</el-tag><UploadProgress v-if="record.job.apple_upload && !record.job.apple_upload.deleted" :upload="record.job.apple_upload" :now="now" :preparation-start="record.job.created_at" /></div><small v-if="record.job.error || record.job.apple_upload?.error">{{ record.job.error || record.job.apple_upload?.error }}</small></div><el-tag :type="taskType(record.status)">{{ taskLabel(record.status) }}</el-tag><span/><time>{{ dateTime(record.time) }}</time><div class="actions"><UploadActions v-if="record.job.apple_upload && target !== 'local'" :upload="record.job.apple_upload" @changed="refreshRecords"/><el-button v-if="['failed','partial'].includes(record.job.status) && (!record.job.apple_upload || record.job.nas_status === 'failed')" type="warning" link @click="retryAcquisition(record.job)">重试补齐</el-button></div></article></template><el-empty v-if="!tasks.length && !store.tasksLoading && !acquisitionsLoading" description="暂无匹配的操作记录" :image-size="76" /></div>
           <TablePagination v-if="filteredTasks.length > taskPageSize" v-model:current-page="page" v-model:page-size="taskPageSize" :total="filteredTasks.length" :page-sizes="[100]" /></template>
         <template v-else><header class="heading"><div><h2>运行日志</h2><p>显示服务运行摘要，不再提供单条日志的检测详情面板。</p></div><em>每 5 秒更新</em></header><div class="filters"><el-input v-model="keyword" placeholder="搜索模块或日志内容" clearable /><el-select v-model="level"><el-option label="全部等级" value="all" /><el-option label="信息" value="INFO" /><el-option label="警告" value="WARNING" /><el-option label="错误" value="ERROR" /><el-option label="调试" value="DEBUG" /></el-select><el-button @click="store.fetchLogs(200)">刷新</el-button></div><div class="list logs" v-loading="store.logsLoading"><article v-for="log in paginatedLogs" :key="`${log.timestamp}-${log.module}-${log.message}`" class="row"><time>{{ dateTime(log.timestamp) }}</time><el-tag :type="logType(log.level)" effect="light">{{ log.level }}</el-tag><span>{{ log.module }}</span><p>{{ log.message }}</p></article><el-empty v-if="!logs.length && !store.logsLoading" description="暂无运行日志" :image-size="76" /></div><TablePagination v-if="logs.length > logPageSize" v-model:current-page="logPage" v-model:page-size="logPageSize" :total="logs.length" :page-sizes="[200]" /></template>
       </main>
@@ -87,7 +159,7 @@ const deleteSelected = async () => {
 </template>
 
 <style scoped>
-.operation-page{padding-bottom:32px}.hero{display:flex;justify-content:space-between;gap:28px;padding:30px 34px;margin-bottom:16px;border:1px solid #ece8fb;border-radius:24px;background:linear-gradient(120deg,#fff 40%,#f7f3ff)}.hero>div>span{display:inline-flex;padding:5px 10px;border-radius:99px;background:#f0e9ff;color:#8e67ea;font-size:12px;font-weight:700}.hero h1{margin:10px 0 8px;color:#202b3e;font-size:30px}.hero p{margin:0;color:#8390a6}.summary{display:grid;grid-template-columns:repeat(3,minmax(84px,1fr));gap:10px;align-self:center}.summary i{display:grid;gap:4px;padding:13px 16px;border:1px solid #eeeaf7;border-radius:16px;background:#fff;color:#8d97a9;font-size:12px;font-style:normal}.summary b{color:#2c3850;font-size:21px}.shell{display:grid;grid-template-columns:220px minmax(0,1fr);overflow:hidden;border:1px solid #ecebf4;border-radius:22px;background:#fff}.tabs{display:flex;flex-direction:column;gap:8px;padding:18px 14px;border-right:1px solid #eeeef5;background:#fcfbff}.tabs button{padding:13px 16px;border:0;border-radius:12px;background:transparent;color:#68758b;text-align:left;font-weight:700;cursor:pointer}.tabs button.active{background:#eee7ff;color:#7a54dc}main{min-width:0;padding:24px}.heading{display:flex;justify-content:space-between;gap:18px;align-items:start;margin-bottom:18px}.heading h2{margin:0 0 6px;color:#253149;font-size:22px}.heading p{margin:0;color:#929caf;font-size:13px}.heading em{padding:7px 10px;border-radius:8px;background:#f3efff;color:#8b65e7;font-size:12px;font-style:normal;white-space:nowrap}.filters{display:flex;gap:10px;align-items:center;margin-bottom:14px}.filters .el-input{max-width:300px}.filters .el-select{width:130px}.list{overflow:hidden;border:1px solid #efedf5;border-radius:16px}.row{display:grid;grid-template-columns:30px minmax(190px,1fr) 88px 52px 170px 56px;gap:12px;align-items:center;min-height:68px;padding:10px 16px;border-bottom:1px solid #f0eef5}.row:last-child{border-bottom:0}.main{display:grid;min-width:0;gap:5px}.main strong,.main span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.main strong{color:#34415a;font-size:14px}.main span{color:#8d98aa;font-size:12px}.row time{color:#7d899e;font-size:12px;white-space:nowrap}.row small{color:#9a72eb;font-size:12px}.actions{text-align:right}.logs .row{grid-template-columns:minmax(142px,170px) 84px minmax(150px,220px) minmax(0,1fr)}.logs p,.logs .row>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.logs p{margin:0;color:#536078;font-size:13px;line-height:1.5}.logs .row>span{color:#7e63bb;font-size:12px}.pager{display:flex;justify-content:flex-end;gap:12px;align-items:center;padding-top:16px;color:#7f8aa0;font-size:13px}@media(max-width:760px){.operation-page{padding-bottom:100px}.hero{display:block;padding:22px 20px;border-radius:18px}.hero h1{font-size:24px}.hero p{font-size:13px;line-height:1.6}.summary{margin-top:18px}.shell{display:block;border-radius:18px}.tabs{flex-direction:row;padding:10px;border-right:0;border-bottom:1px solid #eeeef5}.tabs button{flex:1;padding:10px;text-align:center}main{padding:20px 14px}.heading h2{font-size:19px}.heading p{line-height:1.5}.filters{display:grid;grid-template-columns:minmax(0,1fr) 108px}.filters .el-input{max-width:none}.filters .el-select{width:100%}.filters .el-button{grid-column:1/-1;justify-self:start}.row{grid-template-columns:24px minmax(0,1fr) auto;gap:8px 10px;min-height:0;padding:16px 14px}.main{grid-column:2/-1}.row>.el-tag{grid-column:2;justify-self:start}.row time{grid-column:3;grid-row:3;align-self:end;font-size:11px}.row small{grid-column:2}.actions{grid-column:3;grid-row:2}.logs .row{grid-template-columns:84px minmax(0,1fr);gap:8px 12px}.logs .row time{grid-column:1;grid-row:1;font-size:11px}.logs .row>.el-tag{grid-column:2;justify-self:start}.logs .row>span{grid-column:1;grid-row:2;max-width:84px}.logs p{grid-column:2;grid-row:2;min-width:0;white-space:normal;word-break:break-word}.pager{justify-content:center}}
+.operation-page{padding-bottom:32px}.hero{display:flex;justify-content:space-between;gap:28px;padding:30px 34px;margin-bottom:16px;border:1px solid #ece8fb;border-radius:24px;background:linear-gradient(120deg,#fff 40%,#f7f3ff)}.hero>div>span{display:inline-flex;padding:5px 10px;border-radius:99px;background:#f0e9ff;color:#8e67ea;font-size:12px;font-weight:700}.hero h1{margin:10px 0 8px;color:#202b3e;font-size:30px}.hero p{margin:0;color:#8390a6}.summary{display:grid;grid-template-columns:repeat(3,minmax(84px,1fr));gap:10px;align-self:center}.summary i{display:grid;gap:4px;padding:13px 16px;border:1px solid #eeeaf7;border-radius:16px;background:#fff;color:#8d97a9;font-size:12px;font-style:normal}.summary b{color:#2c3850;font-size:21px}.shell{display:grid;grid-template-columns:220px minmax(0,1fr);overflow:hidden;border:1px solid #ecebf4;border-radius:22px;background:#fff}.tabs{display:flex;flex-direction:column;gap:8px;padding:18px 14px;border-right:1px solid #eeeef5;background:#fcfbff}.tabs button{padding:13px 16px;border:0;border-radius:12px;background:transparent;color:#68758b;text-align:left;font-weight:700;cursor:pointer}.tabs button.active{background:#eee7ff;color:#7a54dc}main{min-width:0;padding:24px}.heading{display:flex;justify-content:space-between;gap:18px;align-items:start;margin-bottom:18px}.heading h2{margin:0 0 6px;color:#253149;font-size:22px}.heading p{margin:0;color:#929caf;font-size:13px}.heading em{padding:7px 10px;border-radius:8px;background:#f3efff;color:#8b65e7;font-size:12px;font-style:normal;white-space:nowrap}.filters{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:14px}.filters .el-input{max-width:300px}.filters .el-select{width:130px}.list{overflow:hidden;border:1px solid #efedf5;border-radius:16px}.row{display:grid;grid-template-columns:30px minmax(190px,1fr) 88px 52px 170px 56px;gap:12px;align-items:center;min-height:68px;padding:10px 16px;border-bottom:1px solid #f0eef5}.row:last-child{border-bottom:0}.main{display:grid;min-width:0;gap:5px}.main strong,.main span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.main strong{color:#34415a;font-size:14px}.main span{color:#8d98aa;font-size:12px}.row time{color:#7d899e;font-size:12px;white-space:nowrap}.row small{color:#9a72eb;font-size:12px}.actions{text-align:right}.logs .row{grid-template-columns:minmax(142px,170px) 84px minmax(150px,220px) minmax(0,1fr)}.logs p,.logs .row>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.logs p{margin:0;color:#536078;font-size:13px;line-height:1.5}.logs .row>span{color:#7e63bb;font-size:12px}.pager{display:flex;justify-content:flex-end;gap:12px;align-items:center;padding-top:16px;color:#7f8aa0;font-size:13px}@media(max-width:760px){.operation-page{padding-bottom:100px}.hero{display:block;padding:22px 20px;border-radius:18px}.hero h1{font-size:24px}.hero p{font-size:13px;line-height:1.6}.summary{margin-top:18px}.shell{display:block;border-radius:18px}.tabs{flex-direction:row;padding:10px;border-right:0;border-bottom:1px solid #eeeef5}.tabs button{flex:1;padding:10px;text-align:center}main{padding:20px 14px}.heading h2{font-size:19px}.heading p{line-height:1.5}.filters{display:grid;grid-template-columns:minmax(0,1fr) 108px}.filters .el-input{max-width:none}.filters .el-select{width:100%}.filters .el-button{grid-column:1/-1;justify-self:start}.row{grid-template-columns:24px minmax(0,1fr) auto;gap:8px 10px;min-height:0;padding:16px 14px}.main{grid-column:2/-1}.row>.el-tag{grid-column:2;justify-self:start}.row time{grid-column:3;grid-row:3;align-self:end;font-size:11px}.row small{grid-column:2}.actions{grid-column:3;grid-row:2}.logs .row{grid-template-columns:84px minmax(0,1fr);gap:8px 12px}.logs .row time{grid-column:1;grid-row:1;font-size:11px}.logs .row>.el-tag{grid-column:2;justify-self:start}.logs .row>span{grid-column:1;grid-row:2;max-width:84px}.logs p{grid-column:2;grid-row:2;min-width:0;white-space:normal;word-break:break-word}.pager{justify-content:center}}
 @media (max-width:760px) { .logs .row { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:9px 12px; padding:16px 14px; }.logs .row time { grid-column:1; grid-row:1; }.logs .row > .el-tag { grid-column:2; grid-row:1; justify-self:end; }.logs .row > span { grid-column:1 / -1; grid-row:2; max-width:none; overflow:visible; white-space:normal; }.logs .row p { grid-column:1 / -1; grid-row:3; min-width:0; white-space:normal; word-break:break-word; } }
-.handoff{display:flex;align-items:center;gap:6px;min-width:0}.handoff small{overflow:hidden;color:#cf5a5a;text-overflow:ellipsis;white-space:nowrap}.actions{display:grid;justify-items:end}
+.handoff{display:flex;flex-wrap:wrap;align-items:center;gap:6px;min-width:0}.handoff small{overflow:hidden;color:#cf5a5a;text-overflow:ellipsis;white-space:nowrap}.actions{display:grid;justify-items:end}
 </style>

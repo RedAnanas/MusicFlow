@@ -86,6 +86,8 @@ docker compose restart musicflow
 
 ## 本地验证
 
+操作记录的五秒刷新批量读取上传摘要，保留当前阶段进度、等待倒计时、来源关联和操作限制。展开“查看每个阶段的时间与耗时”后才读取完整时间线；展开期间随任务状态更新，收起后停止读取明细。旧版任务列表接口默认仍返回完整数据，摘要通过 `GET /api/tasks/?summary=true` 请求；单条上传详情接口保持不变。
+
 后端测试、上传器回归、Python 编译、前端生产构建及 Git 空白检查均应通过。实际 Compose 配置及容器测试需要 Docker CLI；缺少时必须记录未验证。
 
 本地预览默认使用 `scripts/musicflow.ps1 start`。若 3000 端口被其他程序占用，可使用 `scripts/musicflow.ps1 start -FrontendPort 3001`；停止和状态检查使用相同端口参数。不得停止占用端口的其他程序。

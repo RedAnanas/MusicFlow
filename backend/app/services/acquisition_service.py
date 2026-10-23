@@ -532,6 +532,7 @@ class AcquisitionService:
                 job["status"] = "awaiting_confirmation"
             else:
                 job["status"] = "processing"
+        job["conversion_task_ids"] = [item["task_id"] for item in routed[1]["outputs"] if item.get("task_id")] if routed else []
         job["routing_managed"] = bool(routed)
         return job
 

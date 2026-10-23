@@ -1,9 +1,41 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import axios from 'axios'
 import type { AppleMusicUpload } from '../types'
 import { uploadStageLabel } from '../utils/appleMusicUpload'
 
 const props = defineProps<{ upload: AppleMusicUpload; now: number; conversionStart?: string; conversionEnd?: string; preparationStart?: string }>()
+const detailsOpen = ref(false)
+const detailsLoading = ref(false)
+const detailsError = ref('')
+const details = ref<AppleMusicUpload | null>(null)
+let detailsRequest = 0
+const timelineUpload = computed(() => props.upload.timeline !== undefined ? props.upload : details.value)
+
+async function refreshDetails() {
+  const requestId = ++detailsRequest
+  const id = props.upload.id
+  detailsLoading.value = true
+  detailsError.value = ''
+  try {
+    const response = await axios.get<AppleMusicUpload>(`/api/apple-music/uploads/${encodeURIComponent(id)}`)
+    if (requestId === detailsRequest && id === props.upload.id) details.value = response.data
+  } catch {
+    if (requestId === detailsRequest && id === props.upload.id) detailsError.value = '阶段明细读取失败，请收起后重新展开'
+  } finally {
+    if (requestId === detailsRequest) detailsLoading.value = false
+  }
+}
+
+async function toggleDetails(event: Event) {
+  detailsOpen.value = (event.target as HTMLDetailsElement).open
+  if (detailsOpen.value && props.upload.timeline === undefined) await refreshDetails()
+}
+
+watch(() => [props.upload.id, props.upload.updated_at], () => {
+  if (details.value?.id !== props.upload.id) details.value = null
+  if (detailsOpen.value && props.upload.timeline === undefined) void refreshDetails()
+})
 const receivedAt = ref(Date.now())
 watch(() => props.upload, () => { receivedAt.value = Date.now() })
 const serverNow = computed(() => (props.upload.server_time ?? props.now / 1000) + (props.now - receivedAt.value) / 1000)
@@ -13,7 +45,7 @@ const duration = (seconds: number) => {
 }
 const stamp = (seconds?: number | null) => seconds == null ? '进行中' : new Date(seconds * 1000).toLocaleString('zh-CN', { hour12: false })
 const elapsed = (start: number, end?: number | null) => duration((end ?? serverNow.value) - start)
-const current = computed(() => props.upload.timeline?.find(item => item.ended_at == null))
+const current = computed(() => props.upload.current_timing ?? props.upload.timeline?.find(item => item.ended_at == null))
 const totalEnd = computed(() => props.upload.finished_at ?? serverNow.value)
 const conversionSeconds = computed(() => props.conversionStart && props.conversionEnd ? (Date.parse(props.conversionEnd) - Date.parse(props.conversionStart)) / 1000 : null)
 const reused = computed(() => {
@@ -33,8 +65,10 @@ const reused = computed(() => {
       <small v-if="current.stage === 'audio'">字节传输进度；传输后仍需等待 Apple 确认。</small>
       <small v-if="current.stage !== 'queued' && serverNow - upload.updated_at > 45">执行器近期未上报，当前进度可能已停滞。</small>
     </div>
-    <details>
+    <details @toggle="toggleDetails">
       <summary>查看每个阶段的时间与耗时</summary>
+      <p v-if="detailsLoading">正在读取阶段明细…</p>
+      <p v-else-if="detailsError">{{ detailsError }}</p>
       <p v-if="reused">此歌曲复用了已有上传记录，以下上传时间线属于原任务。</p>
       <p v-if="preparationStart && !reused">补齐任务创建：{{ new Date(preparationStart).toLocaleString('zh-CN', { hour12: false }) }}<br>
         上传前准备（含下载及转换）：{{ duration(upload.created_at - Date.parse(preparationStart) / 1000) }}<br>
@@ -43,10 +77,10 @@ const reused = computed(() => {
         转换耗时：{{ conversionSeconds == null ? '未记录' : duration(conversionSeconds) }}<br>
         <span v-if="!reused">从本地处理开始至{{ upload.finished_at ? '上传结束' : '现在' }}：{{ duration(totalEnd - Date.parse(conversionStart) / 1000) }}</span></p>
       <p>上传创建：{{ stamp(upload.created_at) }}<br>上传结束：{{ stamp(upload.finished_at) }}</p>
-      <p v-if="!upload.timeline?.length">此任务未记录分阶段时间，无法还原历史明细。</p>
-      <p v-else-if="upload.timeline[0]!.started_at > upload.created_at">此任务部分阶段未记录，仅显示已有明细。</p>
-      <ol v-if="upload.timeline?.length">
-        <li v-for="(item, index) in upload.timeline" :key="index">
+      <p v-if="timelineUpload && !timelineUpload.timeline?.length">此任务未记录分阶段时间，无法还原历史明细。</p>
+      <p v-else-if="timelineUpload?.timeline?.[0] && timelineUpload.timeline[0].started_at > upload.created_at">此任务部分阶段未记录，仅显示已有明细。</p>
+      <ol v-if="timelineUpload?.timeline?.length">
+        <li v-for="(item, index) in timelineUpload.timeline" :key="index">
           <strong>{{ uploadStageLabel(item.stage) || '处理阶段' }}</strong> · {{ elapsed(item.started_at, item.ended_at) }}
           <small>{{ stamp(item.started_at) }} → {{ stamp(item.ended_at) }}</small>
           <small v-if="item.progress != null">最近进度 {{ item.progress.toFixed(1) }}%</small>

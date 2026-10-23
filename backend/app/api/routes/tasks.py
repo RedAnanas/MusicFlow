@@ -1,8 +1,11 @@
 import logging
 import uuid
 import json
+import os
 import sqlite3
+import tempfile
 from pathlib import Path
+from threading import Lock
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, field_serializer
 from typing import List, Optional
@@ -18,6 +21,7 @@ tasks_cache: dict = {}
 
 # 任务持久化文件路径
 TASKS_FILE = Path(settings.CONFIG_DIR) / "tasks.json"
+_tasks_file_lock = Lock()
 
 
 class TaskStatus(str, Enum):
@@ -69,27 +73,35 @@ def register_direct_upload(task):
     return apple_music_upload_service.enqueue(task.id, task.source_file, task.output_file, task.apple_music_account_scope)
 
 
-def refresh_direct_uploads():
+def refresh_direct_uploads(tasks=None, summary=False):
     from app.services.apple_music_upload import apple_music_upload_service
 
-    for task in tasks_cache.values():
-        if task.apple_music_delivery_mode != "direct_upload" or task.status != TaskStatus.SUCCESS:
-            continue
+    tasks = [task for task in (tasks_cache.values() if tasks is None else tasks)
+             if task.apple_music_delivery_mode == "direct_upload" and task.status == TaskStatus.SUCCESS]
+    try:
+        uploads = apple_music_upload_service.for_tasks([task.id for task in tasks], summary=summary)
+    except (ValueError, OSError, sqlite3.Error):
+        for task in tasks:
+            task.apple_music_error = "上传队列暂不可用或成品校验失败，转换成品已保留"
+        return
+    for task in tasks:
         try:
-            task.apple_music_upload = apple_music_upload_service.for_task(task.id)
+            task.apple_music_upload = uploads.get(task.id)
             if task.apple_music_upload is None and task.apple_music_status == "delivery_pending":
                 task.apple_music_upload = register_direct_upload(task)
+                if summary:
+                    task.apple_music_upload = apple_music_upload_service.for_tasks([task.id], summary=True)[task.id]
                 task.apple_music_error = None
         except (ValueError, OSError, sqlite3.Error):
             task.apple_music_error = "上传队列暂不可用或成品校验失败，转换成品已保留"
 
 
-def refresh_apple_music_statuses():
+def refresh_apple_music_statuses(tasks=None):
     """刷新已交接任务的本地接收状态，不检查 Apple 云端上传状态。"""
     from app.services.apple_music_handoff import apple_music_handoff_service
 
     changed = False
-    for task in tasks_cache.values():
+    for task in (tasks_cache.values() if tasks is None else tasks):
         if task.apple_music_delivery_mode == "direct_upload":
             continue
         if task.apple_music_status != "waiting" or not task.apple_music_import_file:
@@ -132,24 +144,34 @@ def load_tasks():
 def save_tasks():
     """保存任务到文件"""
     try:
-        # 确保目录存在
-        TASKS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with _tasks_file_lock:
+            TASKS_FILE.parent.mkdir(parents=True, exist_ok=True)
 
-        # 转换为可序列化的格式
-        data = {}
-        for task_id, task in tasks_cache.items():
-            task_dict = task.dict()
-            # 转换 datetime 为字符串
-            if task_dict.get('start_time'):
-                task_dict['start_time'] = task_dict['start_time'].astimezone(timezone.utc).isoformat()
-            if task_dict.get('end_time'):
-                task_dict['end_time'] = task_dict['end_time'].astimezone(timezone.utc).isoformat()
-            data[task_id] = task_dict
+            data = {}
+            for task_id, task in list(tasks_cache.items()):
+                task_dict = task.dict()
+                # 转换 datetime 为字符串
+                if task_dict.get('start_time'):
+                    task_dict['start_time'] = task_dict['start_time'].astimezone(timezone.utc).isoformat()
+                if task_dict.get('end_time'):
+                    task_dict['end_time'] = task_dict['end_time'].astimezone(timezone.utc).isoformat()
+                data[task_id] = task_dict
 
-        with open(TASKS_FILE, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
+            temp_path = None
+            try:
+                # 同目录完整落盘后再替换，失败时保留原有任务文件。
+                with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=TASKS_FILE.parent,
+                                                 prefix=TASKS_FILE.name + '.', suffix='.tmp', delete=False) as f:
+                    temp_path = Path(f.name)
+                    json.dump(data, f, indent=2, ensure_ascii=False)
+                    f.flush()
+                    os.fsync(f.fileno())
+                temp_path.replace(TASKS_FILE)
+            finally:
+                if temp_path is not None:
+                    temp_path.unlink(missing_ok=True)
 
-        logger.info(f"Saved {len(tasks_cache)} tasks to file")
+            logger.info(f"Saved {len(data)} tasks to file")
     except Exception as e:
         logger.error(f"Error saving tasks: {e}")
 
@@ -179,11 +201,10 @@ def update_task_progress(task_id: str, progress: float, status: str = None, appl
 @router.get("/", response_model=List[TaskResponse])
 async def get_tasks(
     status: Optional[TaskStatus] = Query(None, description="状态筛选"),
-    limit: int = Query(100, ge=1, le=1000, description="返回数量限制")
+    limit: int = Query(100, ge=1, le=1000, description="返回数量限制"),
+    summary: bool = False,
 ):
     """获取所有任务"""
-    refresh_apple_music_statuses()
-    refresh_direct_uploads()
     tasks = list(tasks_cache.values())
 
     # 状态筛选
@@ -197,7 +218,10 @@ async def get_tasks(
     )
 
     # 限制返回数量
-    return tasks[:limit]
+    tasks = tasks[:limit]
+    refresh_apple_music_statuses(tasks)
+    refresh_direct_uploads(tasks, summary=summary)
+    return tasks
 
 
 @router.get("/{task_id}", response_model=TaskResponse)
@@ -206,7 +230,7 @@ async def get_task(task_id: str):
     if task_id not in tasks_cache:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    refresh_direct_uploads()
+    refresh_direct_uploads([tasks_cache[task_id]])
     return tasks_cache[task_id]
 
 

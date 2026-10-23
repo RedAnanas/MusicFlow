@@ -55,6 +55,9 @@ class FileIndexService:
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS idx_file_index_scope_source ON file_index(scope, source_path)"
             )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_file_index_path ON file_index(path)"
+            )
 
     def has_snapshot(self, scope: str) -> bool:
         self.initialize()
@@ -65,13 +68,19 @@ class FileIndexService:
             ).fetchone() is not None
 
     def load(self, scope: str) -> list[dict]:
+        return self.load_snapshot(scope)[0]
+
+    def load_snapshot(self, scope: str) -> tuple[list[dict], int]:
+        """在同一读事务中取得曲目及其索引版本。"""
         self.initialize()
         with self._connect() as connection:
+            connection.execute("BEGIN")
             rows = connection.execute(
                 "SELECT data_json FROM file_index WHERE scope = ? ORDER BY path",
                 (scope,),
             ).fetchall()
-        return [json.loads(row["data_json"]) for row in rows]
+            version = self._version_in_connection(connection, scope)
+        return [json.loads(row["data_json"]) for row in rows], version
 
     def get_version(self, scope: str) -> int:
         self.initialize()
@@ -88,6 +97,14 @@ class FileIndexService:
         sources: Iterable[str],
         reader: Callable[[Path], Optional[dict]],
     ) -> list[dict]:
+        return self.refresh_snapshot(scope, sources, reader)[0]
+
+    def refresh_snapshot(
+        self,
+        scope: str,
+        sources: Iterable[str],
+        reader: Callable[[Path], Optional[dict]],
+    ) -> tuple[list[dict], int]:
         """只重读新增或属性变化的文件；不可访问目录保留旧记录。"""
         self.initialize()
         normalized_sources = list(dict.fromkeys(str(Path(source).expanduser()) for source in sources))
@@ -199,7 +216,7 @@ class FileIndexService:
                 (scope, next_version, now, "；".join(errors[:10]) or None),
             )
 
-        return self.load(scope)
+        return self.load_snapshot(scope)
 
     def upsert(self, scope: str, source_path: str, data: dict) -> None:
         path = Path(data["path"])

@@ -153,7 +153,7 @@ export const useAppStore = defineStore('app', () => {
   async function fetchTasks(silent: boolean = false) {
     if (!silent) tasksLoading.value = true
     try {
-      const response = await axios.get('/api/tasks/', { params: { limit: 1000 } })
+      const response = await axios.get('/api/tasks/', { params: { limit: 1000, summary: true } })
       tasks.value = response.data
     } catch (error) {
       console.error('Failed to fetch tasks:', error)

@@ -1,5 +1,6 @@
 import asyncio
 from pathlib import Path
+from threading import Barrier
 
 import pytest
 from fastapi import HTTPException
@@ -86,3 +87,64 @@ def test_incremental_merge_route_invalidates_caches_and_rejects_stale_records(mo
     with pytest.raises(HTTPException) as error:
         asyncio.run(library.merge_apple_incremental_entries(first["id"], request))
     assert error.value.status_code == 409
+
+
+def test_对账版本在翻页时复用并在索引或匹配变化后失效(monkeypatch, tmp_path):
+    service = DualLibraryService(tmp_path / 'revision.db')
+    service.import_snapshot('library.csv', ('Track name,Artist name,Album,Playlist name,Type,ISRC,Apple - id\n歌曲,歌手,专辑,资料库,Apple Music,,123\n').encode())
+    monkeypatch.setattr(library, 'dual_library_service', service)
+    monkeypatch.setattr(library, 'reconciliation_cache', None)
+    monkeypatch.setattr(library.media_library_service, 'get_sources', lambda: [{}])
+    monkeypatch.setattr(library.media_library_service, 'load_snapshot', lambda _refresh: ([], 1))
+
+    def reconcile(expected_revision=None):
+        return asyncio.run(library.get_library_reconciliation(status=None, search=None, refresh_local=False,
+                                                               offset=0, limit=100, expected_revision=expected_revision))
+
+    first = reconcile()
+    assert reconcile()['revision'] == first['revision']
+    monkeypatch.setattr(library.media_library_service, 'load_snapshot', lambda _refresh: ([], 2))
+    second = reconcile()
+    assert second['revision'] != first['revision']
+    with pytest.raises(HTTPException) as error:
+        reconcile(first['revision'])
+    assert error.value.status_code == 409
+    library.invalidate_reconciliation_cache()
+    assert reconcile()['revision'] != second['revision']
+
+
+def test_并发人工确认同一本地候选仅一个成功且另一个返回冲突(monkeypatch, tmp_path):
+    service = DualLibraryService(tmp_path / 'concurrent.db')
+    service.import_snapshot('library.csv', (
+        'Track name,Artist name,Album,Playlist name,Type,ISRC,Apple - id\n'
+        '云端歌曲甲,歌手甲,专辑甲,资料库,Apple Music,,1001\n'
+        '云端歌曲乙,歌手乙,专辑乙,资料库,Apple Music,,1002\n'
+    ).encode())
+    tracks = [{'id': 'local', 'path': '/fixture/local.flac', 'filename': 'local.flac',
+               'title': '独立本地录音', 'artist': '本地歌手', 'album': '本地专辑'}]
+    keys = [entry['apple']['track_key'] for entry in service.reconcile(tracks)['entries'] if entry['status'] == 'apple_only']
+    assert len(keys) == 2
+    monkeypatch.setattr(library, 'dual_library_service', service)
+    monkeypatch.setattr(library.media_library_service, 'load_tracks', lambda _refresh: tracks)
+    monkeypatch.setattr(library, 'reconciliation_cache', None)
+    original_save = service.save_match_decision
+    barrier = Barrier(2)
+
+    def simultaneous_save(*args, **kwargs):
+        barrier.wait(timeout=5)
+        return original_save(*args, **kwargs)
+
+    monkeypatch.setattr(service, 'save_match_decision', simultaneous_save)
+
+    async def run():
+        return await asyncio.gather(*[
+            library.save_library_match(library.MatchDecisionRequest(local_file_id='local', apple_track_key=key,
+                                                                    decision='confirmed', require_only_unmatched=True))
+            for key in keys
+        ], return_exceptions=True)
+
+    outcomes = asyncio.run(run())
+    assert sum(isinstance(outcome, dict) and outcome.get('status') == 'success' for outcome in outcomes) == 1
+    conflicts = [outcome for outcome in outcomes if isinstance(outcome, HTTPException)]
+    assert len(conflicts) == 1 and conflicts[0].status_code == 409
+    assert service.reconcile(tracks)['summary']['both'] == 1

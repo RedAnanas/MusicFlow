@@ -1,5 +1,9 @@
 import asyncio
+import json
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
+from pathlib import Path
+from threading import Event
 
 import pytest
 from fastapi import HTTPException
@@ -47,6 +51,28 @@ def test_get_tasks_returns_newest_records_first():
     result = asyncio.run(tasks_api.get_tasks(status=None, limit=3))
 
     assert [task.id for task in result] == ["new", "middle", "old"]
+
+
+def test_任务列表只刷新筛选并限制后的上传记录而详情只刷新当前任务(monkeypatch):
+    from app.services.apple_music_upload import apple_music_upload_service
+
+    now = datetime.now()
+    for index in range(3):
+        task = make_task(str(index), tasks_api.TaskStatus.SUCCESS, now + timedelta(seconds=index))
+        task.apple_music_delivery_mode = 'direct_upload'
+        tasks_api.tasks_cache[task.id] = task
+    refreshed = []
+
+    def for_tasks(task_ids, summary=False):
+        refreshed.append((list(task_ids), summary))
+        return {}
+
+    monkeypatch.setattr(apple_music_upload_service, 'for_tasks', for_tasks)
+    result = asyncio.run(tasks_api.get_tasks(status=tasks_api.TaskStatus.SUCCESS, limit=1, summary=True))
+    assert [task.id for task in result] == ['2']
+    assert refreshed == [(['2'], True)]
+    asyncio.run(tasks_api.get_task('0'))
+    assert refreshed[-1] == (['0'], False)
 
 
 def test_get_tasks_marks_missing_import_file_as_received(monkeypatch):
@@ -269,3 +295,77 @@ def test_已经带时区的任务不重复偏移():
     start = datetime.fromisoformat(payload['start_time'])
     finish = datetime(2026,10,17,13,44,50,tzinfo=timezone(timedelta(hours=8)))
     assert (finish-start).total_seconds() == 16*60+37
+
+
+@pytest.mark.parametrize("failure", ["write", "replace"])
+def test_任务保存失败保留原文件并清理临时文件(monkeypatch, tmp_path, caplog, failure):
+    tasks_file = tmp_path / "tasks.json"
+    original = {"old": make_task("old", tasks_api.TaskStatus.SUCCESS, None).model_dump(mode="json")}
+    tasks_file.write_text(json.dumps(original), encoding="utf-8")
+    tasks_api.tasks_cache["new"] = make_task("new", tasks_api.TaskStatus.SUCCESS, None)
+    monkeypatch.setattr(tasks_api, "TASKS_FILE", tasks_file)
+
+    def fail_write(_data, output, **_kwargs):
+        output.write('{"partial":')
+        raise OSError("模拟写入失败")
+
+    def fail_replace(_source, _target):
+        raise OSError("模拟替换失败")
+
+    if failure == "write":
+        monkeypatch.setattr(tasks_api.json, "dump", fail_write)
+    else:
+        monkeypatch.setattr(Path, "replace", fail_replace)
+
+    tasks_api.save_tasks()
+
+    assert json.loads(tasks_file.read_text(encoding="utf-8")) == original
+    assert list(tmp_path.iterdir()) == [tasks_file]
+    assert "Error saving tasks" in caplog.text
+
+
+def test_并发保存串行写入且原文件在替换前保持完整(monkeypatch, tmp_path):
+    tasks_file = tmp_path / "tasks.json"
+    tasks_file.write_text("{}", encoding="utf-8")
+    task = make_task("concurrent", tasks_api.TaskStatus.SUCCESS, datetime.now())
+    tasks_api.tasks_cache[task.id] = task
+    monkeypatch.setattr(tasks_api, "TASKS_FILE", tasks_file)
+    first_entered, release_first, second_started, second_entered = (Event() for _ in range(4))
+    original_dump = json.dump
+
+    def delayed_dump(data, output, **kwargs):
+        if not first_entered.is_set():
+            output.write('{"partial":')
+            first_entered.set()
+            assert release_first.wait(5), "首个写入未被释放"
+            output.seek(0)
+            output.truncate()
+        else:
+            second_entered.set()
+        original_dump(data, output, **kwargs)
+
+    def second_save():
+        second_started.set()
+        tasks_api.save_tasks()
+
+    monkeypatch.setattr(tasks_api.json, "dump", delayed_dump)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(tasks_api.save_tasks)
+        try:
+            assert first_entered.wait(5)
+            second = executor.submit(second_save)
+            assert second_started.wait(5)
+            assert not second_entered.wait(0.1), "两个保存操作同时进入写入阶段"
+            assert json.loads(tasks_file.read_text(encoding="utf-8")) == {}
+        finally:
+            release_first.set()
+        first.result(timeout=5)
+        second.result(timeout=5)
+
+    assert second_entered.is_set()
+    saved = json.loads(tasks_file.read_text(encoding="utf-8"))
+    assert saved[task.id] == task.model_dump(mode="json")
+    tasks_api.tasks_cache.clear()
+    tasks_api.load_tasks()
+    assert tasks_api.tasks_cache[task.id].start_time.timestamp() == task.start_time.timestamp()
+    assert list(tmp_path.iterdir()) == [tasks_file]

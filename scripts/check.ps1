@@ -21,19 +21,30 @@ if (-not (Test-Path -LiteralPath $venvPython)) {
 
 Push-Location $projectRoot
 try {
-    Write-Host "[1/6] 后端测试"
+    Write-Host "[1/7] 后端测试"
     & $venvPython -m pytest
     Assert-NativeCommand -Step "后端测试"
 
-    Write-Host "[2/6] Python 编译检查"
-    & $venvPython -m compileall -q backend/app backend/tests
+    Write-Host "[2/7] 上传执行器离线回归"
+    $previousPythonPath = $env:PYTHONPATH
+    try {
+        $env:PYTHONPATH = Join-Path $projectRoot "windows-upload"
+        & $venvPython -m unittest discover -s windows-upload/tests -q
+        Assert-NativeCommand -Step "上传执行器离线回归"
+    }
+    finally {
+        $env:PYTHONPATH = $previousPythonPath
+    }
+
+    Write-Host "[3/7] Python 编译检查"
+    & $venvPython -m compileall -q backend/app backend/tests windows-upload
     Assert-NativeCommand -Step "Python 编译检查"
 
-    Write-Host "[3/6] 前端回归测试"
+    Write-Host "[4/7] 前端回归测试"
     & node --test frontend/tests
     Assert-NativeCommand -Step "前端回归测试"
 
-    Write-Host "[4/6] 前端生产构建"
+    Write-Host "[5/7] 前端生产构建"
     Push-Location (Join-Path $projectRoot "frontend")
     try {
         & npm.cmd run build
@@ -43,7 +54,7 @@ try {
         Pop-Location
     }
 
-    Write-Host "[5/6] Compose 配置检查"
+    Write-Host "[6/7] Compose 配置检查"
     if (Get-Command docker.exe -ErrorAction SilentlyContinue) {
         & docker.exe compose config -q
     }
@@ -55,7 +66,7 @@ try {
     }
     Assert-NativeCommand -Step "Compose 配置检查"
 
-    Write-Host "[6/6] Git 空白字符检查"
+    Write-Host "[7/7] Git 空白字符检查"
     & git.exe diff --check -- . ':(exclude)config/*.json' ':(exclude)logs/**'
     Assert-NativeCommand -Step "Git 空白字符检查"
 

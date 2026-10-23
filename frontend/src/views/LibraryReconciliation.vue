@@ -45,6 +45,7 @@ interface ReconciliationEntry {
 }
 
 interface ReconciliationResponse {
+  revision: string
   snapshot: Snapshot
   summary: Record<ReconciliationStatus, number>
   total: number
@@ -89,6 +90,7 @@ const snapshot = ref<Snapshot | null>(null)
 const ageDays = ref<number | null>(null)
 const isStale = ref(true)
 const loading = ref(false)
+let reconciliationRequest = 0
 const uploading = ref(false)
 const statusFilter = ref<ReconciliationStatus | ''>('')
 const search = ref('')
@@ -97,6 +99,7 @@ const pageSize = ref(100)
 const total = ref(0)
 const entries = ref<ReconciliationEntry[]>([])
 const localOnlyCandidates = ref<TrackSide[]>([])
+let localOnlyCandidatesRevision: string | null = null
 const localOnlyOptions = computed(() => localOnlyCandidates.value.map(candidate => ({
   value: candidate.id || '',
   label: `${displayTitle(candidate)} · ${displaySubtitle(candidate)}`,
@@ -105,6 +108,7 @@ const summary = ref<Record<ReconciliationStatus, number>>({ both: 0, nas_only: 0
 const selectedCandidates = reactive<Record<string, string>>({})
 const selectedReviews = ref<ReconciliationEntry[]>([])
 const selectedReviewCount = computed(() => selectedReviews.value.filter(entry => entry.status === 'review').length)
+const batchSaving = ref(false)
 const mediaSources = ref<MediaLibrarySource[]>([])
 const showMediaBrowser = ref(false)
 const mediaDialogOpen = ref(false)
@@ -139,10 +143,17 @@ watch(() => filteredIncrementalEntries.value.length, length => {
 })
 const reviewOpen = ref(false)
 const reviewLoading = ref(false)
+let reviewRequest = 0
 const reviewSaving = ref(false)
 const reviewData = ref<IncrementalReview | null>(null)
 const reviewEntryId = ref('')
 const reviewSearch = ref('')
+watch(reviewOpen, open => {
+  if (!open) {
+    reviewRequest += 1
+    reviewLoading.value = false
+  }
+}, { flush: 'sync' })
 const duplicateRecords = computed(() => {
   const entry = reviewData.value?.entry
   if (!entry) return []
@@ -237,19 +248,20 @@ async function loadIncrementalEntries() {
 }
 
 async function loadIncrementalReview() {
+  const requestId = ++reviewRequest
   const entryId = reviewEntryId.value
   reviewLoading.value = true
   try {
     const response = await axios.get<IncrementalReview>(`/api/apple-library/entries/${entryId}/review`, {
       params: { search: reviewSearch.value.trim() },
     })
-    if (entryId === reviewEntryId.value) reviewData.value = response.data
+    if (requestId === reviewRequest) reviewData.value = response.data
   } catch (error) {
-    if (entryId !== reviewEntryId.value) return
+    if (requestId !== reviewRequest) return
     reviewData.value = null
     ElMessage.error(axios.isAxiosError(error) ? error.response?.data?.detail || '读取核对详情失败' : '读取核对详情失败')
   } finally {
-    if (entryId === reviewEntryId.value) reviewLoading.value = false
+    if (requestId === reviewRequest) reviewLoading.value = false
   }
 }
 
@@ -396,33 +408,42 @@ async function removeMediaSource(source: MediaLibrarySource) {
       confirmButtonText: '停止读取', cancelButtonText: '取消', type: 'warning',
     })
     await axios.delete(`/api/library/media-sources/${source.id}`)
+    clearReconciliation()
     await loadMediaSources()
     if (mediaSources.value.length) await loadReconciliation(true)
-    else {
-      entries.value = []
-      total.value = 0
-      summary.value = { both: 0, nas_only: 0, apple_only: 0, review: 0 }
-    }
   } catch (error) {
     if (error === 'cancel' || error === 'close') return
     ElMessage.error(axios.isAxiosError(error) ? error.response?.data?.detail || '移除媒体库失败' : '移除媒体库失败')
   }
 }
 
-async function loadLocalOnlyCandidates() {
+function clearReconciliation() {
+  reconciliationRequest += 1
+  loading.value = false
+  entries.value = []
+  total.value = 0
+  summary.value = { both: 0, nas_only: 0, apple_only: 0, review: 0 }
+  selectedReviews.value = []
+  for (const id of Object.keys(selectedCandidates)) delete selectedCandidates[id]
+  localOnlyCandidates.value = []
+  localOnlyCandidatesRevision = null
+}
+
+async function loadLocalOnlyCandidates(revision: string) {
   const candidates: TrackSide[] = []
   for (let offset = 0; ; offset += 1000) {
     const response = await axios.get<ReconciliationResponse>('/api/library/reconciliation', {
-      params: { status: 'nas_only', offset, limit: 1000 },
+      params: { status: 'nas_only', offset, limit: 1000, expected_revision: revision },
     })
     candidates.push(...response.data.entries.flatMap(entry => entry.local ? [entry.local] : []))
     if (candidates.length >= response.data.total) break
   }
-  localOnlyCandidates.value = candidates
+  return candidates
 }
 
 async function loadReconciliation(refreshLocal = false) {
   if (!snapshot.value) return
+  const requestId = ++reconciliationRequest
   loading.value = true
   try {
     const response = await axios.get<ReconciliationResponse>('/api/library/reconciliation', {
@@ -434,13 +455,17 @@ async function loadReconciliation(refreshLocal = false) {
         limit: pageSize.value,
       },
     })
+    if (requestId !== reconciliationRequest) return
+    if (response.data.entries.some(entry => entry.status === 'apple_only') && localOnlyCandidatesRevision !== response.data.revision) {
+      const candidates = await loadLocalOnlyCandidates(response.data.revision)
+      if (requestId !== reconciliationRequest) return
+      localOnlyCandidates.value = candidates
+      localOnlyCandidatesRevision = response.data.revision
+    }
     entries.value = response.data.entries
     selectedReviews.value = []
     summary.value = response.data.summary
     total.value = response.data.total
-    if (entries.value.some(entry => entry.status === 'apple_only')) {
-      await loadLocalOnlyCandidates()
-    }
     for (const entry of entries.value) {
       if (entry.status === 'review' && entry.candidates.length) {
         selectedCandidates[entry.id] = entry.candidates[0].id || ''
@@ -450,9 +475,11 @@ async function loadReconciliation(refreshLocal = false) {
       }
     }
   } catch (error) {
-    ElMessage.error(axios.isAxiosError(error) ? error.response?.data?.detail || '对账失败' : '对账失败')
+    if (requestId === reconciliationRequest) {
+      ElMessage.error(axios.isAxiosError(error) ? error.response?.data?.detail || '对账失败' : '对账失败')
+    }
   } finally {
-    loading.value = false
+    if (requestId === reconciliationRequest) loading.value = false
   }
 }
 
@@ -513,6 +540,7 @@ async function saveDecision(entry: ReconciliationEntry, decision: 'confirmed' | 
 }
 
 async function batchSave(decision: 'confirmed' | 'rejected') {
+  if (batchSaving.value) return
   const matches = selectedReviews.value
     .filter(entry => entry.status === 'review')
     .map(entry => ({
@@ -525,9 +553,16 @@ async function batchSave(decision: 'confirmed' | 'rejected') {
     ElMessage.warning('请先为每条选中的待确认记录选择本地候选曲目')
     return
   }
-  await axios.post('/api/library/matches/batch', { matches })
-  ElMessage.success(decision === 'confirmed' ? `已批量确认 ${matches.length} 条匹配` : `已批量排除 ${matches.length} 条候选`)
-  await loadReconciliation()
+  batchSaving.value = true
+  try {
+    await axios.post('/api/library/matches/batch', { matches })
+    ElMessage.success(decision === 'confirmed' ? `已批量确认 ${matches.length} 条匹配` : `已批量排除 ${matches.length} 条候选`)
+    await loadReconciliation()
+  } catch (error) {
+    ElMessage.error(axios.isAxiosError(error) ? error.response?.data?.detail || '批量保存匹配失败' : '批量保存匹配失败')
+  } finally {
+    batchSaving.value = false
+  }
 }
 
 async function deleteSnapshot() {
@@ -539,11 +574,9 @@ async function deleteSnapshot() {
       { confirmButtonText: '删除快照', cancelButtonText: '取消', type: 'warning' },
     )
     await axios.delete(`/api/apple-library/snapshots/${snapshot.value.id}`)
+    clearReconciliation()
     await loadStatus()
     await loadIncrementalEntries()
-    entries.value = []
-    total.value = 0
-    summary.value = { both: 0, nas_only: 0, apple_only: 0, review: 0 }
     if (snapshot.value && mediaSources.value.length) await loadReconciliation()
     ElMessage.success('Apple Music CSV 快照已删除')
   } catch (error) {
@@ -652,8 +685,8 @@ onMounted(async () => {
         <el-input v-model="search" clearable placeholder="搜索歌名、歌手、专辑、ISRC" @keyup.enter="applyFilters" @clear="applyFilters" />
         <el-button @click="applyFilters">搜索</el-button>
         <template v-if="selectedReviewCount">
-          <el-button type="primary" @click="batchSave('confirmed')">批量确认（{{ selectedReviewCount }}）</el-button>
-          <el-button type="danger" plain @click="batchSave('rejected')">批量排除（{{ selectedReviewCount }}）</el-button>
+          <el-button type="primary" :loading="batchSaving" @click="batchSave('confirmed')">批量确认（{{ selectedReviewCount }}）</el-button>
+          <el-button type="danger" plain :loading="batchSaving" @click="batchSave('rejected')">批量排除（{{ selectedReviewCount }}）</el-button>
         </template>
       </div>
 

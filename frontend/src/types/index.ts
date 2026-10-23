@@ -120,6 +120,7 @@ export interface AppleMusicUpload {
   elapsed_seconds: number
   server_time: number
   timeline?: UploadTiming[]
+  current_timing?: UploadTiming | null
 }
 
 export interface UploadTiming {

@@ -24,7 +24,11 @@ REQUIRED_COLUMNS = (
     "ISRC",
     "Apple - id",
 )
-RECONCILIATION_CACHE_VERSION = 7
+RECONCILIATION_CACHE_VERSION = 8
+
+
+class MatchConflict(ValueError):
+    """对账候选已被其他人工决策占用。"""
 
 
 def normalize_text(value: Optional[str]) -> str:
@@ -776,11 +780,35 @@ class DualLibraryService:
         if not deleted:
             raise ValueError("Apple Music 增量记录不存在")
 
-    def save_match_decision(self, local_file_id: str, apple_track_key: str, decision: str) -> None:
+    def save_match_decision(
+        self,
+        local_file_id: str,
+        apple_track_key: str,
+        decision: str,
+        only_unmatched_tracks: Optional[Iterable[dict]] = None,
+    ) -> None:
         if decision not in {"confirmed", "rejected"}:
             raise ValueError("匹配决策必须是 confirmed 或 rejected")
         self.initialize()
         with self._connect() as connection:
+            if only_unmatched_tracks is not None:
+                connection.execute("BEGIN IMMEDIATE")
+                self._sync_incremental_confirmations(connection)
+                result = self._reconcile_tracks(
+                    self._prepare_local_tracks(only_unmatched_tracks),
+                    self._latest_tracks(connection),
+                    [dict(row) for row in connection.execute("SELECT * FROM library_matches").fetchall()],
+                )
+                apple_only = {
+                    entry["apple"]["track_key"]
+                    for entry in result["entries"] if entry["status"] == "apple_only"
+                }
+                local_only = {
+                    entry["local"]["id"]
+                    for entry in result["entries"] if entry["status"] == "nas_only"
+                }
+                if apple_track_key not in apple_only or local_file_id not in local_only:
+                    raise MatchConflict("对账状态已变化，请刷新后重新选择")
             self._ensure_incremental_apple_track(connection, apple_track_key)
             track = connection.execute(
                 "SELECT 1 FROM apple_tracks WHERE track_key = ?",
@@ -902,12 +930,14 @@ class DualLibraryService:
     def reconcile(self, local_tracks: Iterable[dict]) -> dict:
         self.initialize()
         local = self._prepare_local_tracks(local_tracks)
-        local_by_id = {track["id"]: track for track in local}
         with self._connect() as connection:
             self._sync_incremental_confirmations(connection)
             apple_tracks = self._latest_tracks(connection)
             decisions = [dict(row) for row in connection.execute("SELECT * FROM library_matches").fetchall()]
+        return self._reconcile_tracks(local, apple_tracks, decisions)
 
+    def _reconcile_tracks(self, local: list[dict], apple_tracks: list[dict], decisions: list[dict]) -> dict:
+        local_by_id = {track["id"]: track for track in local}
         confirmed = {
             decision["apple_track_key"]: decision["local_file_id"]
             for decision in decisions if decision["decision"] == "confirmed"
