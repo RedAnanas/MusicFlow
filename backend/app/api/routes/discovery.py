@@ -377,9 +377,14 @@ async def search_discovery(
     threading.Thread(target=worker, daemon=True).start()
 
     def stream():
-        yield "retry: 10000\n\n"
+        # 首包注释避免移动浏览器及中间代理积攒较小的搜索事件。
+        yield ": " + " " * 2048 + "\nretry: 10000\n\n"
         while True:
-            message = events.get()
+            try:
+                message = events.get(timeout=10)
+            except queue.Empty:
+                yield ": keep-alive\n\n"
+                continue
             if message is None:
                 return
             yield message
@@ -387,7 +392,7 @@ async def search_discovery(
     return StreamingResponse(
         stream(),
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no"},
     )
 
 

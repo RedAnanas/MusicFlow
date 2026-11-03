@@ -1,6 +1,7 @@
 import asyncio
 import io
 import json
+import threading
 
 import pytest
 from fastapi import HTTPException
@@ -197,6 +198,45 @@ def test_dual_library_config_selects_independent_watch_folders(monkeypatch) -> N
         "apple_storefront": "cn",
     }
     assert saved == [(nas_folder.id, apple_folder.id, "cn")]
+
+
+def test_search_streams_results_before_upstream_finishes(monkeypatch) -> None:
+    """上游仍在搜索时，首条结果必须已发出，响应禁止代理转换和缓冲。"""
+    release = threading.Event()
+    finished = threading.Event()
+
+    def search_events(_query, _sources):
+        yield "source_start", {"source": "QQMusicClient"}
+        yield "result", {"token": "track-1", "source": "QQ"}
+        try:
+            assert release.wait(5), "首条结果未能在搜索结束前到达"
+            yield "done", {"count": 1}
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(discovery, "_get_presence_index", lambda: {})
+    monkeypatch.setattr(discovery.dual_library_service, "lookup_presence", lambda *_: {})
+    monkeypatch.setattr(discovery.musicdl_client, "search_events", search_events)
+
+    async def collect():
+        response = await discovery.search_discovery(q="歌曲", sources=None)
+        assert response.headers["Cache-Control"] == "no-cache, no-transform"
+        assert response.headers["X-Accel-Buffering"] == "no"
+        stream = response.body_iterator
+        initial = await anext(stream)
+        assert initial.startswith(": ") and len(initial) > 2048
+        assert "event: source_start" in await anext(stream)
+        assert "event: result" in await anext(stream)
+        assert not finished.is_set()
+        release.set()
+        assert "event: done" in await anext(stream)
+        assert [chunk async for chunk in stream] == []
+
+    try:
+        asyncio.run(collect())
+    finally:
+        release.set()
+        assert finished.wait(5)
 
 
 def test_search_backfills_presence_before_done(monkeypatch) -> None:
