@@ -15,7 +15,7 @@ from typing import Optional
 from app.config import settings
 from app.services.apple_music_handoff import apple_music_handoff_service
 from app.services.musicdl_client import MusicdlClientError, musicdl_client
-from app.services.dual_library_service import dual_library_service, normalize_text
+from app.services.dual_library_service import dual_library_service, normalize_text, song_match_key
 from app.services.dual_library_config import dual_library_config
 from app.services.watch_folder_manager import watch_folder_manager
 
@@ -384,7 +384,7 @@ class AcquisitionService:
         with self._connect() as connection:
             apple_rows = connection.execute(
                 """
-                SELECT t.isrc, t.normalized_title, t.normalized_artist, t.normalized_album
+                SELECT t.isrc, t.title, t.artist
                 FROM apple_snapshot_rows r
                 JOIN apple_tracks t ON t.track_key = r.track_key
                 WHERE r.snapshot_id = (
@@ -400,10 +400,7 @@ class AcquisitionService:
                 """
             ).fetchall()
         apple_isrc = {row["isrc"] for row in apple_rows if row["isrc"]}
-        apple_metadata = {
-            (row["normalized_title"], row["normalized_artist"], row["normalized_album"])
-            for row in apple_rows
-        }
+        apple_metadata = {song_match_key(dict(row)) for row in apple_rows}
         confirmed = 0
         for job in jobs:
             if job["apple_watch_path"] and job["apple_delivery_mode"] == "direct_upload":
@@ -413,11 +410,7 @@ class AcquisitionService:
                     continue
             selected = json.loads(job["selected_track_json"] or "{}")
             isrc = (selected.get("isrc") or "").strip().upper()
-            metadata = (
-                normalize_text(selected.get("song_name") or selected.get("title")),
-                normalize_text(selected.get("singers") or selected.get("artist")),
-                normalize_text(selected.get("album")),
-            )
+            metadata = song_match_key(selected)
             if (isrc and isrc in apple_isrc) or (all(metadata) and metadata in apple_metadata):
                 self._update(job["id"], apple_status="confirmed_present")
                 confirmed += 1

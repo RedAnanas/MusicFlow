@@ -13,7 +13,7 @@ from pydantic import BaseModel
 from app.config import settings
 from app.services.acquisition_service import acquisition_service
 from app.services.apple_catalog_service import apple_catalog_service
-from app.services.dual_library_service import dual_library_service, normalize_text
+from app.services.dual_library_service import dual_library_service, normalize_text, song_match_key
 from app.services.dual_library_config import dual_library_config
 from app.services.media_library_service import media_library_service
 from app.services.musicdl_client import MusicdlClientError, musicdl_client
@@ -26,6 +26,7 @@ presence_index: Optional[dict] = None
 presence_index_loading = False
 presence_index_lock = threading.Lock()
 presence_index_ready = threading.Event()
+presence_index_generation = 0
 
 
 class AcquisitionRequest(BaseModel):
@@ -70,15 +71,18 @@ class MusicLinkRequest(BaseModel):
 def _warm_presence_index() -> None:
     """在后台扫描整理媒体库，不能阻塞 musicdl 的搜索首条结果。"""
     global presence_index, presence_index_loading
+    with presence_index_lock:
+        generation = presence_index_generation
     try:
         local_tracks = media_library_service.load_tracks(False)
         index = dual_library_service.build_presence_index(local_tracks)
         with presence_index_lock:
-            presence_index = index
+            if generation == presence_index_generation:
+                presence_index = index
     finally:
         with presence_index_lock:
             presence_index_loading = False
-        presence_index_ready.set()
+            presence_index_ready.set()
 
 
 def _get_presence_index() -> Optional[dict]:
@@ -96,8 +100,9 @@ def _get_presence_index() -> Optional[dict]:
 
 def invalidate_presence_index() -> None:
     """资料库数据变化后让下一次搜索重建存在状态索引。"""
-    global presence_index
+    global presence_index, presence_index_generation
     with presence_index_lock:
+        presence_index_generation += 1
         presence_index = None
 
 
@@ -565,10 +570,16 @@ async def preview_acquisition(request: AcquisitionRequest):
     mode = request.target_mode or "both"
     nas = mode in {"nas", "both"} and not presence["nas_present"]
     apple = mode in {"apple", "both"} and not presence["apple_present"]
-    matches = [item for item in local if dual_library_service.lookup_presence(track, {
-        **index, "local_isrc": {(item.get("isrc") or "").strip().upper()} - {""},
-        "local_metadata": {(normalize_text(item.get("title")), normalize_text(item.get("artist")), normalize_text(item.get("album")))},
-    })["nas_present"]]
+    matches = []
+    for item in local:
+        aliases = [item, *index.get("local_aliases", {}).get(item["id"], [])]
+        item_index = {
+            **index,
+            "local_isrc": {(alias.get("isrc") or "").strip().upper() for alias in aliases} - {""},
+            "local_metadata": {song_match_key(alias) for alias in aliases},
+        }
+        if dual_library_service.lookup_presence(track, item_index)["nas_present"]:
+            matches.append(item)
     reusable = next((item for item in matches if Path(item["path"]).is_file()), None)
     review = "本地资料库记录存在，但源文件不可访问，请先检查挂载或更新索引" if presence["nas_present"] and apple and not reusable else None
     if apple and not review and await asyncio.to_thread(dual_library_service.find_apple_candidates, track):

@@ -7,10 +7,13 @@ import re
 import sqlite3
 import unicodedata
 import uuid
+from collections import Counter
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Optional
+
+from opencc import OpenCC
 
 from app.config import settings
 
@@ -24,7 +27,8 @@ REQUIRED_COLUMNS = (
     "ISRC",
     "Apple - id",
 )
-RECONCILIATION_CACHE_VERSION = 8
+RECONCILIATION_CACHE_VERSION = 9
+_simplified_chinese = OpenCC("t2s")
 
 
 class MatchConflict(ValueError):
@@ -35,6 +39,16 @@ def normalize_text(value: Optional[str]) -> str:
     """生成用于精确匹配的稳定文本，不执行可能误判的模糊转换。"""
     normalized = unicodedata.normalize("NFKC", value or "").casefold()
     return "".join(character for character in normalized if character.isalnum())
+
+
+def song_match_key(track: dict) -> tuple[str, str]:
+    """按简体歌名和歌手匹配，兼容单个中文姓名两侧的英文艺名。"""
+    title = track.get("song_name") or track.get("title") or ""
+    artist = unicodedata.normalize("NFKC", track.get("singers") or track.get("artist") or "").casefold().strip()
+    chinese_name = re.fullmatch(r"[a-z.\s]*([\u3400-\u9fff]{2,})[a-z.\s]*", artist)
+    if chinese_name:
+        artist = chinese_name.group(1)
+    return normalize_text(_simplified_chinese.convert(title)), normalize_text(_simplified_chinese.convert(artist))
 
 
 def normalize_title_subject(value: Optional[str]) -> str:
@@ -471,6 +485,8 @@ class DualLibraryService:
                 if track[key] in seen:
                     values.discard(track[key])
                 seen.add(track[key])
+        unique_tracks = {track["track_key"]: track for track in tracks}
+        metadata_counts = Counter(song_match_key(track) for track in unique_tracks.values())
         return {
             "manual_link": {track["track_key"]: track for track in tracks},
             "linked_apple_id": {track["apple_id"]: track for track in tracks if track["apple_id"] in unique_ids},
@@ -478,26 +494,27 @@ class DualLibraryService:
             "apple_id": {track["apple_id"]: track for track in tracks if track["apple_id"]},
             "isrc": {track["isrc"]: track for track in tracks if track["isrc"]},
             "metadata_exact": {
-                (track["normalized_title"], track["normalized_artist"], track["normalized_album"]): track
-                for track in tracks
+                song_match_key(track): track for track in tracks
+                if all(song_match_key(track)) and metadata_counts[song_match_key(track)] == 1
             },
         }
 
     @staticmethod
     def _incremental_snapshot_match(entry: dict, index: dict) -> tuple[Optional[dict], str]:
+        entry = dict(entry)
         for reason, key in (
             ("manual_link", entry["linked_track_key"]),
             ("linked_apple_id", entry["linked_apple_id"]),
             ("linked_isrc", entry["linked_isrc"]),
             ("apple_id", entry["apple_id"]),
             ("isrc", entry["isrc"]),
-            ("metadata_exact", (entry["normalized_title"], entry["normalized_artist"], entry["normalized_album"])),
+            ("metadata_exact", song_match_key(entry)),
         ):
             if key and (track := index[reason].get(key)):
                 return track, "manual_link" if reason.startswith("linked_") else reason
         metadata = json.loads(entry["file_metadata_json"] or "{}")
         if metadata:
-            key = tuple(metadata.get("normalized_" + field, "") for field in ("title", "artist", "album"))
+            key = song_match_key(metadata)
             if track := index["metadata_exact"].get(key):
                 return track, "file_metadata"
         return None, "no_match"
@@ -948,14 +965,14 @@ class DualLibraryService:
         }
 
         by_isrc: dict[str, list[dict]] = {}
-        by_metadata: dict[tuple[str, str, str], list[dict]] = {}
         by_title_artist: dict[tuple[str, str], list[dict]] = {}
         by_title_subject: dict[str, list[dict]] = {}
         for track in local:
             if track["isrc"]:
                 by_isrc.setdefault(track["isrc"], []).append(track)
-            by_metadata.setdefault((track["normalized_title"], track["normalized_artist"], track["normalized_album"]), []).append(track)
-            by_title_artist.setdefault((track["normalized_title"], track["normalized_artist"]), []).append(track)
+            identity = song_match_key(track)
+            if all(identity):
+                by_title_artist.setdefault(identity, []).append(track)
             by_title_subject.setdefault(track["normalized_title_subject"], []).append(track)
 
         entries = []
@@ -975,17 +992,9 @@ class DualLibraryService:
                 candidates = by_isrc.get(apple["isrc"], [])
                 reason = "isrc"
             if not candidates:
-                candidates = by_metadata.get((apple["normalized_title"], apple["normalized_artist"], apple["normalized_album"]), [])
+                candidates = by_title_artist.get(song_match_key(apple), [])
                 reason = "metadata_exact"
             candidates = [candidate for candidate in candidates if (track_key, candidate["id"]) not in rejected]
-            if len(candidates) == 1:
-                matched_local_ids.add(candidates[0]["id"])
-                entries.append(self._entry("both", apple, candidates[0], reason, []))
-                continue
-            if not candidates:
-                candidates = by_title_artist.get((apple["normalized_title"], apple["normalized_artist"]), [])
-                candidates = [candidate for candidate in candidates if (track_key, candidate["id"]) not in rejected]
-                reason = "title_artist_album_diff"
             if len(candidates) == 1:
                 matched_local_ids.add(candidates[0]["id"])
                 entries.append(self._entry("both", apple, candidates[0], reason, []))
@@ -1188,7 +1197,7 @@ class DualLibraryService:
         return [track for track in candidates
                 if (apple["track_key"], track["id"]) not in rejected][:10]
 
-    def build_presence_index(self, local_tracks: Iterable[dict]) -> dict[str, set]:
+    def build_presence_index(self, local_tracks: Iterable[dict]) -> dict:
         """构建搜索结果对账索引，避免每个 musicdl 结果重复查询数据库。"""
         self.initialize()
         local = self._prepare_local_tracks(local_tracks)
@@ -1201,6 +1210,18 @@ class DualLibraryService:
                     "SELECT * FROM apple_incremental_entries WHERE merged_into IS NULL AND verification_status IN ('pending', 'manual_confirmed', 'confirmed')"
                 ).fetchall()
             ]
+            decisions = connection.execute("SELECT * FROM library_matches WHERE decision = 'confirmed'").fetchall()
+        local_by_id = {track["id"]: track for track in local}
+        apple_by_key = {track["track_key"]: track for track in apple}
+        local_aliases = {}
+        apple_aliases = []
+        for decision in decisions:
+            local_track = local_by_id.get(decision["local_file_id"])
+            apple_track = apple_by_key.get(decision["apple_track_key"])
+            if local_track and apple_track:
+                local_aliases.setdefault(local_track["id"], []).append(apple_track)
+                apple_aliases.append(local_track)
+        local += [track for aliases in local_aliases.values() for track in aliases]
         incremental += [
             {**json.loads(track["file_metadata_json"]), "verification_status": track["verification_status"]}
             for track in incremental if track["file_metadata_json"]
@@ -1208,33 +1229,25 @@ class DualLibraryService:
         pending = [track for track in incremental if track["verification_status"] == "pending"]
         return {
             "local_isrc": {track["isrc"] for track in local if track["isrc"]},
-            "local_metadata": {
-                (track["normalized_title"], track["normalized_artist"], track["normalized_album"])
-                for track in local
-            },
+            "local_metadata": {song_match_key(track) for track in local},
+            "local_aliases": local_aliases,
             "apple_metadata": {
-                (track["normalized_title"], track["normalized_artist"], track["normalized_album"])
-                for track in [*apple, *incremental]
+                song_match_key(track) for track in [*apple, *incremental, *apple_aliases]
             },
             "apple_isrc": {
-                track["isrc"] for track in [*apple, *incremental] if track["isrc"]
+                track["isrc"] for track in [*apple, *incremental, *apple_aliases] if track["isrc"]
             },
             "apple_pending_isrc": {track["isrc"] for track in pending if track["isrc"]},
             "apple_pending_metadata": {
-                (track["normalized_title"], track["normalized_artist"], track["normalized_album"])
-                for track in pending
+                song_match_key(track) for track in pending
             },
         }
 
     @staticmethod
-    def lookup_presence(track: dict, index: dict[str, set]) -> dict:
+    def lookup_presence(track: dict, index: dict) -> dict:
         """判断一个搜索结果是否已存在于本地库和 Apple Music 快照。"""
         isrc = (track.get("isrc") or "").strip().upper()
-        metadata = (
-            normalize_text(track.get("song_name") or track.get("title")),
-            normalize_text(track.get("singers") or track.get("artist")),
-            normalize_text(track.get("album")),
-        )
+        metadata = song_match_key(track)
         local_by_isrc = bool(isrc and isrc in index["local_isrc"])
         apple_by_isrc = bool(isrc and isrc in index["apple_isrc"])
         local_by_metadata = bool(all(metadata) and metadata in index["local_metadata"])

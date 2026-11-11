@@ -342,6 +342,7 @@ async def save_library_match(request: MatchDecisionRequest):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     await asyncio.to_thread(invalidate_reconciliation_cache)
+    invalidate_presence_index()
     return {"status": "success"}
 
 
@@ -360,4 +361,5 @@ async def save_library_matches_batch(request: BatchMatchDecisionRequest):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     await asyncio.to_thread(invalidate_reconciliation_cache)
+    invalidate_presence_index()
     return {"status": "success", "count": len(request.matches)}

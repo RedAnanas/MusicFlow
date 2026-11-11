@@ -488,7 +488,7 @@ def test_reconcile_uses_isrc_metadata_and_manual_decision(tmp_path: Path) -> Non
         {"id": "local-isrc", "filename": "任意名称.flac", "title": "不同名字", "artist": "其他", "album": "其他", "isrc": "cnabc1234567", "path": "/music/a.flac"},
         {"id": "local-meta", "filename": "b.flac", "title": " 元数据歌曲 ", "artist": "歌手乙", "album": "专辑乙", "path": "/music/b.flac"},
         {"id": "local-album-diff", "filename": "c.flac", "title": "专辑不同歌曲", "artist": "歌手丙", "album": "本地专辑", "path": "/music/c.flac"},
-        {"id": "local-review", "filename": "d.flac", "title": "同名待确认", "artist": "邓紫棋", "album": "本地专辑", "path": "/music/d.flac"},
+        {"id": "local-review", "filename": "d.flac", "title": "同名待确认", "artist": "邓紫棋、其他歌手", "album": "本地专辑", "path": "/music/d.flac"},
         {"id": "local-only", "filename": "d.flac", "title": "本地独有", "artist": "歌手戊", "album": "专辑戊", "path": "/music/d.flac"},
     ]
 
@@ -496,7 +496,7 @@ def test_reconcile_uses_isrc_metadata_and_manual_decision(tmp_path: Path) -> Non
 
     assert result["summary"] == {"both": 3, "nas_only": 1, "apple_only": 1, "review": 1}
     reasons = {entry["match_reason"] for entry in result["entries"] if entry["status"] == "both"}
-    assert reasons == {"isrc", "metadata_exact", "title_artist_album_diff"}
+    assert reasons == {"isrc", "metadata_exact"}
     review = next(entry for entry in result["entries"] if entry["status"] == "review")
     assert review["candidates"][0]["id"] == "local-review"
 
@@ -783,8 +783,8 @@ def test_save_match_decisions_saves_batch_atomically(tmp_path: Path) -> None:
          + "同名二,Apple歌手,专辑,Library Songs,Favorite,,1002\n").encode("utf-8"),
     )
     result = service.reconcile([
-        {"id": "local-1", "filename": "a.flac", "title": "同名一", "artist": "G.E.M.Apple歌手", "album": "本地专辑", "path": "/music/a.flac"},
-        {"id": "local-2", "filename": "b.flac", "title": "同名二", "artist": "G.E.M.Apple歌手", "album": "本地专辑", "path": "/music/b.flac"},
+        {"id": "local-1", "filename": "a.flac", "title": "同名一", "artist": "Apple歌手、其他歌手", "album": "本地专辑", "path": "/music/a.flac"},
+        {"id": "local-2", "filename": "b.flac", "title": "同名二", "artist": "Apple歌手、其他歌手", "album": "本地专辑", "path": "/music/b.flac"},
     ])
     reviews = [entry for entry in result["entries"] if entry["status"] == "review"]
 
@@ -877,3 +877,72 @@ def test_only_unmatched_confirmation_rechecks_existing_single_and_batch_decision
 def test_normalize_text_only_applies_safe_exact_normalization() -> None:
     """标准化只统一大小写、宽度和标点，不做翻译或拼音推断。"""
     assert normalize_text("ＡＢＣ - 测试 歌曲") == "abc测试歌曲"
+
+
+@pytest.mark.parametrize("title,artist,search_title,search_artist", [
+    ("瀟灑小姐", "蕭亞軒", "潇洒小姐", "萧亚轩"),
+    ("光年之外", "G.E.M.鄧紫棋", "光年之外", "邓紫棋"),
+    ("倒帶", "JOLIN蔡依林", "倒带", "蔡依林"),
+    ("倒带", "蔡依林", "倒帶", "Jolin 蔡依林"),
+])
+def test_reconciliation_and_presence_share_song_artist_matching(tmp_path, title, artist, search_title, search_artist):
+    """对账和查重统一简繁体、英文艺名，专辑缺失或不同均可匹配。"""
+    service = create_service(tmp_path)
+    service.import_snapshot("library.csv", (CSV_HEADER + f"{title},{artist},Apple专辑,资料库,Apple Music,,1001\n").encode())
+    local = [{"id": "local", "title": search_title, "artist": search_artist}]
+    assert service.reconcile(local)["summary"]["both"] == 1
+    presence = service.lookup_presence(
+        {"song_name": title, "singers": artist, "album": "另一张专辑"},
+        service.build_presence_index(local),
+    )
+    assert presence["nas_present"] and presence["apple_present"]
+
+
+def test_search_presence_reuses_manual_match_in_both_directions(tmp_path):
+    """人工确认的两套名称均能识别本地和 Apple 库。"""
+    service = create_service(tmp_path)
+    service.import_snapshot("library.csv", (CSV_HEADER + "Apple名称,歌手甲,专辑,资料库,Apple Music,CN123,1001\n").encode())
+    local = [{"id": "local", "title": "本地名称", "artist": "歌手乙", "isrc": "CN456"}]
+    key = next(entry["apple"]["track_key"] for entry in service.reconcile(local)["entries"] if entry["apple"])
+    service.save_match_decision("local", key, "confirmed")
+    index = service.build_presence_index(local)
+    for track in [local[0], {"title": "Apple名称", "artist": "歌手甲"}, {"isrc": "CN123"}, {"isrc": "CN456"}]:
+        presence = service.lookup_presence(track, index)
+        assert presence["nas_present"] and presence["apple_present"]
+
+
+@pytest.mark.parametrize("track", [
+    {"title": "倒带 (Live)", "artist": "蔡依林"},
+    {"title": "倒带 (Remix)", "artist": "蔡依林"},
+    {"title": "倒带", "artist": "蔡依林、周杰伦"},
+    {"title": "倒带", "artist": "周杰伦"},
+    {"title": "倒带"},
+])
+def test_song_matching_keeps_versions_and_artist_credits(tmp_path, track):
+    """版本文字、多歌手和缺失歌手不会被当作同一条精确匹配。"""
+    service = create_service(tmp_path)
+    service.import_snapshot("library.csv", (CSV_HEADER + "倒帶,JOLIN蔡依林,,资料库,Apple Music,,1001\n").encode())
+    local = [{"id": "local", "title": "倒带", "artist": "蔡依林"}]
+    presence = service.lookup_presence(track, service.build_presence_index(local))
+    assert not presence["nas_present"] and not presence["apple_present"]
+
+
+def test_incremental_snapshot_confirmation_uses_song_artist_identity(tmp_path):
+    """既有添加记录按歌名歌手核对快照，兼容简繁和艺名及不同专辑。"""
+    service = create_service(tmp_path)
+    entry = service.upsert_incremental_track({"title": "倒带", "artist": "蔡依林", "album": "旧专辑"}, "catalog")
+    service.import_snapshot("library.csv", (CSV_HEADER + "倒帶,JOLIN蔡依林,新专辑,资料库,Apple Music,,1001\n").encode())
+    confirmed = next(track for track in service.list_incremental_tracks() if track["id"] == entry["id"])
+    assert confirmed["verification_status"] == "confirmed"
+
+
+def test_multiple_local_song_matches_require_review_even_with_matching_album(tmp_path):
+    """多个同名同歌手文件仍交由人工确认，不能依靠专辑选中其中一个。"""
+    service = create_service(tmp_path)
+    service.import_snapshot("library.csv", (CSV_HEADER + "倒帶,JOLIN蔡依林,专辑甲,资料库,Apple Music,,1001\n").encode())
+    result = service.reconcile([
+        {"id": "first", "title": "倒带", "artist": "蔡依林", "album": "专辑甲"},
+        {"id": "second", "title": "倒帶", "artist": "JOLIN蔡依林", "album": "专辑乙"},
+    ])
+    assert result["summary"]["review"] == 1
+    assert len(result["entries"][0]["candidates"]) == 2

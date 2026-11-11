@@ -281,6 +281,35 @@ def test_search_backfills_presence_before_done(monkeypatch) -> None:
     assert '"presence_pending": false' in stream
 
 
+def test_invalidating_presence_discards_an_inflight_old_index(monkeypatch):
+    """人工配对失效发生在索引构建期间时，旧结果不能重新发布。"""
+    started = threading.Event()
+    release = threading.Event()
+    monkeypatch.setattr(discovery, 'presence_index', None)
+    monkeypatch.setattr(discovery, 'presence_index_loading', True)
+    monkeypatch.setattr(discovery, 'presence_index_generation', 0)
+    monkeypatch.setattr(discovery, 'presence_index_ready', threading.Event())
+    monkeypatch.setattr(discovery.media_library_service, 'load_tracks', lambda _refresh: [])
+
+    def build_index(_tracks):
+        started.set()
+        assert release.wait(5)
+        return {'old': set()}
+
+    monkeypatch.setattr(discovery.dual_library_service, 'build_presence_index', build_index)
+    worker = threading.Thread(target=discovery._warm_presence_index)
+    worker.start()
+    try:
+        assert started.wait(5)
+        discovery.invalidate_presence_index()
+    finally:
+        release.set()
+        worker.join(5)
+    assert not worker.is_alive()
+    assert discovery.presence_index is None
+    assert not discovery.presence_index_loading
+
+
 def test_processing_preview_reuses_exact_local_file(monkeypatch, tmp_path):
     """搜索到本地已有的歌曲时，补 Apple Music 应复用本地文件。"""
     source = tmp_path / 'song.flac'
@@ -295,6 +324,41 @@ def test_processing_preview_reuses_exact_local_file(monkeypatch, tmp_path):
     assert plan == {'desired_nas': False, 'desired_apple': True, 'local_file_id': 'local-song', 'reuse_local': True, 'review': None, 'skip': False}
     request.target_mode = 'nas'
     assert asyncio.run(discovery.preview_acquisition(request))['skip'] is True
+
+
+def test_processing_preview_reuses_local_song_with_alias_and_different_album(monkeypatch, tmp_path):
+    """简繁体和英文艺名一致时，补齐预览复用本地文件，专辑无需相同。"""
+    from app.services.dual_library_service import DualLibraryService
+
+    service = DualLibraryService(tmp_path / 'library.db')
+    source = tmp_path / 'song.flac'
+    source.write_bytes(b'audio')
+    local = {'id': 'local-song', 'path': str(source), 'title': '倒帶', 'artist': 'JOLIN蔡依林', 'album': '本地专辑'}
+    monkeypatch.setattr(discovery.media_library_service, 'load_tracks', lambda _refresh: [local])
+    monkeypatch.setattr(discovery, 'dual_library_service', service)
+    request = discovery.AcquisitionRequest(selected_track={'song_name': '倒带', 'singers': '蔡依林', 'album': '其他专辑'}, target_mode='apple')
+    plan = asyncio.run(discovery.preview_acquisition(request))
+    assert plan == {'desired_nas': False, 'desired_apple': True, 'local_file_id': 'local-song', 'reuse_local': True, 'review': None, 'skip': False}
+
+
+def test_processing_preview_reuses_manually_linked_local_file(monkeypatch, tmp_path):
+    """以人工配对的 Apple 名称搜索时，预览仍能定位对应的本地文件。"""
+    from app.services.dual_library_service import DualLibraryService
+
+    service = DualLibraryService(tmp_path / 'library.db')
+    service.import_snapshot('library.csv', ('Track name,Artist name,Album,Playlist name,Type,ISRC,Apple - id\n'
+        'Apple名称,歌手甲,,资料库,Apple Music,,1001\n').encode())
+    source = tmp_path / 'song.flac'
+    source.write_bytes(b'audio')
+    local = {'id': 'local-song', 'path': str(source), 'title': '本地名称', 'artist': '歌手乙'}
+    key = next(entry['apple']['track_key'] for entry in service.reconcile([local])['entries'] if entry['apple'])
+    service.save_match_decision(local['id'], key, 'confirmed')
+    monkeypatch.setattr(discovery.media_library_service, 'load_tracks', lambda _refresh: [local])
+    monkeypatch.setattr(discovery, 'dual_library_service', service)
+    plan = asyncio.run(discovery.preview_acquisition(discovery.AcquisitionRequest(
+        selected_track={'title': 'Apple名称', 'artist': '歌手甲'}, target_mode='both')))
+    assert plan['skip'] and plan['reuse_local']
+    assert plan['local_file_id'] == local['id']
 
 
 def test_create_acquisition_rechecks_presence_and_uses_server_local_path(monkeypatch, tmp_path):

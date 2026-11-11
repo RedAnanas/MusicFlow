@@ -200,7 +200,7 @@ const reasonLabels: Record<string, string> = {
   manual_link: '人工关联的快照曲目',
   search: '搜索结果，需人工核对',
   isrc: 'ISRC 一致',
-  metadata_exact: '歌名、歌手和专辑一致',
+  metadata_exact: '歌名和歌手一致',
   title_artist: '歌名和歌手一致',
   title_artist_album_diff: '歌名和歌手一致（专辑不同）',
   title_artist_similar: '歌名一致，歌手名相似，等待确认',

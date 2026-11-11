@@ -9,6 +9,29 @@ from app.api.routes import library
 from app.services.dual_library_service import DualLibraryService
 
 
+@pytest.mark.parametrize("batch", [False, True])
+def test_manual_match_invalidates_discovery_presence_index(monkeypatch, tmp_path, batch):
+    """单条和批量人工配对均刷新发现音乐的查重索引。"""
+    service = DualLibraryService(tmp_path / "musicflow.db")
+    service.import_snapshot("library.csv", (
+        "Track name,Artist name,Album,Playlist name,Type,ISRC,Apple - id\n"
+        "Apple名称,歌手甲,,资料库,Apple Music,,1001\n"
+    ).encode())
+    local = [{"id": "local", "title": "本地名称", "artist": "歌手乙"}]
+    key = next(entry["apple"]["track_key"] for entry in service.reconcile(local)["entries"] if entry["apple"])
+    monkeypatch.setattr(library, "dual_library_service", service)
+    monkeypatch.setattr(library.media_library_service, "load_tracks", lambda _refresh: local)
+    monkeypatch.setattr(library, "invalidate_reconciliation_cache", lambda: None)
+    invalidated = []
+    monkeypatch.setattr(library, "invalidate_presence_index", lambda: invalidated.append(True))
+    match = library.MatchDecisionRequest(local_file_id="local", apple_track_key=key, decision="confirmed")
+    if batch:
+        asyncio.run(library.save_library_matches_batch(library.BatchMatchDecisionRequest(matches=[match])))
+    else:
+        asyncio.run(library.save_library_match(match))
+    assert invalidated == [True]
+
+
 def test_apple_only_confirmation_consumes_local_only_candidate(monkeypatch, tmp_path: Path) -> None:
     """仅 Apple Music 有只能与当前仅本地有的歌曲确认，确认后两侧合为双库都有。"""
     service = DualLibraryService(tmp_path / "musicflow.db")
